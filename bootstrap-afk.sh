@@ -77,6 +77,11 @@ cp "$S/templates/Dockerfile.$LANGUAGE"        "$TARGET/.sandcastle/Dockerfile"
 # ---- fix the repo slug baked into the to-prd-project skill ----------------
 sed -i "s#kilbertert/Auto_Test#$REPO#g" "$TARGET/.claude/skills/to-prd-project/SKILL.md"
 
+# ---- node_modules: the scaffold adds Node deps; keep them out of git ------
+if [ -f "$TARGET/.gitignore" ] && ! grep -qx 'node_modules' "$TARGET/.gitignore"; then
+  printf '\n# AFK runner (package.json) dependencies\nnode_modules/\n' >> "$TARGET/.gitignore"
+fi
+
 # ---- package.json: merge or create ----------------------------------------
 if [ -f "$TARGET/package.json" ]; then
   node -e '

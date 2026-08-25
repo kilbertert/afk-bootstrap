@@ -1,85 +1,109 @@
 # afk-bootstrap
 
-Scaffold the AFK development workflow into any project:
+把「想法 → PRD → issue → AFK 实现 → 人工 QA → 后台修复」这条软件开发工作流，一键装配进任意项目。
 
 ```
-想法 → grill → PRD (parent issue) → native sub-issues → AFK/Sandcastle Docker
-→ draft PR → deterministic CI → human QA → QA feedback issue → background AFK fix
+想法 → grill → PRD(父 issue) → native sub-issues → AFK/Sandcastle Docker
+     → draft PR → 确定性 CI → 人工 QA → QA 反馈 issue → 后台 AFK 修复 → 合并
 ```
 
-It copies the battle-tested `.sandcastle` runner, PRD tooling, skills, and
-GitHub Actions from a baseline project (`Auto-Test`, itself a minimal-adaptation
-port of `mattpocock/course-video-manager`), then generates the per-project,
-per-language parts (`implement.md`, PRD prompt, `Dockerfile`, `package.json`).
+本仓库是**装配工具**，不是一个运行时。它把一个项目从"普通仓库"变成"能跑 AFK agent 的仓库"：
+从已验证的基线仓库（`Auto-Test`，即 `mattpocock/course-video-manager` 的最小适配移植）复制可移植件，
+再按目标项目的语言生成差异件。
 
-## Usage
+> **这份 README 是给人看的。** 给智能体（Codex / Claude Code）看的版本是 [`AGENTS.md`](AGENTS.md)。
+
+---
+
+## 快速开始
 
 ```bash
-# Node.js project
-./bootstrap-afk.sh ~/Projects/some-node-repo --language node
+# Node.js 项目
+./bootstrap-afk.sh ~/Projects/某-node-仓库 --language node
 
-# Python (uv) project
+# Python (uv) 项目
 ./bootstrap-afk.sh ~/Projects/genesis-evidence --language python --repo kilbertert/genesis-evidence
 ```
 
-Flags:
-
-| flag | default | purpose |
+| 参数 | 默认 | 作用 |
 |---|---|---|
-| `--language` | `node` | toolchain for `implement.md` / PRD prompt / `Dockerfile` (`node` or `python`) |
-| `--repo` | from `origin` | GitHub slug written into the `to-prd-project` skill |
-| `--baseline` | `/home/claude/Projects/Auto-Test` | source of the copy-verbatim files |
-| `--no-build` | build | skip the `docker build` of the sandbox image |
+| `<target>` | 必填 | 目标项目路径（git 仓库，处于默认分支） |
+| `--language` | `node` | 工具链：`node` / `python`，决定 implement.md、PRD prompt、Dockerfile |
+| `--repo` | 从 origin 推断 | 写入 `to-prd-project` skill 的 GitHub 仓库名 |
+| `--baseline` | `/home/claude/Projects/Auto-Test` | 可移植件的复制来源 |
+| `--no-build` | 构建 | 跳过 `docker build`（改文件时用，先看 diff） |
 
-The script only creates files — it never commits or pushes. **The host runner
-owns delivery**: commit the scaffold on a task branch, open a PR, merge.
+**它只生成文件，绝不提交、不推送。** 交付由宿主 runner 负责（branch → PR → CI → merge）。
 
-## What it scaffolds
+---
 
-Copy-verbatim from the baseline (portable, server-local config):
+## 装配后项目长什么样
 
-- `.sandcastle/`: `main.ts`, `profile.ts`, `run-with-retry.ts`, `retry-feedback.ts`,
-  `to-issues-prd/`, `implement-prd/`, `write-prd-pr/`, `.env.example`, `.gitignore`
-- `.claude/skills/`: `to-prd-project`, `to-issues-project`
-- `.github/workflows/`: `agent-to-issues-prd.yml`, `agent-implement-prd.yml`
+### 从基线原样复制（可移植、读服务器本地配置）
 
-Generated per language:
+- `.sandcastle/`：`main.ts`（单 issue runner）、`profile.ts`（模型 profile 桥）、`run-with-retry.ts`、`retry-feedback.ts`、`to-issues-prd/`、`implement-prd/`、`write-prd-pr/`、`.env.example`、`.gitignore`
+- `.claude/skills/`：`to-prd-project`、`to-issues-project`
+- `.github/workflows/`：`agent-to-issues-prd.yml`、`agent-implement-prd.yml`
 
-- `.sandcastle/implement.md` — the AFK verification gate
-  (`npm run check` for node; `uv sync --extra dev && uv run pytest && uv run ruff check` for python)
-- `.sandcastle/implement-prd/prompt.md` — per-sub-issue prompt with the same gate
-- `.sandcastle/Dockerfile` — sandbox image (node 24 + claude-code/codex + AFK_PROFILE
-  dispatch, plus python3 + uv for python projects)
-- `package.json` — minimal runner manifest (`afk` + `prd:to-issues` scripts, `tsx`,
-  `@ai-hero/sandcastle`); merged into an existing manifest when present, otherwise
-  created + `package-lock.json` generated
+### 按语言生成
 
-Plus one string fix: the `to-prd-project` skill's repo slug.
+- `.sandcastle/implement.md` —— AFK 验证门禁：
+  - node：`npm run check`
+  - python：`uv sync --extra dev && uv run pytest && uv run ruff check`
+- `.sandcastle/implement-prd/prompt.md` —— PRD 子 issue prompt（同一门禁）
+- `.sandcastle/Dockerfile` —— 沙箱镜像（node 24 + claude-code/codex + AFK_PROFILE 分发；python 项目再加 python3 + uv）
+- `package.json` —— 最小 runner manifest（`afk` + `prd:to-issues` 脚本、`tsx`、`@ai-hero/sandcastle`）；已存在则合并，否则新建并生成 `package-lock.json`
+- 顺带修一个字符串：`to-prd-project` skill 里的仓库名 → 你的仓库
 
-## Model providers
+---
 
-Profiles are **server-global** (`claude`, `claude-ark`, `psydo`, `aliyun-deepseek`) and
-read their credentials from server-local files — a new project adds no new secrets.
-Pick one per repo via the `AFK_PROFILE` Actions variable:
+## 一个真实例子：genesis-evidence
 
-```bash
-gh variable set AFK_PROFILE --repo <owner/name> --body claude-ark   # or psydo / aliyun-deepseek
+```
+./bootstrap-afk.sh ~/Projects/genesis-evidence --language python --repo kilbertert/genesis-evidence
 ```
 
-## Prerequisites / caveats
-
-- The host needs: `node` + `npm`, `docker`, `gh`, and the server's AFK profiles.
-- The sandbox **image must match the project's toolchain** (the template does this;
-  a mismatch is exactly what causes a false `<promise>BLOCKED</promise>` — see the
-  browser comment in `Dockerfile.node`).
-- GitHub Actions runs on a **self-hosted runner**, which is repo-scoped for personal
-  accounts. Each repo needs its own runner registration, or drive it locally with
-  `AFK_PROFILE=<profile> pnpm afk -- <issue>`.
-- The `agent-implement-prd.yml` chain needs an `AGENT_PAT` secret to re-label and
-  chain from one sub-issue to the next; without it the chain stops after one.
-
-## Testing
+生成了 20 个文件 → 开 PR #70 → `quality` CI 通过 → squash 合并 → 本地 main 同步。
+随后：`sandcastle:genesis-evidence` 镜像构建 ✅、`AFK_PROFILE=claude-ark` 变量设置 ✅、4 个 `agent:*` labels 创建 ✅。
 
 ```bash
-./test/smoke.sh     # scaffolds a throwaway copy and asserts the layout
+cd ~/Projects/genesis-evidence
+npm install                        # 首次：生成 node_modules
+AFK_PROFILE=claude-ark pnpm afk -- <一个 open 的 issue 号>
 ```
+
+---
+
+## 模型供应商（服务器全局，新项目零新凭据）
+
+`claude` / `claude-ark` / `psydo` / `aliyun-deepseek` 四个 profile 都在服务器本地，读服务器文件
+（`/home/claude/cliproxyapi/settings.ark.json`、psydo key、aliyun CSV 等）。新项目只要选一个：
+
+```bash
+gh variable set AFK_PROFILE --repo <owner/name> --body claude-ark   # 或 psydo / aliyun-deepseek
+```
+
+默认模型：`claude-ark → glm-latest`，`psydo → gpt-5.6-sol`，`aliyun-deepseek → deepseek-v4-pro-0813`。
+也可显式覆盖：`AFK_PROFILE=claude-ark AFK_MODEL=<model> pnpm afk -- <issue>`。
+
+---
+
+## 前置条件与已知的坑
+
+| 坑 | 说明 |
+|---|---|
+| 容器必须匹配项目工具链 | 镜像里缺项目依赖（如 Playwright、python/uv），agent 在容器内跑不了验证 → 误报 `<promise>BLOCKED</promise>`。`Dockerfile.node` 里有 playwright 的注释开关，需要时打开 |
+| self-hosted runner 是仓库级的 | 个人账号无法跨仓库共享 runner（需 Organization）。每个要用 Actions 的仓库要么注册自己的 runner，要么本地跑 `pnpm afk` |
+| 链式触发需要 `AGENT_PAT` secret | 没有它，一个子 issue 实现完不会自动触发下一个 |
+| 首次要 `npm install` | 装配只生成 lockfile；本地跑 `pnpm afk` 前要 `npm install` |
+| issue 号别填错 | `-- <号码>` 必须是一个 **open 的 issue**，不能是 PR 号（PR 和 issue 共用同一数字空间） |
+| 本仓库提交受 git guard 约束 | 别直接在 `main` 提交；用任务分支 + fast-forward |
+
+---
+
+## 设计原则（为什么要这样拆）
+
+- **复制，不重写**：可移植件从基线运行时复制，单一事实源，基线演进了新项目自动跟进。
+- **只适配 4 处**：implement.md、PRD prompt、Dockerfile、package.json——语言相关的全部差异就这些。
+- **宿主 runner 拥有交付**：AFK agent 在容器里只做「实现 → 检查 → 提交」，推分支/开 PR/合并永远是人或宿主 runner 的事。
+- **凭据只在服务器本地**：仓库里永远不放 API key；profile 桥只读宿主机文件。

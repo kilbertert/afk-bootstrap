@@ -52,6 +52,8 @@ if [ -z "$REPO" ]; then
 fi
 [ -n "$REPO" ] || { echo "cannot determine GitHub repo; pass --repo owner/name" >&2; exit 1; }
 
+SLUG="$(basename "$TARGET" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_.-]/-/g')"
+
 S="$(cd "$(dirname "$0")" && pwd)"
 mkdir -p "$TARGET/.sandcastle" "$TARGET/.claude/skills" "$TARGET/.github/workflows"
 
@@ -68,6 +70,12 @@ done
 for w in agent-to-issues-prd.yml agent-implement-prd.yml; do
   cp "$BASELINE/.github/workflows/$w" "$TARGET/.github/workflows/$w"
 done
+
+# ---- point the copied profile.ts at THIS project's image -------------------
+# The baseline bakes in its own tag (e.g. "sandcastle:auto-test"); the runner
+# would otherwise keep using that instead of the image built below. Override
+# the AFK_IMAGE default with sandcastle:<slug>.
+sed -i 's#\(imageName: process.env.AFK_IMAGE ?? \)"[^"]*"#\1"sandcastle:'"$SLUG"'"#' "$TARGET/.sandcastle/profile.ts"
 
 # ---- per-language generated files -----------------------------------------
 cp "$S/templates/implement.$LANGUAGE.md"      "$TARGET/.sandcastle/implement.md"
@@ -120,7 +128,6 @@ fi
 
 # ---- build the sandbox image ----------------------------------------------
 if [ "$DO_BUILD" = "1" ]; then
-  SLUG="$(basename "$TARGET" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_.-]/-/g')"
   IMG="sandcastle:$SLUG"
   echo "== building $IMG =="
   (cd "$TARGET" && docker build --build-arg AGENT_UID="$(id -u)" --build-arg AGENT_GID="$(id -g)" -t "$IMG" .sandcastle)

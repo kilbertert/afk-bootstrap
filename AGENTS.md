@@ -69,6 +69,11 @@ rename with `AGENT_UID`/`AGENT_GID` build args (= host uid/gid).
 
 - **Git guard**: do not commit on `main` even in this tool repo — task branch
   + `git merge --ff-only` (see project CLAUDE.md). This repo has no origin.
+- **pnpm 11 build-script gate**: pnpm ≥10 fails `pnpm install` on unreviewed
+  build scripts (`strictDepBuilds`); the AFK runner auto-runs `pnpm install`,
+  so esbuild's postinstall must be allowed or every `pnpm afk` dies first.
+  The scaffold writes `pnpm-workspace.yaml` with `allowBuilds: esbuild: true`
+  (do NOT set it to `false`). When editing the script, keep that step.
 - **Delivery**: the script commits nothing; the host runner owns
   branch → PR → CI → merge.
 - **Actions are inert without a self-hosted runner** (repo-scoped for personal

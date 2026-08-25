@@ -100,6 +100,24 @@ else
   (cd "$TARGET" && npm install --package-lock-only --silent)
 fi
 
+# ---- pnpm-workspace.yaml: allow esbuild build script (pnpm 11 blocks it) --
+# pnpm 11 fails `pnpm install` on unreviewed build scripts (strictDepBuilds);
+# the AFK runner auto-runs `pnpm install`, so esbuild must be approved or
+# every `pnpm afk` dies before the agent starts.
+if [ -f "$TARGET/pnpm-workspace.yaml" ]; then
+  if grep -q '^allowBuilds:' "$TARGET/pnpm-workspace.yaml"; then
+    if grep -qE '^[[:space:]]*esbuild:' "$TARGET/pnpm-workspace.yaml"; then
+      sed -i 's/^\([[:space:]]*\)esbuild:.*/\1esbuild: true/' "$TARGET/pnpm-workspace.yaml"
+    else
+      sed -i '/^allowBuilds:/a\  esbuild: true' "$TARGET/pnpm-workspace.yaml"
+    fi
+  else
+    printf '\nallowBuilds:\n  esbuild: true\n' >> "$TARGET/pnpm-workspace.yaml"
+  fi
+else
+  cp "$S/templates/pnpm-workspace.yaml" "$TARGET/pnpm-workspace.yaml"
+fi
+
 # ---- build the sandbox image ----------------------------------------------
 if [ "$DO_BUILD" = "1" ]; then
   SLUG="$(basename "$TARGET" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_.-]/-/g')"

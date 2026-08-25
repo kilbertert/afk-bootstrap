@@ -26,5 +26,6 @@ grep -q 'uv run pytest' "$TMP/fake-project/.sandcastle/implement-prd/prompt.md" 
 grep -q 'kilbertert/fake-project' "$TMP/fake-project/.claude/skills/to-prd-project/SKILL.md" || { echo "repo slug not fixed" >&2; exit 1; }
 grep -q '"afk"' "$TMP/fake-project/package.json" || { echo "afk script missing" >&2; exit 1; }
 grep -q 'python3' "$TMP/fake-project/.sandcastle/Dockerfile" || { echo "Dockerfile not python" >&2; exit 1; }
+grep -q 'esbuild: true' "$TMP/fake-project/pnpm-workspace.yaml" || { echo "pnpm esbuild approval missing" >&2; exit 1; }
 
 echo "smoke test passed"

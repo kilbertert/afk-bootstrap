@@ -92,6 +92,7 @@ gh variable set AFK_PROFILE --repo <owner/name> --body claude-ark   # 或 psydo 
 
 | 坑 | 说明 |
 |---|---|
+| pnpm 11 阻止 esbuild 构建脚本 | `pnpm afk` 会先自动跑 `pnpm install`，pnpm 11（`strictDepBuilds`）默认禁止未审核的 build script → `ERR_PNPM_IGNORED_BUILDS: esbuild`，agent 还没启动就退出。工具已生成 `pnpm-workspace.yaml`（`allowBuilds: esbuild: true`）根治，**别手改回 false** |
 | 容器必须匹配项目工具链 | 镜像里缺项目依赖（如 Playwright、python/uv），agent 在容器内跑不了验证 → 误报 `<promise>BLOCKED</promise>`。`Dockerfile.node` 里有 playwright 的注释开关，需要时打开 |
 | self-hosted runner 是仓库级的 | 个人账号无法跨仓库共享 runner（需 Organization）。每个要用 Actions 的仓库要么注册自己的 runner，要么本地跑 `pnpm afk` |
 | 链式触发需要 `AGENT_PAT` secret | 没有它，一个子 issue 实现完不会自动触发下一个 |

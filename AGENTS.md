@@ -98,6 +98,16 @@ README.md                 human-readable guide
 AGENTS.md                 this file
 ```
 
+Beyond the single-issue runner, the scaffold now also ships the **planner loop**
+(`planner.ts` + `plan/implement/review/merge-prompt.md`, entry `pnpm ralph`) and
+the **label-driven Actions** (`implement/`, `write-pr/`, `review/`,
+`implement-pr/`, `update-branch/`, `architecture-review/` + their workflows).
+For a python project the tool rewrites `npm run check` → uv in every copied
+prompt. The planner's Merge phase pushes main + closes issues from the container
+(user-authorized override); on repos with GitHub branch protection the merger
+falls back to opening a PR.
+```
+
 ## Extending
 
 To add a language (e.g. `go`): add `templates/implement.go.md`,

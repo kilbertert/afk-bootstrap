@@ -66,7 +66,7 @@ done
 for p in plan-prompt.md implement-prompt.md review-prompt.md merge-prompt.md; do
   cp "$BASELINE/.sandcastle/$p" "$TARGET/.sandcastle/$p"
 done
-for d in to-issues-prd write-prd-pr implement-prd implement write-pr review implement-pr update-branch architecture-review; do
+for d in to-issues-prd write-prd-pr implement-prd implement write-pr review implement-pr update-branch architecture-review skills; do
   cp -R "$BASELINE/.sandcastle/$d" "$TARGET/.sandcastle/$d"
 done
 for d in to-prd-project to-issues-project; do
@@ -86,6 +86,7 @@ sed -i 's#\(imageName: process.env.AFK_IMAGE ?? \)"[^"]*"#\1"sandcastle:'"$SLUG"
 cp "$S/templates/implement.$LANGUAGE.md"      "$TARGET/.sandcastle/implement.md"
 cp "$S/templates/prompt.$LANGUAGE.md"         "$TARGET/.sandcastle/implement-prd/prompt.md"
 cp "$S/templates/Dockerfile.$LANGUAGE"        "$TARGET/.sandcastle/Dockerfile"
+cp "$S/templates/CODING_STANDARDS.md"         "$TARGET/.sandcastle/CODING_STANDARDS.md"
 
 # ---- python: swap `npm run check` in the copied planner/action prompts -----
 # The baseline prompts are node (`npm run check`); a python project's in-container

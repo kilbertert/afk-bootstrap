@@ -27,5 +27,7 @@ grep -q 'kilbertert/fake-project' "$TMP/fake-project/.claude/skills/to-prd-proje
 grep -q '"afk"' "$TMP/fake-project/package.json" || { echo "afk script missing" >&2; exit 1; }
 grep -q 'python3' "$TMP/fake-project/.sandcastle/Dockerfile" || { echo "Dockerfile not python" >&2; exit 1; }
 grep -q 'esbuild: true' "$TMP/fake-project/pnpm-workspace.yaml" || { echo "pnpm esbuild approval missing" >&2; exit 1; }
+grep -q 'sandcastle:fake-project' "$TMP/fake-project/.sandcastle/profile.ts" || { echo "profile image name not slugged to this project" >&2; exit 1; }
+grep -qv 'auto-test-sandcastle' "$TMP/fake-project/.sandcastle/profile.ts" || { echo "profile still pins auto-test image" >&2; exit 1; }
 
 echo "smoke test passed"

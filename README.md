@@ -41,9 +41,9 @@
 
 ### 从基线原样复制（可移植、读服务器本地配置）
 
-- `.sandcastle/`：`main.ts`（单 issue runner）、`profile.ts`（模型 profile 桥）、`run-with-retry.ts`、`retry-feedback.ts`、`to-issues-prd/`、`implement-prd/`、`write-prd-pr/`、`.env.example`、`.gitignore`
+- `.sandcastle/`：`main.ts`（单 issue runner）、`planner.ts`（planner 循环，`pnpm ralph`）、`profile.ts`、`run-with-retry.ts`、`retry-feedback.ts`、`run-with-extraction.ts`、`plan/implement/review/merge-prompt.md`、`to-issues-prd/`、`implement-prd/`、`write-prd-pr/`、`implement/`、`write-pr/`、`review/`、`implement-pr/`、`update-branch/`、`architecture-review/`、`.env.example`、`.gitignore`
 - `.claude/skills/`：`to-prd-project`、`to-issues-project`
-- `.github/workflows/`：`agent-to-issues-prd.yml`、`agent-implement-prd.yml`
+- `.github/workflows/`：`agent-to-issues-prd`、`agent-implement-prd`、`agent-implement`、`agent-review`、`agent-implement-pr`、`agent-update-branch`、`agent-promote-queued`、`architecture-review`
 
 ### 按语言生成
 

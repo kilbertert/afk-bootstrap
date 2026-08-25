@@ -58,16 +58,21 @@ S="$(cd "$(dirname "$0")" && pwd)"
 mkdir -p "$TARGET/.sandcastle" "$TARGET/.claude/skills" "$TARGET/.github/workflows"
 
 # ---- copy-verbatim from the baseline --------------------------------------
-for f in main.ts profile.ts run-with-retry.ts retry-feedback.ts .env.example .gitignore; do
+for f in main.ts profile.ts run-with-retry.ts retry-feedback.ts run-with-extraction.ts planner.ts .env.example .gitignore; do
   cp "$BASELINE/.sandcastle/$f" "$TARGET/.sandcastle/$f"
 done
-for d in to-issues-prd write-prd-pr implement-prd; do
+# planner + label-Actions prompts are copied verbatim (node: `npm run check`);
+# a python project swaps the check command in the prompt-substitution step below.
+for p in plan-prompt.md implement-prompt.md review-prompt.md merge-prompt.md; do
+  cp "$BASELINE/.sandcastle/$p" "$TARGET/.sandcastle/$p"
+done
+for d in to-issues-prd write-prd-pr implement-prd implement write-pr review implement-pr update-branch architecture-review; do
   cp -R "$BASELINE/.sandcastle/$d" "$TARGET/.sandcastle/$d"
 done
 for d in to-prd-project to-issues-project; do
   cp -R "$BASELINE/.claude/skills/$d" "$TARGET/.claude/skills/$d"
 done
-for w in agent-to-issues-prd.yml agent-implement-prd.yml; do
+for w in agent-to-issues-prd.yml agent-implement-prd.yml agent-implement.yml agent-review.yml agent-implement-pr.yml agent-update-branch.yml agent-promote-queued.yml architecture-review.yml; do
   cp "$BASELINE/.github/workflows/$w" "$TARGET/.github/workflows/$w"
 done
 
@@ -82,6 +87,28 @@ cp "$S/templates/implement.$LANGUAGE.md"      "$TARGET/.sandcastle/implement.md"
 cp "$S/templates/prompt.$LANGUAGE.md"         "$TARGET/.sandcastle/implement-prd/prompt.md"
 cp "$S/templates/Dockerfile.$LANGUAGE"        "$TARGET/.sandcastle/Dockerfile"
 
+# ---- python: swap `npm run check` in the copied planner/action prompts -----
+# The baseline prompts are node (`npm run check`); a python project's in-container
+# agents must verify with uv instead.
+if [ "$LANGUAGE" = "python" ]; then
+  node -e '
+    const fs = require("fs"), path = require("path");
+    const check = "uv sync --extra dev && uv run pytest && uv run ruff check";
+    (function walk(dir) {
+      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+        const p = path.join(dir, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (e.name.endsWith(".md")) {
+          const s = fs.readFileSync(p, "utf8");
+          if (s.includes("npm run check")) {
+            fs.writeFileSync(p, s.replace(/npm run check/g, check));
+          }
+        }
+      }
+    })(process.argv[1]);
+  ' "$TARGET/.sandcastle"
+fi
+
 # ---- fix the repo slug baked into the to-prd-project skill ----------------
 sed -i "s#kilbertert/Auto_Test#$REPO#g" "$TARGET/.claude/skills/to-prd-project/SKILL.md"
 
@@ -94,7 +121,7 @@ fi
 if [ -f "$TARGET/package.json" ]; then
   node -e '
     const fs = require("fs"); const p = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-    p.scripts = { ...(p.scripts || {}), "afk": "tsx .sandcastle/main.ts", "prd:to-issues": "tsx .sandcastle/to-issues-prd/to-issues-prd.ts" };
+    p.scripts = { ...(p.scripts || {}), "afk": "tsx .sandcastle/main.ts", "ralph": "tsx .sandcastle/planner.ts", "prd:to-issues": "tsx .sandcastle/to-issues-prd/to-issues-prd.ts" };
     p.dependencies = { ...(p.dependencies || {}), "tsx": "^4.20.0" };
     p.devDependencies = { ...(p.devDependencies || {}), "@ai-hero/sandcastle": "^0.12.0", "@types/node": "^24.0.0" };
     fs.writeFileSync(process.argv[2], JSON.stringify(p, null, 2) + "\n");
@@ -152,7 +179,10 @@ Next steps (host runner owns delivery — this script commits nothing):
    (repo-level; personal accounts cannot share runners). Set the AGENT_PAT
    secret so one sub-issue chains to the next. Until then, drive it locally:
      cd $TARGET
-     AFK_PROFILE=claude-ark pnpm afk -- <issue-number>
+     AFK_PROFILE=claude-ark pnpm afk -- <issue-number>     # single issue
+     AFK_PROFILE=claude-ark pnpm ralph                     # planner loop
 5. Create the PRD parent issue (via /to-prd-project), label it agent:to-issues
    to split sub-issues, then agent:implement to start the chain.
+   The label-driven Actions (implement/review/update-branch/promote-queued/
+   architecture-review) also fire off the same labels.
 EOF

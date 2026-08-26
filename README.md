@@ -12,6 +12,10 @@
 再按目标项目的语言生成差异件。
 
 > **这份 README 是给人看的。** 给智能体（Codex / Claude Code）看的版本是 [`AGENTS.md`](AGENTS.md)。
+>
+> **交付剧本**（agent 如何把新项目完整配置好、零手动步骤）在
+> [`docs/DELIVERY-PLAYBOOK.md`](docs/DELIVERY-PLAYBOOK.md) —— 在**本工具仓库的会话**里
+> 说"配置好 X 仓库"，agent 会照它全自动交付。
 
 ---
 

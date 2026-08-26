@@ -4,11 +4,23 @@ Scaffold the AFK development workflow (idea → PRD → sub-issues → AFK/Sandc
 → draft PR → QA feedback) into a target project. This is a *tool repo*, not a
 runtime: `bootstrap-afk.sh` writes files into another repo and never commits.
 
+## The delivery contract (read this first)
+
+**When the user asks to "configure / set up / deliver AFK for project X", you
+must deliver it end-to-end and leave ZERO manual steps.** Follow
+[`docs/DELIVERY-PLAYBOOK.md`](docs/DELIVERY-PLAYBOOK.md): scaffold → branch →
+PR → CI → merge → build image → set `AFK_PROFILE` + labels + `AGENT_PAT` +
+workflow permissions → register the self-hosted runner → live-validate the
+implement chain → clean up. The host runner owns delivery; the "Next steps"
+the tool prints are your to-do list, not the user's.
+
 ## When to use
 
 - A project should run AFK agents but has no `.sandcastle/` (check first —
   the script refuses if it already exists).
 - Extending the workflow to a new language/toolchain.
+- Delivering an already-scaffolded project (verify + finish the delivery:
+  image, config, runner, live validation).
 
 ## Invocation
 
@@ -96,6 +108,7 @@ templates/                per-language generated files (node | python)
 test/smoke.sh             smoke test (scaffold a throwaway copy, assert layout)
 README.md                 human-readable guide
 AGENTS.md                 this file
+docs/DELIVERY-PLAYBOOK.md  end-to-end delivery + gotchas (read before configuring a project)
 ```
 
 Beyond the single-issue runner, the scaffold now also ships the **planner loop**

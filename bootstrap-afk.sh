@@ -123,7 +123,7 @@ if [ -f "$TARGET/package.json" ]; then
   node -e '
     const fs = require("fs"); const p = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
     p.scripts = { ...(p.scripts || {}), "afk": "tsx .sandcastle/main.ts", "ralph": "tsx .sandcastle/planner.ts", "prd:to-issues": "tsx .sandcastle/to-issues-prd/to-issues-prd.ts" };
-    p.dependencies = { ...(p.dependencies || {}), "tsx": "^4.20.0" };
+    p.dependencies = { ...(p.dependencies || {}), "tsx": "^4.20.0", "zod": "^4.4.3" };
     p.devDependencies = { ...(p.devDependencies || {}), "@ai-hero/sandcastle": "^0.12.0", "@types/node": "^24.0.0" };
     fs.writeFileSync(process.argv[2], JSON.stringify(p, null, 2) + "\n");
   ' "$TARGET/package.json"

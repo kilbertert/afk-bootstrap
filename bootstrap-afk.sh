@@ -88,6 +88,8 @@ cp "$S/templates/prompt.$LANGUAGE.md"         "$TARGET/.sandcastle/implement-prd
 cp "$S/templates/Dockerfile.$LANGUAGE"        "$TARGET/.sandcastle/Dockerfile"
 cp "$S/templates/CODING_STANDARDS.md"         "$TARGET/.sandcastle/CODING_STANDARDS.md"
 cp "$S/templates/CONTEXT.md"                  "$TARGET/CONTEXT.md"
+mkdir -p "$TARGET/docs"
+cp "$S/templates/afk-workflow.md"             "$TARGET/docs/afk-workflow.md"
 
 # ---- python: swap `npm run check` in the copied planner/action prompts -----
 # The baseline prompts are node (`npm run check`); a python project's in-container

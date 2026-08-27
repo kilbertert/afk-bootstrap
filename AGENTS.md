@@ -99,6 +99,11 @@ rename with `AGENT_UID`/`AGENT_GID` build args (= host uid/gid).
 - **Model providers are server-global** (`claude`, `claude-ark`, `psydo`,
   `aliyun-deepseek`); a new project adds zero new credentials. Pick one per
   repo via the `AFK_PROFILE` Actions variable.
+- **Slow/hung providers are guarded**: the scaffold ships codex
+  `request_timeout`/`request_max_retries` (env `AFK_REQUEST_TIMEOUT`,
+  `AFK_REQUEST_RETRIES`) and a planner `withTimeout` wall-clock
+  (`AFK_RUN_TIMEOUT`, `AFK_MERGE_TIMEOUT`, seconds; 0 = no cap). A stalled
+  agent aborts as BLOCKED instead of hanging the loop.
 
 ## Files
 

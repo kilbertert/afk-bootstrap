@@ -34,6 +34,26 @@ idea
 5. **Review** — label the PR `agent:review`: two-axis `code-review` skill,
    fix/improve, reply to threads; `agent:update-branch` resolves conflicts.
 
+## Labels & engines (one queue, two explicit runners)
+
+**No auto-claim.** An issue label is a queue marker, never a self-running
+trigger — nothing implements your issues until you run an engine.
+
+| Label | Means | Who acts |
+|---|---|---|
+| `ready-for-agent` | queued for the planner | `pnpm ralph` (dependency graph -> parallel -> merge/push/close) |
+| `agent:implement` | legacy single-issue trigger — no longer auto-runs (dispatch-only) | `gh workflow run agent-implement.yml -f issue_number=N` |
+| `agent:review` / `agent:update-branch` | PR review / conflict-resolve | review / update-branch workflows |
+
+Rules:
+- One issue, one engine: label `ready-for-agent` for the planner; or run
+  `pnpm afk -- <issue>` for a single controlled issue (no label).
+- Split a PRD by labeling the parent `agent:to-issues`, then `ready-for-agent`
+  the sub-issues you want the planner to implement.
+- `agent:implement` never auto-runs; dispatch it explicitly if you want the PR
+  flow.
+
+
 ## Rules
 
 - Profiles are server-global (`claude`, `claude-ark`, `psydo`,

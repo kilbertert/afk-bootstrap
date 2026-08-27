@@ -90,6 +90,22 @@ gh variable set AFK_PROFILE --repo <owner/name> --body claude-ark   # 或 psydo 
 默认模型：`claude-ark → glm-latest`，`psydo → gpt-5.6-sol`，`aliyun-deepseek → deepseek-v4-pro-0813`。
 也可显式覆盖：`AFK_PROFILE=claude-ark AFK_MODEL=<model> pnpm afk -- <issue>`。
 
+### 模型稳定性（慢 / 挂起保护）
+
+部分供应商（尤其 aliyun-deepseek）在完整 session 下会慢或挂起 stall。已内置
+双层保护，可调：
+
+```bash
+# 1) codex 单请求超时 / 重试（秒）
+AFK_REQUEST_TIMEOUT=120 AFK_REQUEST_RETRIES=2
+
+# 2) planner 每步 wall-clock 上限（秒；0 = 不限制）
+AFK_RUN_TIMEOUT=3600     # implement / review 每步
+AFK_MERGE_TIMEOUT=3600   # merger 一步
+```
+
+超时会把挂起的 agent 当作错误（BLOCKED）并继续，而不是让整个 planner 无限卡住。
+
 ---
 
 ## 前置条件与已知的坑

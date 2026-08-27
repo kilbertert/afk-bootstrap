@@ -72,7 +72,7 @@ done
 for d in to-prd-project to-issues-project; do
   cp -R "$BASELINE/.claude/skills/$d" "$TARGET/.claude/skills/$d"
 done
-for w in agent-to-issues-prd.yml agent-implement-prd.yml agent-implement.yml agent-review.yml agent-implement-pr.yml agent-update-branch.yml agent-promote-queued.yml architecture-review.yml issue-label-cleanup.yml; do
+for w in agent-to-issues-prd.yml agent-implement-prd.yml agent-implement.yml agent-review.yml agent-implement-pr.yml agent-update-branch.yml agent-promote-queued.yml architecture-review.yml; do
   cp "$BASELINE/.github/workflows/$w" "$TARGET/.github/workflows/$w"
 done
 

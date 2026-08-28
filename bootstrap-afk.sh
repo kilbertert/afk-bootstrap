@@ -45,7 +45,8 @@ S="$(cd "$(dirname "$0")" && pwd)"
 [ -e "$TARGET/.sandcastle" ] && { echo "already scaffolded (.sandcastle exists): $TARGET" >&2; exit 1; }
 [ -d "$S/scaffold/.sandcastle" ] || { echo "bundled scaffold missing: $S/scaffold" >&2; exit 1; }
 TEMPLATE_VERSION="$(tr -d '[:space:]' < "$S/TEMPLATE_VERSION")"
-[[ "$TEMPLATE_VERSION" =~ ^[0-9]+$ ]] || { echo "invalid TEMPLATE_VERSION" >&2; exit 1; }
+[[ "$TEMPLATE_VERSION" =~ ^(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-[0-9A-Za-z.-]+)?$ ]] \
+  || { echo "invalid TEMPLATE_VERSION" >&2; exit 1; }
 if [ -z "$REPO" ]; then
   REPO=$(git -C "$TARGET" remote get-url origin 2>/dev/null \
     | sed -E 's#.*github.com[:/]##; s#\.git$##')
@@ -100,9 +101,17 @@ fi
 sed -i "s#__AFK_GITHUB_REPOSITORY__#$REPO#g" "$TARGET/.claude/skills/to-prd-project/SKILL.md"
 node -e '
   const fs = require("fs");
-  const [path, version, language, repository] = process.argv.slice(1);
-  fs.writeFileSync(path, JSON.stringify({ templateVersion: Number(version), language, repository }, null, 2) + "\n");
-' "$TARGET/.afk-bootstrap.json" "$TEMPLATE_VERSION" "$LANGUAGE" "$REPO"
+  const [path, version, language, repository, contractPath] = process.argv.slice(1);
+  const contract = JSON.parse(fs.readFileSync(contractPath, "utf8"));
+  fs.writeFileSync(path, JSON.stringify({
+    templateVersion: Number(version.split(".")[0]),
+    afk_template_version: version,
+    consensus_version: contract.consensus_version,
+    consensus_compatibility: contract.afk_template_compatibility,
+    language,
+    repository,
+  }, null, 2) + "\n");
+' "$TARGET/.afk-bootstrap.json" "$TEMPLATE_VERSION" "$LANGUAGE" "$REPO" "$TARGET/.sandcastle/consensus-contract.json"
 
 # ---- node_modules: the scaffold adds Node deps; keep them out of git ------
 if [ -f "$TARGET/.gitignore" ] && ! grep -qx 'node_modules' "$TARGET/.gitignore"; then
@@ -113,7 +122,7 @@ fi
 if [ -f "$TARGET/package.json" ]; then
   node -e '
     const fs = require("fs"); const p = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-    p.scripts = { ...(p.scripts || {}), "afk": "tsx .sandcastle/main.ts", "ralph": "tsx .sandcastle/planner.ts", "prd:to-issues": "tsx .sandcastle/to-issues-prd/to-issues-prd.ts" };
+    p.scripts = { ...(p.scripts || {}), "afk": "tsx .sandcastle/main.ts", "ralph": "tsx .sandcastle/planner.ts", "prd:to-issues": "tsx .sandcastle/to-issues-prd/to-issues-prd.ts", "afk:policy": "node .sandcastle/policy-check.mjs all" };
     p.dependencies = { ...(p.dependencies || {}), "tsx": "^4.20.0", "zod": "^4.4.3" };
     p.devDependencies = { ...(p.devDependencies || {}), "@ai-hero/sandcastle": "^0.12.0", "@types/node": "^24.0.0" };
     fs.writeFileSync(process.argv[2], JSON.stringify(p, null, 2) + "\n");
@@ -169,7 +178,8 @@ Next steps (host runner owns delivery — this script commits nothing):
      gh label create agent:blocked     --repo $REPO --color d93f0b --force
 4. For Actions to run you need a self-hosted runner registered for $REPO
    (repo-level; personal accounts cannot share runners). Set the AGENT_PAT
-   secret so one sub-issue chains to the next. Until then, drive it locally:
+   secret for host-side label chaining and the read-only AFK_AGENT_READ_TOKEN
+   secret for Docker agents. Until then, drive it locally:
      cd $TARGET
      AFK_PROFILE=claude-ark pnpm afk -- <issue-number>     # single issue
      AFK_PROFILE=claude-ark pnpm ralph                     # planner loop

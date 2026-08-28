@@ -59,7 +59,8 @@ approved.
 - Config (all via API/gh — do it yourself):
   - `AFK_PROFILE` repo variable (`claude-ark` / `agentrouter` / `psydo` / `aliyun-deepseek`)
   - 7 `agent:*` labels: `to-issues implement review update-branch in-progress blocked queued`
-  - `AGENT_PAT` repo secret (use a PAT; `gh secret set`; note: rotation must update it)
+  - `AGENT_PAT` repo secret (host-side label chaining only)
+  - `AFK_AGENT_READ_TOKEN` repo secret (read-only/minimum-scope token for Docker agents)
   - workflow permissions: `default_workflow_permissions=write` +
     `can_approve_pull_request_reviews=true` (else Actions can't create PRs)
 - Runner: register a self-hosted runner per repo (personal accounts = repo-level).
@@ -84,7 +85,7 @@ close the test issue/PR and delete the branch.
 | 3 | `ERR_MODULE_NOT_FOUND zod` at runtime | Scaffolded package.json must include `zod` (+ update package-lock) |
 | 4 | `setup-node` fails "lock file not found: pnpm-lock.yaml" | `cache: pnpm` → `cache: npm` (repos use npm) |
 | 5 | `gh issue view` → "Could not resolve to an issue" | Explicit `permissions:` block zeroes unspecified scopes; add `issues: write` |
-| 6 | Review prompt `!gh issue view` → "gh auth login" in container | Inject `GH_TOKEN` into the docker env in `profile.ts` (from `process.env.GH_TOKEN`) |
+| 6 | Review prompt `!gh issue view` → "gh auth login" in container | Set the separate read-only `AFK_AGENT_READ_TOKEN`; `profile.ts` maps only `AFK_AGENT_GH_TOKEN` into the container |
 | 7 | Label workflows never dispatch | Orphan `- name:` stubs (Setup pnpm / Checkout PR branch) made YAML unparseable; remove consecutive `- name:` lines |
 | 8 | `pull_request_target` labeled won't fire from API label-adds | Add `workflow_dispatch` (inputs pr_number+branch) as reliable trigger; allow it through the job `if:` |
 | 9 | Actions can't create PRs ("not permitted to create") | `can_approve_pull_request_reviews: true` + `default_workflow_permissions: write` |

@@ -34,11 +34,12 @@ Docker image execution and existing consumer upgrades are outside this change.
 
 ## Execution Results
 
-Status: passed locally on `2026-08-28T20:07:26+08:00`.
+Status: passed on `2026-08-28T21:09:34+0800`.
 
-- Build identity: branch `refactor/self-contained-baseline`, base and current
-  HEAD `3d133e7cec248b1a88374b2f8b0395946794a8d7`. The result is an uncommitted
-  working tree because this task did not authorize commit, push, or PR creation.
+- Build identity: `afk-bootstrap` `origin/main` at
+  `d4aad50dce7a1df5333052c3153c095ba237dc34` (PR #17). Repository CI run
+  [33173409721](https://github.com/kilbertert/afk-bootstrap/actions/runs/33173409721)
+  passed.
 - Environment: Linux 5.15 x86_64, Node 24.15.0, npm 11.12.1, Python 3.13.13,
   PyYAML 6.0.3, Go 1.25.1, TypeScript 7.0.2 for the supplemental strict check.
 - AFK-B01: passed, `test/smoke.sh node`.
@@ -46,10 +47,10 @@ Status: passed locally on `2026-08-28T20:07:26+08:00`.
 - AFK-B03: passed; both tests copied only this checkout's `scaffold/` payload,
   and static scanning found no executable Auto-Test path or `--baseline` use.
 - AFK-B04: passed, `python3 test/workflows.py`; 9 workflows validated.
-- ShellCheck 0.11.0 was installed to `/home/claude/.local/bin` (official
+- ShellCheck 0.11.0 is installed at `/home/claude/.local/bin` (official
   release checksum verified) and passed for `bootstrap-afk.sh` and
   `test/smoke.sh`.
-- `actionlint` 1.7.7 passed for the repository and scaffold workflows with
+- `actionlint` 1.7.12 passed for the repository and scaffold workflows with
   ShellCheck enabled.
 - Supplemental strict TypeScript compilation passed for every generated
   `.sandcastle/**/*.ts` file in a temporary Node scaffold.
@@ -65,6 +66,14 @@ Status: passed locally on `2026-08-28T20:07:26+08:00`.
   through byte equivalence and manual diff review (100% coverage).
 - `dev-worktree audit` passed for all 3 repository worktrees.
 
-Not run: local Shellcheck (not installed), Docker image build, remote CI, and
-consumer-repository upgrades. Docker and consumer changes are outside this
-change; remote CI awaits an authorized commit/push/PR delivery step.
+Additional authorized delivery verification, outside the acceptance scope
+above:
+
+- Local Docker images built successfully: `sandcastle:auto-test`,
+  `sandcastle:health-flow`, `sandcastle:genesis-evidence`, and
+  `sandcastle:ai-ops`.
+- Consumer migrations merged and verified on their canonical `main` branches:
+  Auto-Test PR #143 (`ede9654cf6de62670b04d85e2dc620bff9156ae7`), health-flow
+  PR #76 (`d529affef56ccd3a266f76722b1f6d8f73df28a8`), genesis-evidence PR
+  #119 (`cb0b35e98f51b68278cb0dab895c7697905ed242`), and AI-Ops PR #61
+  (`2013c423b262a59c9beeed39c9e07da33d95745c`).

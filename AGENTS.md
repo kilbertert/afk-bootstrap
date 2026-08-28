@@ -163,6 +163,7 @@ qa-plan.md                system verification plan and retained results
 README.md                 human-readable guide
 AGENTS.md                 this file
 docs/DELIVERY-PLAYBOOK.md  end-to-end delivery + gotchas (read before configuring a project)
+docs/GOVERNANCE-ADAPTER.md  boundary and responsibility contract with server-development-consensus
 ```
 
 Beyond the single-issue runner, the scaffold now also ships the **planner loop**

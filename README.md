@@ -11,6 +11,9 @@
 从仓库内版本化的 `scaffold/` 复制通用载荷，再按目标项目的语言生成差异件。
 Auto-Test 是首个验证项目和普通消费者，不再承担模板发布职责。
 
+服务器级 consensus 与 AFK 执行适配器的责任边界见
+[`docs/GOVERNANCE-ADAPTER.md`](docs/GOVERNANCE-ADAPTER.md)。
+
 > **这份 README 是给人看的。** 给智能体（Codex / Claude Code）看的版本是 [`AGENTS.md`](AGENTS.md)。
 >
 > **交付剧本**（agent 如何把新项目完整配置好、零手动步骤）在

@@ -32,6 +32,20 @@ The host runner repeats the delivery checks before push, and GitHub Rulesets rem
 
 Only the current task's short-lived, minimum-scope provider configuration and read-oriented GitHub token may enter the Docker agent. `AGENT_PAT`, runner-registration tokens, long-lived write credentials, label mutation, branch push, and PR creation remain on the host/GitHub boundary.
 
+The scaffold ships `policy-check.mjs` and `consensus-contract.json`. The
+container runs `node .sandcastle/policy-check.mjs commit`; host push steps run
+the `delivery` command. The check is intentionally portable and small: it
+validates the generated `.afk-bootstrap.json`, `.afk-exceptions.json`, task
+branch, and `git diff --check`. It does not replace the server installer,
+managed hooks, or GitHub Ruleset.
+
+The generated metadata uses `afk_template_version`, `consensus_version`, and
+`consensus_compatibility` SemVer fields. A compatibility mismatch or missing
+field fails closed. A structured exception must include `invariant`, `reason`,
+`scope`, `compensating_control`, `owner`, `approved_at`, and `expires_at`;
+security and delivery invariants listed by the contract are never
+exceptionable.
+
 ## Version and exceptions
 
 The generated `.afk-bootstrap.json` must record `consensus_version`, `afk_template_version`, and a SemVer `consensus_compatibility` range. CI blocks absent or incompatible declarations; it does not silently auto-upgrade repositories.

@@ -47,7 +47,7 @@ Auto-Test 是首个验证项目和普通消费者，不再承担模板发布职�
 
 ### 从本仓库 `scaffold/` 原样复制
 
-- `.sandcastle/`：`main.ts`（单 issue runner）、`planner.ts`（planner 循环，`pnpm ralph`）、`profile.ts`、`run-with-retry.ts`、`retry-feedback.ts`、`run-with-extraction.ts`、`plan/implement/review/merge-prompt.md`、`to-issues-prd/`、`implement-prd/`、`write-prd-pr/`、`implement/`、`write-pr/`、`review/`、`implement-pr/`、`update-branch/`、`architecture-review/`、`.env.example`、`.gitignore`
+- `.sandcastle/`：`main.ts`（单 issue runner）、`planner.ts`（planner 循环，`pnpm ralph`）、`profile.ts`、`policy-check.mjs`、`consensus-contract.json`、`run-with-retry.ts`、`retry-feedback.ts`、`run-with-extraction.ts`、`plan/implement/review/merge-prompt.md`、`to-issues-prd/`、`implement-prd/`、`write-prd-pr/`、`implement/`、`write-pr/`、`review/`、`implement-pr/`、`update-branch/`、`architecture-review/`、`.env.example`、`.gitignore`
 - `.claude/skills/`：`to-prd-project`、`to-issues-project`
 - `.github/workflows/`：`agent-to-issues-prd`、`agent-implement-prd`、`agent-implement`、`agent-review`、`agent-implement-pr`、`agent-update-branch`、`agent-promote-queued`、`architecture-review`
 
@@ -59,7 +59,7 @@ Auto-Test 是首个验证项目和普通消费者，不再承担模板发布职�
 - `.sandcastle/implement-prd/prompt.md` —— PRD 子 issue prompt（同一门禁）
 - `.sandcastle/Dockerfile` —— 沙箱镜像（node 24 + claude-code/codex + AFK_PROFILE 分发；python 项目再加 python3 + uv）
 - `package.json` —— 最小 runner manifest（`afk` + `prd:to-issues` 脚本、`tsx`、`@ai-hero/sandcastle`）；已存在则合并，否则新建并生成 `package-lock.json`
-- `.afk-bootstrap.json` —— 记录模板版本、语言和 GitHub 仓库名
+- `.afk-bootstrap.json` —— 记录 SemVer 模板版本、consensus 版本兼容窗口、语言和 GitHub 仓库名
 - 渲染项目镜像名和 `to-prd-project` skill 里的仓库名
 
 ---
@@ -130,7 +130,7 @@ AFK_MERGE_TIMEOUT=3600   # merger 一步
 | pnpm 11 阻止 esbuild 构建脚本 | `pnpm afk` 会先自动跑 `pnpm install`，pnpm 11（`strictDepBuilds`）默认禁止未审核的 build script → `ERR_PNPM_IGNORED_BUILDS: esbuild`，agent 还没启动就退出。工具已生成 `pnpm-workspace.yaml`（`allowBuilds: esbuild: true`）根治，**别手改回 false** |
 | 容器必须匹配项目工具链 | 镜像里缺项目依赖（如 Playwright、python/uv），agent 在容器内跑不了验证 → 误报 `<promise>BLOCKED</promise>`。`Dockerfile.node` 里有 playwright 的注释开关，需要时打开 |
 | self-hosted runner 是仓库级的 | 个人账号无法跨仓库共享 runner（需 Organization）。每个要用 Actions 的仓库要么注册自己的 runner，要么本地跑 `pnpm afk` |
-| 链式触发需要 `AGENT_PAT` secret | 没有它，一个子 issue 实现完不会自动触发下一个 |
+| 链式触发需要 `AGENT_PAT` secret | 它只留在宿主 runner 用于标签触发；容器使用单独的 `AFK_AGENT_READ_TOKEN`（只读/最小权限） |
 | 首次要 `npm install` | 装配只生成 lockfile；本地跑 `pnpm afk` 前要 `npm install` |
 | issue 号别填错 | `-- <号码>` 必须是一个 **open 的 issue**，不能是 PR 号（PR 和 issue 共用同一数字空间） |
 | 本仓库提交受 git guard 约束 | 别直接在 `main` 提交；用任务 worktree + PR + CI |
@@ -143,4 +143,5 @@ AFK_MERGE_TIMEOUT=3600   # merger 一步
 - **复制，不链接**：目标仓库获得可审查的版本化副本，不依赖 Auto-Test 工作树、符号链接或 submodule。
 - **只适配 4 处**：implement.md、PRD prompt、Dockerfile、package.json——语言相关的全部差异就这些。
 - **宿主 runner 拥有交付**：AFK agent 在容器里只做「实现 → 检查 → 提交」，推分支/开 PR/合并永远是人或宿主 runner 的事。
+- **portable checker**：容器内执行 `node .sandcastle/policy-check.mjs commit`；宿主在每次 push 前执行 `... delivery`。它验证 SemVer 兼容、结构化例外、任务分支和 diff，不替代 Git hooks 或 GitHub Ruleset。
 - **凭据只在服务器本地**：仓库里永远不放 API key；profile 桥只读宿主机文件。

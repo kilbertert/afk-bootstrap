@@ -129,7 +129,9 @@ isolation.** Neither path pushes the default branch directly.
 - **Delivery**: the script commits nothing; the host runner owns
   branch → PR → CI → merge.
 - **Actions are inert without a self-hosted runner** (repo-scoped for personal
-  accounts) and the `AGENT_PAT` secret for sub-issue chaining. Until then,
+  accounts) and the `AGENT_PAT` secret for sub-issue chaining. The Docker agent
+  receives only the separate `AFK_AGENT_READ_TOKEN` secret, which must be
+  read-only and is never used for host-side labels or pushes. Until then,
   drive locally: `AFK_PROFILE=<profile> pnpm afk -- <issue>`.
 - **The sandbox image must match the project toolchain** — a mismatch is the
   exact cause of a false `<promise>BLOCKED</promise>` (agent can't self-verify
@@ -156,7 +158,7 @@ templates/                per-language generated files (node | python)
                             command (the server has a built-in installer
                             that auto-detects Codex CLI; the snippet just
                             documents the path, no hand-written block)
-TEMPLATE_VERSION          generated-project template version
+TEMPLATE_VERSION          generated-project template SemVer
 test/smoke.sh             Node/Python interface smoke test
 acceptance.feature        observable bootstrap acceptance contract
 qa-plan.md                system verification plan and retained results

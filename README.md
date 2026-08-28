@@ -8,8 +8,8 @@
 ```
 
 本仓库是**装配工具**，不是一个运行时。它把一个项目从"普通仓库"变成"能跑 AFK agent 的仓库"：
-从已验证的基线仓库（`Auto-Test`，即 `mattpocock/course-video-manager` 的最小适配移植）复制可移植件，
-再按目标项目的语言生成差异件。
+从仓库内版本化的 `scaffold/` 复制通用载荷，再按目标项目的语言生成差异件。
+Auto-Test 是首个验证项目和普通消费者，不再承担模板发布职责。
 
 > **这份 README 是给人看的。** 给智能体（Codex / Claude Code）看的版本是 [`AGENTS.md`](AGENTS.md)。
 >
@@ -34,7 +34,6 @@
 | `<target>` | 必填 | 目标项目路径（git 仓库，处于默认分支） |
 | `--language` | `node` | 工具链：`node` / `python`，决定 implement.md、PRD prompt、Dockerfile |
 | `--repo` | 从 origin 推断 | 写入 `to-prd-project` skill 的 GitHub 仓库名 |
-| `--baseline` | `/home/claude/Projects/Auto-Test` | 可移植件的复制来源 |
 | `--no-build` | 构建 | 跳过 `docker build`（改文件时用，先看 diff） |
 
 **它只生成文件，绝不提交、不推送。** 交付由宿主 runner 负责（branch → PR → CI → merge）。
@@ -43,7 +42,7 @@
 
 ## 装配后项目长什么样
 
-### 从基线原样复制（可移植、读服务器本地配置）
+### 从本仓库 `scaffold/` 原样复制
 
 - `.sandcastle/`：`main.ts`（单 issue runner）、`planner.ts`（planner 循环，`pnpm ralph`）、`profile.ts`、`run-with-retry.ts`、`retry-feedback.ts`、`run-with-extraction.ts`、`plan/implement/review/merge-prompt.md`、`to-issues-prd/`、`implement-prd/`、`write-prd-pr/`、`implement/`、`write-pr/`、`review/`、`implement-pr/`、`update-branch/`、`architecture-review/`、`.env.example`、`.gitignore`
 - `.claude/skills/`：`to-prd-project`、`to-issues-project`
@@ -57,7 +56,8 @@
 - `.sandcastle/implement-prd/prompt.md` —— PRD 子 issue prompt（同一门禁）
 - `.sandcastle/Dockerfile` —— 沙箱镜像（node 24 + claude-code/codex + AFK_PROFILE 分发；python 项目再加 python3 + uv）
 - `package.json` —— 最小 runner manifest（`afk` + `prd:to-issues` 脚本、`tsx`、`@ai-hero/sandcastle`）；已存在则合并，否则新建并生成 `package-lock.json`
-- 顺带修一个字符串：`to-prd-project` skill 里的仓库名 → 你的仓库
+- `.afk-bootstrap.json` —— 记录模板版本、语言和 GitHub 仓库名
+- 渲染项目镜像名和 `to-prd-project` skill 里的仓库名
 
 ---
 
@@ -67,7 +67,7 @@
 ./bootstrap-afk.sh ~/Projects/genesis-evidence --language python --repo kilbertert/genesis-evidence
 ```
 
-生成了 20 个文件 → 开 PR #70 → `quality` CI 通过 → squash 合并 → 本地 main 同步。
+生成项目内 AFK 载荷 → 开 PR #70 → `quality` CI 通过 → squash 合并 → 本地 main 同步。
 随后：`sandcastle:genesis-evidence` 镜像构建 ✅、`AFK_PROFILE=claude-ark` 变量设置 ✅、4 个 `agent:*` labels 创建 ✅。
 
 ```bash
@@ -82,8 +82,7 @@ AFK_PROFILE=claude-ark pnpm afk -- <一个 open 的 issue 号>
 
 AFK 有**两条并行机制**，别混为一谈（早期会话曾误读并传播错误的"我们偏离上游"结论）：
 
-1. **Planner 循环 `pnpm ralph`** —— 与上游 `main.ts` 机制**完全一致**：
-   `createSandbox({ branch, sandbox: docker() })` 建**每任务的 docker git worktree**（挂载到 `/home/agent/workspace`），`sandbox.close()` 自动清理（等价上游 `await using`）。worktree 生命周期由 sandcastle 库负责，`.sandcastle/worktrees/` 已 gitignore。
+1. **Planner `pnpm ralph`** —— `createSandbox({ branch, sandbox: docker() })` 建**每任务的 docker git worktree**（挂载到 `/home/agent/workspace`），`sandbox.close()` 自动清理；完成的任务汇总到一个 delivery branch，由宿主 push 并开 PR，不直推 `main`。
 
 2. **Label-Action implement/review** —— 跑在 **self-hosted runner 的持久 workspace**：`git checkout -b` + `docker()` 容器（做 profile/凭据注入）。这**不是**每任务 docker worktree。注：上游同路径用 `noSandbox()`（裸 runner 无容器）；我们用 `docker()` 是**有意的增强**（隔离 + profile 注入），不是抄错。
 
@@ -93,8 +92,8 @@ AFK 有**两条并行机制**，别混为一谈（早期会话曾误读并传播
 
 ## 模型供应商（服务器全局，新项目零新凭据）
 
-`claude` / `claude-ark` / `agentrouter` / `psydo` / `aliyun-deepseek` profile 都在服务器本地，读服务器文件
-（`/home/claude/cliproxyapi/settings.ark.json`、psydo key、aliyun CSV 等）。新项目只要选一个：
+`claude` / `claude-ark` / `agentrouter` / `psydo` / `aliyun-deepseek` profile 都在服务器本地。
+Codex profile 优先读 `~/.config/afk/`，并兼容现有的旧配置路径；新项目只要选一个：
 
 ```bash
 gh variable set AFK_PROFILE --repo <owner/name> --body agentrouter   # 或 claude-ark / psydo / aliyun-deepseek
@@ -131,13 +130,14 @@ AFK_MERGE_TIMEOUT=3600   # merger 一步
 | 链式触发需要 `AGENT_PAT` secret | 没有它，一个子 issue 实现完不会自动触发下一个 |
 | 首次要 `npm install` | 装配只生成 lockfile；本地跑 `pnpm afk` 前要 `npm install` |
 | issue 号别填错 | `-- <号码>` 必须是一个 **open 的 issue**，不能是 PR 号（PR 和 issue 共用同一数字空间） |
-| 本仓库提交受 git guard 约束 | 别直接在 `main` 提交；用任务分支 + fast-forward |
+| 本仓库提交受 git guard 约束 | 别直接在 `main` 提交；用任务 worktree + PR + CI |
 
 ---
 
 ## 设计原则（为什么要这样拆）
 
-- **复制，不重写**：可移植件从基线运行时复制，单一事实源，基线演进了新项目自动跟进。
+- **一个发布单元**：通用载荷、生成逻辑、文档和 smoke 都在本仓库，同一个 PR 一起验证。
+- **复制，不链接**：目标仓库获得可审查的版本化副本，不依赖 Auto-Test 工作树、符号链接或 submodule。
 - **只适配 4 处**：implement.md、PRD prompt、Dockerfile、package.json——语言相关的全部差异就这些。
 - **宿主 runner 拥有交付**：AFK agent 在容器里只做「实现 → 检查 → 提交」，推分支/开 PR/合并永远是人或宿主 runner 的事。
 - **凭据只在服务器本地**：仓库里永远不放 API key；profile 桥只读宿主机文件。

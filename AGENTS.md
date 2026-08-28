@@ -26,7 +26,7 @@ the tool prints are your to-do list, not the user's.
 
 ```bash
 ./bootstrap-afk.sh <target-repo> [--language node|python] [--repo owner/name]
-                   [--baseline /home/claude/Projects/Auto-Test] [--no-build]
+                   [--no-build]
 ```
 
 - `--language` drives the 4 generated files: `implement.md`,
@@ -38,21 +38,24 @@ the tool prints are your to-do list, not the user's.
 ## Mechanics
 
 1. Validates target is a git repo, not already scaffolded.
-2. Copies **portable** files verbatim from the baseline (default
-   `/home/claude/Projects/Auto-Test`):
+2. Copies the versioned **portable** payload from this repository's
+   `scaffold/` directory:
    - `.sandcastle/`: `main.ts`, `profile.ts`, `run-with-retry.ts`,
      `retry-feedback.ts`, `to-issues-prd/`, `implement-prd/`, `write-prd-pr/`,
      `.env.example`, `.gitignore`
    - `.claude/skills/`: `to-prd-project`, `to-issues-project`
    - `.github/workflows/`: `agent-to-issues-prd.yml`, `agent-implement-prd.yml`
-3. Generates per-language files from `templates/`.
-4. Appends `node_modules/` to the target `.gitignore` if missing.
-5. Merges `afk` + `prd:to-issues` scripts and `tsx` + `@ai-hero/sandcastle`
+3. Generates per-language files from `templates/` and renders the target image
+   and GitHub repository placeholders.
+4. Writes `.afk-bootstrap.json` with the template version, language, and
+   repository.
+5. Appends `node_modules/` to the target `.gitignore` if missing.
+6. Merges `afk` + `prd:to-issues` scripts and `tsx` + `@ai-hero/sandcastle`
    deps into the target `package.json`; creates a minimal one + `npm install
    --package-lock-only` when the target has no manifest.
-6. Builds `sandcastle:<dir-slug>` from the generated Dockerfile (unless
+7. Builds `sandcastle:<dir-slug>` from the generated Dockerfile (unless
    `--no-build`).
-7. Prints next steps (AFK_PROFILE var, labels, runner/AGENT_PAT, local cmd).
+8. Prints next steps (AFK_PROFILE var, labels, runner/AGENT_PAT, local cmd).
 
 It does **not** commit, push, or touch GitHub.
 
@@ -63,6 +66,7 @@ ls <target>/.sandcastle/{main.ts,profile.ts,implement.md,Dockerfile}
 grep '<language check cmd>' <target>/.sandcastle/implement.md
 grep '<repo slug>'          <target>/.claude/skills/to-prd-project/SKILL.md
 grep '"afk"'                <target>/package.json
+cat                         <target>/.afk-bootstrap.json
 docker images | grep sandcastle:<slug>   (unless --no-build)
 ```
 
@@ -108,15 +112,15 @@ same `_work/` directory, so `agent/*` local branches and workspace state
 a self-hosted runner — leftover `agent/*` branches are inherent to the
 label-Action path, not a unique defect.
 
-Net: **the planner path is upstream-identical (docker worktree, auto cleanup).
-The label-Action path runs in a persistent runner workspace with a docker
-container for isolation** — a designed choice for the self-hosted setup, not a
-drift from the reference.
+Net: **the planner uses docker worktrees for each issue, then integrates the
+completed branches into one delivery branch and opens a PR. The label-Action
+path runs in a persistent runner workspace with a docker container for
+isolation.** Neither path pushes the default branch directly.
 
 ## Gotchas
 
-- **Git guard**: do not commit on `main` even in this tool repo — task branch
-  + `git merge --ff-only` (see project CLAUDE.md). This repo has no origin.
+- **Git guard**: do not commit on `main` — use an isolated task worktree and
+  the repository's branch → PR → CI → merge workflow.
 - **pnpm 11 build-script gate**: pnpm ≥10 fails `pnpm install` on unreviewed
   build scripts (`strictDepBuilds`); the AFK runner auto-runs `pnpm install`,
   so esbuild's postinstall must be allowed or every `pnpm afk` dies first.
@@ -145,13 +149,17 @@ drift from the reference.
 
 ```
 bootstrap-afk.sh          the tool
+scaffold/                 portable runners, skills, prompts, and workflows
 templates/                per-language generated files (node | python)
   - AGENTS.override.md    Codex entry doc (auto-copied to project root)
   - codex-config.toml.snippet  notes + the `codebase-memory-mcp install -y`
                             command (the server has a built-in installer
                             that auto-detects Codex CLI; the snippet just
                             documents the path, no hand-written block)
-test/smoke.sh             smoke test (scaffold a throwaway copy, assert layout)
+TEMPLATE_VERSION          generated-project template version
+test/smoke.sh             Node/Python interface smoke test
+acceptance.feature        observable bootstrap acceptance contract
+qa-plan.md                system verification plan and retained results
 README.md                 human-readable guide
 AGENTS.md                 this file
 docs/DELIVERY-PLAYBOOK.md  end-to-end delivery + gotchas (read before configuring a project)
@@ -162,9 +170,9 @@ Beyond the single-issue runner, the scaffold now also ships the **planner loop**
 the **label-driven Actions** (`implement/`, `write-pr/`, `review/`,
 `implement-pr/`, `update-branch/`, `architecture-review/` + their workflows).
 For a python project the tool rewrites `npm run check` → uv in every copied
-prompt. The planner's Merge phase pushes main + closes issues from the container
-(user-authorized override); on repos with GitHub branch protection the merger
-falls back to opening a PR.
+prompt. The planner's merge agent only integrates and verifies locally; the
+host then pushes one delivery branch and opens a PR. CI and the hosting service
+remain the merge boundary.
 ```
 
 ## Extending

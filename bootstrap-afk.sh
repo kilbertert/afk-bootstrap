@@ -88,6 +88,7 @@ cp "$S/templates/prompt.$LANGUAGE.md"         "$TARGET/.sandcastle/implement-prd
 cp "$S/templates/Dockerfile.$LANGUAGE"        "$TARGET/.sandcastle/Dockerfile"
 cp "$S/templates/CODING_STANDARDS.md"         "$TARGET/.sandcastle/CODING_STANDARDS.md"
 cp "$S/templates/CONTEXT.md"                  "$TARGET/CONTEXT.md"
+cp "$S/templates/AGENTS.override.md"          "$TARGET/AGENTS.override.md"
 mkdir -p "$TARGET/docs"
 cp "$S/templates/afk-workflow.md"             "$TARGET/docs/afk-workflow.md"
 

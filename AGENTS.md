@@ -146,6 +146,11 @@ drift from the reference.
 ```
 bootstrap-afk.sh          the tool
 templates/                per-language generated files (node | python)
+  - AGENTS.override.md    Codex entry doc (auto-copied to project root)
+  - codex-config.toml.snippet  notes + the `codebase-memory-mcp install -y`
+                            command (the server has a built-in installer
+                            that auto-detects Codex CLI; the snippet just
+                            documents the path, no hand-written block)
 test/smoke.sh             smoke test (scaffold a throwaway copy, assert layout)
 README.md                 human-readable guide
 AGENTS.md                 this file

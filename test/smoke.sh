@@ -15,7 +15,7 @@ git -C "$TMP/fake-project" remote add origin https://github.com/kilbertert/fake-
 for f in \
   .sandcastle/main.ts .sandcastle/profile.ts .sandcastle/planner.ts .sandcastle/run-with-extraction.ts \
   .sandcastle/implement.md .sandcastle/Dockerfile .sandcastle/.env.example .sandcastle/.gitignore \
-  .sandcastle/CODING_STANDARDS.md .sandcastle/skills/code-review/SKILL.md CONTEXT.md docs/afk-workflow.md \
+  .sandcastle/CODING_STANDARDS.md .sandcastle/skills/code-review/SKILL.md CONTEXT.md AGENTS.override.md docs/afk-workflow.md \
   .sandcastle/implement-prd/prompt.md .sandcastle/to-issues-prd .sandcastle/write-prd-pr \
   .sandcastle/implement .sandcastle/write-pr .sandcastle/review .sandcastle/implement-pr \
   .sandcastle/update-branch .sandcastle/architecture-review \

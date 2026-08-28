@@ -57,7 +57,7 @@ approved.
 
 - Build the image: `docker build --build-arg AGENT_UID=$(id -u) --build-arg AGENT_GID=$(id -g) -t sandcastle:<slug> .sandcastle`
 - Config (all via API/gh — do it yourself):
-  - `AFK_PROFILE` repo variable (`claude-ark` / `psydo` / `aliyun-deepseek`)
+  - `AFK_PROFILE` repo variable (`claude-ark` / `agentrouter` / `psydo` / `aliyun-deepseek`)
   - 7 `agent:*` labels: `to-issues implement review update-branch in-progress blocked queued`
   - `AGENT_PAT` repo secret (use a PAT; `gh secret set`; note: rotation must update it)
   - workflow permissions: `default_workflow_permissions=write` +
@@ -89,11 +89,12 @@ close the test issue/PR and delete the branch.
 | 8 | `pull_request_target` labeled won't fire from API label-adds | Add `workflow_dispatch` (inputs pr_number+branch) as reliable trigger; allow it through the job `if:` |
 | 9 | Actions can't create PRs ("not permitted to create") | `can_approve_pull_request_reviews: true` + `default_workflow_permissions: write` |
 | 10 | Artifact quota "usage recalculated 6-12h" blocks windows-verify | No-protection repo: merge anyway. Protected repo: delete large caches/artifacts (incl. other repos — check `gh api .../actions/caches`), re-run; recalc clears on its own |
-| 11 | Model providers down: claude-ark (GLM CodingPlan expired), psydo (429) | Fall back to `aliyun-deepseek` (works but slow; complex sessions may hang — retry) |
+| 11 | Selected model provider is unavailable or out of quota | Select another server-global profile, such as `agentrouter`, and rerun the bounded issue command |
 
 ## Model providers (current health, 2026-08)
 
 - `claude-ark` → GLM/Volcengine: **CodingPlan subscription expired**.
+- `agentrouter` → server-managed Claude-compatible settings; availability is credential-dependent.
 - `psydo` → api.psydo.top: **429 rate-limited**.
 - `aliyun-deepseek` → `deepseek-v4-pro-0813`: **usable**, but complex agent
   sessions (review's two-axis skill, planner parallel) can stall — cancel + retry.

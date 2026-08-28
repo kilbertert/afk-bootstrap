@@ -93,14 +93,14 @@ AFK 有**两条并行机制**，别混为一谈（早期会话曾误读并传播
 
 ## 模型供应商（服务器全局，新项目零新凭据）
 
-`claude` / `claude-ark` / `psydo` / `aliyun-deepseek` 四个 profile 都在服务器本地，读服务器文件
+`claude` / `claude-ark` / `agentrouter` / `psydo` / `aliyun-deepseek` profile 都在服务器本地，读服务器文件
 （`/home/claude/cliproxyapi/settings.ark.json`、psydo key、aliyun CSV 等）。新项目只要选一个：
 
 ```bash
-gh variable set AFK_PROFILE --repo <owner/name> --body claude-ark   # 或 psydo / aliyun-deepseek
+gh variable set AFK_PROFILE --repo <owner/name> --body agentrouter   # 或 claude-ark / psydo / aliyun-deepseek
 ```
 
-默认模型：`claude-ark → glm-latest`，`psydo → gpt-5.6-sol`，`aliyun-deepseek → deepseek-v4-pro-0813`。
+默认模型由对应的服务器全局 profile 配置；`psydo → gpt-5.6-sol`，`aliyun-deepseek → deepseek-v4-pro-0813`。
 也可显式覆盖：`AFK_PROFILE=claude-ark AFK_MODEL=<model> pnpm afk -- <issue>`。
 
 ### 模型稳定性（慢 / 挂起保护）

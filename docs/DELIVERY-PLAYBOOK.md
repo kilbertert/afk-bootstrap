@@ -33,7 +33,8 @@ re-scaffold.
 ```
 
 Creates `.sandcastle/`, skills, Actions, `CONTEXT.md`, `CODING_STANDARDS.md`,
-`docs/afk-workflow.md`, `package.json`(+lock), `pnpm-workspace.yaml`. Verify:
+`docs/afk-workflow.md`, `.afk-bootstrap.json`, `package.json`(+lock),
+`pnpm-workspace.yaml`. Verify:
 `planner.ts`, `implement-prompt.md`, `ralph` script, python prompts use uv, esbuild
 approved.
 
@@ -44,10 +45,9 @@ approved.
 2. `git add` **only the scaffold paths**; commit.
 3. `git push -u origin <branch>`; open a PR.
 4. **Merge gate**: wait for required checks, BUT —
-   - **Free-tier private repos have NO branch protection** → a failing required-look
-     check does NOT block merge. If the failure is environmental (artifact quota),
-     **merge anyway** and note it. (This is how AI-Ops/health-flow merged with a
-     red `windows-verify`.)
+   - **Free-tier private repos have NO branch protection** → remote enforcement
+     is weaker, but deterministic checks are still mandatory. Do not merge a
+     failing check; fix the failure or record a blocked delivery.
    - Public/protected repos (e.g. `Auto_Test`): wait for Verify + Windows Verify;
      flaky timeouts → re-run the failed job once before merging.
 5. `gh pr merge <n> --squash --delete-branch`; `git fetch --prune`; fast-forward
@@ -88,7 +88,7 @@ close the test issue/PR and delete the branch.
 | 7 | Label workflows never dispatch | Orphan `- name:` stubs (Setup pnpm / Checkout PR branch) made YAML unparseable; remove consecutive `- name:` lines |
 | 8 | `pull_request_target` labeled won't fire from API label-adds | Add `workflow_dispatch` (inputs pr_number+branch) as reliable trigger; allow it through the job `if:` |
 | 9 | Actions can't create PRs ("not permitted to create") | `can_approve_pull_request_reviews: true` + `default_workflow_permissions: write` |
-| 10 | Artifact quota "usage recalculated 6-12h" blocks windows-verify | No-protection repo: merge anyway. Protected repo: delete large caches/artifacts (incl. other repos — check `gh api .../actions/caches`), re-run; recalc clears on its own |
+| 10 | Artifact quota "usage recalculated 6-12h" blocks windows-verify | Clear scoped caches/artifacts, re-run once, and leave delivery blocked until the deterministic check passes |
 | 11 | Selected model provider is unavailable or out of quota | Select another server-global profile, such as `agentrouter`, and rerun the bounded issue command |
 
 ## Model providers (current health, 2026-08)

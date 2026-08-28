@@ -2,24 +2,22 @@
 #
 # bootstrap-afk — scaffold the AFK development workflow
 # (idea -> grill -> PRD -> native sub-issues -> AFK/Sandcastle -> draft PR ->
-#  QA feedback) into a project, using Auto-Test's battle-tested implementation
-# as the copy-verbatim baseline and generating the per-language parts.
+#  QA feedback) into a project from this repository's versioned scaffold.
 #
 # USAGE:
 #   bootstrap-afk <target-repo> [--language node|python] [--repo owner/name]
-#                 [--baseline <path>] [--no-build]
+#                 [--no-build]
 #
 #   <target-repo>  path to the project (a git repo on its default branch).
 #   --language     project toolchain: node | python  (default: node).
 #   --repo         GitHub slug used to fix the to-prd-project skill
 #                  (default: derived from `git remote get-url origin`).
-#   --baseline     source of the copy-verbatim files
-#                  (default: /home/claude/Projects/Auto-Test).
 #   --no-build     skip building the sandcastle: docker image.
 #
 # It only creates files; it never commits or pushes. The host runner owns
 # delivery (branch -> PR -> CI -> merge).
 set -euo pipefail
+umask 027
 
 usage() {
   sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
@@ -28,12 +26,11 @@ usage() {
 TARGET="${1:-}"; shift || true
 [ -n "$TARGET" ] || { usage; exit 1; }
 
-LANGUAGE="node"; BASELINE="/home/claude/Projects/Auto-Test"; REPO=""; DO_BUILD=1
+LANGUAGE="node"; REPO=""; DO_BUILD=1
 while [ $# -gt 0 ]; do
   case "$1" in
     --language) LANGUAGE="${2:?}"; shift 2;;
     --repo)     REPO="${2:?}"; shift 2;;
-    --baseline) BASELINE="${2:?}"; shift 2;;
     --no-build) DO_BUILD=0; shift;;
     -h|--help)  usage; exit 0;;
     *) echo "unknown arg: $1" >&2; usage; exit 1;;
@@ -43,44 +40,29 @@ done
 case "$LANGUAGE" in node|python) ;; *) echo "unsupported --language: $LANGUAGE" >&2; exit 1;; esac
 
 # ---- validations -----------------------------------------------------------
-[ -d "$TARGET/.git" ]          || { echo "not a git repo: $TARGET" >&2; exit 1; }
-[ -e "$TARGET/.sandcastle" ]   && { echo "already scaffolded (.sandcastle exists): $TARGET" >&2; exit 1; }
-[ -d "$BASELINE/.sandcastle" ] || { echo "baseline .sandcastle missing: $BASELINE" >&2; exit 1; }
+S="$(cd "$(dirname "$0")" && pwd)"
+[ -d "$TARGET/.git" ]        || { echo "not a git repo: $TARGET" >&2; exit 1; }
+[ -e "$TARGET/.sandcastle" ] && { echo "already scaffolded (.sandcastle exists): $TARGET" >&2; exit 1; }
+[ -d "$S/scaffold/.sandcastle" ] || { echo "bundled scaffold missing: $S/scaffold" >&2; exit 1; }
+TEMPLATE_VERSION="$(tr -d '[:space:]' < "$S/TEMPLATE_VERSION")"
+[[ "$TEMPLATE_VERSION" =~ ^[0-9]+$ ]] || { echo "invalid TEMPLATE_VERSION" >&2; exit 1; }
 if [ -z "$REPO" ]; then
   REPO=$(git -C "$TARGET" remote get-url origin 2>/dev/null \
-    | sed -E 's#.*github.com[:/]([^/]+/[^/]+)(\.git)?$#\1#')
+    | sed -E 's#.*github.com[:/]##; s#\.git$##')
 fi
-[ -n "$REPO" ] || { echo "cannot determine GitHub repo; pass --repo owner/name" >&2; exit 1; }
+[[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
+  || { echo "cannot determine GitHub repo; pass --repo owner/name" >&2; exit 1; }
 
 SLUG="$(basename "$TARGET" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_.-]/-/g')"
 
-S="$(cd "$(dirname "$0")" && pwd)"
-mkdir -p "$TARGET/.sandcastle" "$TARGET/.claude/skills" "$TARGET/.github/workflows"
+mkdir -p "$TARGET"
 
-# ---- copy-verbatim from the baseline --------------------------------------
-for f in main.ts profile.ts run-with-retry.ts retry-feedback.ts run-with-extraction.ts planner.ts .env.example .gitignore; do
-  cp "$BASELINE/.sandcastle/$f" "$TARGET/.sandcastle/$f"
-done
-# planner + label-Actions prompts are copied verbatim (node: `npm run check`);
-# a python project swaps the check command in the prompt-substitution step below.
-for p in plan-prompt.md implement-prompt.md review-prompt.md merge-prompt.md; do
-  cp "$BASELINE/.sandcastle/$p" "$TARGET/.sandcastle/$p"
-done
-for d in to-issues-prd write-prd-pr implement-prd implement write-pr review implement-pr update-branch architecture-review skills; do
-  cp -R "$BASELINE/.sandcastle/$d" "$TARGET/.sandcastle/$d"
-done
-for d in to-prd-project to-issues-project; do
-  cp -R "$BASELINE/.claude/skills/$d" "$TARGET/.claude/skills/$d"
-done
-for w in agent-to-issues-prd.yml agent-implement-prd.yml agent-implement.yml agent-review.yml agent-implement-pr.yml agent-update-branch.yml agent-promote-queued.yml architecture-review.yml; do
-  cp "$BASELINE/.github/workflows/$w" "$TARGET/.github/workflows/$w"
-done
+# ---- copy the versioned scaffold owned by this repository -----------------
+cp -R "$S/scaffold/." "$TARGET/"
 
 # ---- point the copied profile.ts at THIS project's image -------------------
-# The baseline bakes in its own tag (e.g. "sandcastle:auto-test"); the runner
-# would otherwise keep using that instead of the image built below. Override
-# the AFK_IMAGE default with sandcastle:<slug>.
-sed -i 's#\(imageName: process.env.AFK_IMAGE ?? \)"[^"]*"#\1"sandcastle:'"$SLUG"'"#' "$TARGET/.sandcastle/profile.ts"
+# Render the AFK_IMAGE default with the image built below.
+sed -i "s#__AFK_IMAGE__#sandcastle:$SLUG#g" "$TARGET/.sandcastle/profile.ts"
 
 # ---- per-language generated files -----------------------------------------
 cp "$S/templates/implement.$LANGUAGE.md"      "$TARGET/.sandcastle/implement.md"
@@ -93,7 +75,7 @@ mkdir -p "$TARGET/docs"
 cp "$S/templates/afk-workflow.md"             "$TARGET/docs/afk-workflow.md"
 
 # ---- python: swap `npm run check` in the copied planner/action prompts -----
-# The baseline prompts are node (`npm run check`); a python project's in-container
+# The bundled prompts are node (`npm run check`); a python project's in-container
 # agents must verify with uv instead.
 if [ "$LANGUAGE" = "python" ]; then
   node -e '
@@ -114,8 +96,13 @@ if [ "$LANGUAGE" = "python" ]; then
   ' "$TARGET/.sandcastle"
 fi
 
-# ---- fix the repo slug baked into the to-prd-project skill ----------------
-sed -i "s#kilbertert/Auto_Test#$REPO#g" "$TARGET/.claude/skills/to-prd-project/SKILL.md"
+# ---- render project identity + record scaffold provenance -----------------
+sed -i "s#__AFK_GITHUB_REPOSITORY__#$REPO#g" "$TARGET/.claude/skills/to-prd-project/SKILL.md"
+node -e '
+  const fs = require("fs");
+  const [path, version, language, repository] = process.argv.slice(1);
+  fs.writeFileSync(path, JSON.stringify({ templateVersion: Number(version), language, repository }, null, 2) + "\n");
+' "$TARGET/.afk-bootstrap.json" "$TEMPLATE_VERSION" "$LANGUAGE" "$REPO"
 
 # ---- node_modules: the scaffold adds Node deps; keep them out of git ------
 if [ -f "$TARGET/.gitignore" ] && ! grep -qx 'node_modules' "$TARGET/.gitignore"; then

@@ -4,17 +4,36 @@ on:
   push:
   pull_request:
 
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   syntax:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
       - name: Bash syntax check
         run: bash -n bootstrap-afk.sh test/smoke.sh
+      - name: Workflow structure check
+        run: |
+          python3 -m pip install --disable-pip-version-check --quiet --user PyYAML==6.0.2
+          python3 test/workflows.py
+      - name: Self-contained scaffold smoke tests
+        run: |
+          test/smoke.sh node
+          test/smoke.sh python
       - name: Shellcheck (when available)
         run: |
           if command -v shellcheck >/dev/null 2>&1; then
-            shellcheck bootstrap-afk.sh
+            shellcheck bootstrap-afk.sh test/smoke.sh
           else
             echo "shellcheck not preinstalled; syntax check only"
           fi

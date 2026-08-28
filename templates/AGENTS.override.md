@@ -24,7 +24,7 @@ that infrastructure, not reinvent it.
 | Goal | Command |
 |---|---|
 | Implement a single open issue (host-controlled) | `pnpm afk -- <issue-number>` |
-| Run the full planner (depend. graph → parallel → merge → push) | `pnpm ralph` (set `AFK_RALPH_ITERATIONS` / `AFK_RALPH_PARALLEL` as needed) |
+| Run the planner (depend. graph → parallel → delivery PR) | `pnpm ralph` (set `AFK_RALPH_ITERATIONS` / `AFK_RALPH_PARALLEL` as needed) |
 | Split a PRD into native sub-issues | `pnpm prd:to-issues -- <prd-number>` |
 | Add a self-hosted runner / image build | see `docs/afk-workflow.md` |
 
@@ -84,9 +84,8 @@ tools.
 
 ## What NOT to do
 
-- Do not "helpfully" close issues on your own (the reference's
-  `implement/prompt.md` says so). The merge agent closes them.
-- Do not strip labels on your own — the merge agent handles that.
-- Do not push to `main` directly outside the planner's merger; the planner
-  does it on a fallback or via PR.
+- Do not "helpfully" close issues on your own. Delivery PR references close
+  them only after the hosting service merges the PR.
+- Do not strip labels on your own.
+- Do not push to `main` directly. Every planner batch ends at a delivery PR.
 - Do not re-derive the architecture; it is in `CONTEXT.md` + `docs/adr/`.

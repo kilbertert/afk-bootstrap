@@ -58,7 +58,7 @@ things run" — dispatch the workflow explicitly.
 ## Model provider
 
 The model is server-global, not per-repo. Set `AFK_PROFILE=claude-ark |
-psydo | aliyun-deepseek` (or `claude`) when running locally. In the
+agentrouter | psydo | aliyun-deepseek` (or `claude`) when running locally. In the
 self-hosted runner workflow, set the `AFK_PROFILE` repo variable.
 
 For stability, the planner and codex provider config set:

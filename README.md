@@ -78,6 +78,19 @@ AFK_PROFILE=claude-ark pnpm afk -- <一个 open 的 issue 号>
 
 ---
 
+## 两条执行路径（重要：不要误读为"背离上游"）
+
+AFK 有**两条并行机制**，别混为一谈（早期会话曾误读并传播错误的"我们偏离上游"结论）：
+
+1. **Planner 循环 `pnpm ralph`** —— 与上游 `main.ts` 机制**完全一致**：
+   `createSandbox({ branch, sandbox: docker() })` 建**每任务的 docker git worktree**（挂载到 `/home/agent/workspace`），`sandbox.close()` 自动清理（等价上游 `await using`）。worktree 生命周期由 sandcastle 库负责，`.sandcastle/worktrees/` 已 gitignore。
+
+2. **Label-Action implement/review** —— 跑在 **self-hosted runner 的持久 workspace**：`git checkout -b` + `docker()` 容器（做 profile/凭据注入）。这**不是**每任务 docker worktree。注：上游同路径用 `noSandbox()`（裸 runner 无容器）；我们用 `docker()` 是**有意的增强**（隔离 + profile 注入），不是抄错。
+
+**真正差异是 hosted vs self-hosted**：hosted runner 每次全新 workspace，self-hosted 复用同一 `_work/` → `agent/*` 分支会累积。上游在 self-hosted 上同样如此——这不是我们独有缺陷。
+
+---
+
 ## 模型供应商（服务器全局，新项目零新凭据）
 
 `claude` / `claude-ark` / `psydo` / `aliyun-deepseek` 四个 profile 都在服务器本地，读服务器文件

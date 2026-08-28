@@ -77,6 +77,42 @@ Both Dockerfiles: node 24 base (carries claude-code + codex 0.146.1), `gh`,
 AFK_PROFILE dispatch wrapper (`claude` vs `claude-ark|psydo`), agent user
 rename with `AGENT_UID`/`AGENT_GID` build args (= host uid/gid).
 
+## Architecture — two execution paths (read this before comparing to the reference)
+
+The AFK workflow has **two distinct execution paths** with different sandbox
+mechanics. Do not conflate them (earlier sessions misread this and spread a
+wrong "we diverged from upstream" story).
+
+**1. Planner loop (`pnpm ralph`, `.sandcastle/planner.ts`)** — matches the
+upstream `course-video-manager/.sandcastle/main.ts` mechanism exactly:
+`createSandbox({ branch, sandbox: docker() })` creates a **per-issue docker
+git worktree** (bind-mounted to `/home/agent/workspace`), and the worktree is
+removed on `sandbox.close()` (upstream uses `await using` auto-release; ours
+calls `close()` explicitly — equivalent). Branch/worktree cleanup is owned by
+the **sandcastle library**, not app code. `.sandcastle/worktrees/` is gitignored.
+
+**2. Label-Action implement/review (`agent-implement.yml` + `implement.ts`,
+`review.ts`)** — runs on a **self-hosted GitHub runner's persistent workspace**:
+`git checkout -b "$BRANCH"` on the runner workdir, then a `docker()` sandbox
+(for profile/env injection). This is **NOT a per-issue docker worktree**. Note:
+the upstream reference's label-Action path uses `noSandbox()` (agent runs
+directly on the runner, no container) — ours uses `docker()` instead, which is
+a deliberate enhancement for container isolation + profile injection, not a
+mis-replication.
+
+**Runner persistency — the real difference is hosted vs self-hosted, not the
+workflow design.** `actions/checkout` on a hosted (`ubuntu-latest`) runner
+starts from a **fresh** workspace each run; a **self-hosted** runner reuses the
+same `_work/` directory, so `agent/*` local branches and workspace state
+**persist between runs** and can accumulate. Upstream has the same property on
+a self-hosted runner — leftover `agent/*` branches are inherent to the
+label-Action path, not a unique defect.
+
+Net: **the planner path is upstream-identical (docker worktree, auto cleanup).
+The label-Action path runs in a persistent runner workspace with a docker
+container for isolation** — a designed choice for the self-hosted setup, not a
+drift from the reference.
+
 ## Gotchas
 
 - **Git guard**: do not commit on `main` even in this tool repo — task branch

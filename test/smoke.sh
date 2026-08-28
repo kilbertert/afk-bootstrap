@@ -2,6 +2,7 @@
 # Smoke test: scaffold a throwaway fake repo (python) and assert the layout.
 set -euo pipefail
 S="$(cd "$(dirname "$0")/.." && pwd)"
+BASELINE="${1:-/home/claude/Projects/Auto-Test}"
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
@@ -9,12 +10,12 @@ mkdir "$TMP/fake-project"
 git -C "$TMP/fake-project" init -q -b main
 git -C "$TMP/fake-project" remote add origin https://github.com/kilbertert/fake-project.git
 
-"$S/bootstrap-afk.sh" "$TMP/fake-project" --language python --no-build >/dev/null
+"$S/bootstrap-afk.sh" "$TMP/fake-project" --language python --baseline "$BASELINE" --no-build >/dev/null
 
 for f in \
   .sandcastle/main.ts .sandcastle/profile.ts .sandcastle/planner.ts .sandcastle/run-with-extraction.ts \
   .sandcastle/implement.md .sandcastle/Dockerfile .sandcastle/.env.example .sandcastle/.gitignore \
-  .sandcastle/CODING_STANDARDS.md .sandcastle/skills/code-review/SKILL.md CONTEXT.md docs/afk-workflow.md \
+  .sandcastle/CODING_STANDARDS.md .sandcastle/skills/code-review/SKILL.md CONTEXT.md AGENTS.override.md docs/afk-workflow.md \
   .sandcastle/implement-prd/prompt.md .sandcastle/to-issues-prd .sandcastle/write-prd-pr \
   .sandcastle/implement .sandcastle/write-pr .sandcastle/review .sandcastle/implement-pr \
   .sandcastle/update-branch .sandcastle/architecture-review \
@@ -37,5 +38,9 @@ grep -q '"ralph"' "$TMP/fake-project/package.json" || { echo "ralph script missi
 grep -q 'uv run pytest' "$TMP/fake-project/.sandcastle/implement-prompt.md" || { echo "planner implement prompt not python" >&2; exit 1; }
 grep -q 'sandcastle:fake-project' "$TMP/fake-project/.sandcastle/profile.ts" || { echo "profile image name not slugged to this project" >&2; exit 1; }
 grep -qv 'auto-test-sandcastle' "$TMP/fake-project/.sandcastle/profile.ts" || { echo "profile still pins auto-test image" >&2; exit 1; }
+grep -q 'agentrouter' "$TMP/fake-project/.sandcastle/profile.ts" || { echo "agentrouter profile missing" >&2; exit 1; }
+grep -q 'agentrouter' "$TMP/fake-project/.sandcastle/main.ts" || { echo "agentrouter CLI option missing" >&2; exit 1; }
+grep -q 'claude-ark|agentrouter|psydo' "$TMP/fake-project/.sandcastle/Dockerfile" || { echo "agentrouter Docker dispatch missing" >&2; exit 1; }
+grep -q 'agentrouter' "$TMP/fake-project/docs/afk-workflow.md" || { echo "agentrouter workflow documentation missing" >&2; exit 1; }
 
 echo "smoke test passed"

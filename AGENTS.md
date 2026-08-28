@@ -74,7 +74,7 @@ docker images | grep sandcastle:<slug>   (unless --no-build)
 | `python` | `uv sync --extra dev && uv run pytest && uv run ruff check` | `python3` + `uv` (agent CLIs still come from the node 24 base) |
 
 Both Dockerfiles: node 24 base (carries claude-code + codex 0.146.1), `gh`,
-AFK_PROFILE dispatch wrapper (`claude` vs `claude-ark|psydo`), agent user
+AFK_PROFILE dispatch wrapper (`claude` vs `claude-ark|agentrouter|psydo`), agent user
 rename with `AGENT_UID`/`AGENT_GID` build args (= host uid/gid).
 
 ## Architecture — two execution paths (read this before comparing to the reference)
@@ -132,7 +132,7 @@ drift from the reference.
   in the container). Keep the generated Dockerfile in sync with the project.
 - **Issue number**: the AFK target must be an *open issue*, not a PR (they
   share GitHub's number space).
-- **Model providers are server-global** (`claude`, `claude-ark`, `psydo`,
+- **Model providers are server-global** (`claude`, `claude-ark`, `agentrouter`, `psydo`,
   `aliyun-deepseek`); a new project adds zero new credentials. Pick one per
   repo via the `AFK_PROFILE` Actions variable.
 - **Slow/hung providers are guarded**: the scaffold ships codex
@@ -146,6 +146,11 @@ drift from the reference.
 ```
 bootstrap-afk.sh          the tool
 templates/                per-language generated files (node | python)
+  - AGENTS.override.md    Codex entry doc (auto-copied to project root)
+  - codex-config.toml.snippet  notes + the `codebase-memory-mcp install -y`
+                            command (the server has a built-in installer
+                            that auto-detects Codex CLI; the snippet just
+                            documents the path, no hand-written block)
 test/smoke.sh             smoke test (scaffold a throwaway copy, assert layout)
 README.md                 human-readable guide
 AGENTS.md                 this file

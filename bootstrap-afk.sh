@@ -88,6 +88,7 @@ cp "$S/templates/prompt.$LANGUAGE.md"         "$TARGET/.sandcastle/implement-prd
 cp "$S/templates/Dockerfile.$LANGUAGE"        "$TARGET/.sandcastle/Dockerfile"
 cp "$S/templates/CODING_STANDARDS.md"         "$TARGET/.sandcastle/CODING_STANDARDS.md"
 cp "$S/templates/CONTEXT.md"                  "$TARGET/CONTEXT.md"
+cp "$S/templates/AGENTS.override.md"          "$TARGET/AGENTS.override.md"
 mkdir -p "$TARGET/docs"
 cp "$S/templates/afk-workflow.md"             "$TARGET/docs/afk-workflow.md"
 
@@ -173,7 +174,7 @@ Next steps (host runner owns delivery — this script commits nothing):
 1. Commit the scaffold on a task branch, push, open a PR, and merge it.
 2. Pick the model provider for Actions:
      gh variable set AFK_PROFILE --repo $REPO --body claude-ark
-   (or psydo / aliyun-deepseek; profiles are server-global, no new credentials)
+   (or agentrouter / psydo / aliyun-deepseek; profiles are server-global, no new credentials)
 3. Create the AFK labels once:
      gh label create agent:to-issues  --repo $REPO --color ffffff --force
      gh label create agent:implement  --repo $REPO --color 000000 --force

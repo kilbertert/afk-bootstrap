@@ -53,7 +53,7 @@ test "$(cat "$TMP/has_changes")" = true
 
 git clone -q "$TMP/origin.git" "$TMP/delivery"
 git -C "$TMP/delivery" config serverPolicy.defaultBranch main
-bash "$HELPER" import "$TMP/delivery" "$feature_head" feat/review "$TMP/result.bundle"
+AFK_READ_TOKEN=synthetic-read-token bash "$HELPER" import "$TMP/delivery" "$feature_head" feat/review "$TMP/result.bundle"
 test "$(git -C "$TMP/delivery" rev-parse HEAD)" = "$result_head"
 git -C "$TMP/delivery" merge-base --is-ancestor "$base_two" HEAD
 git --git-dir="$TMP/origin.git" fetch -q "$TMP/delivery" feat/review

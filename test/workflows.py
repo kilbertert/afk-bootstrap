@@ -74,6 +74,8 @@ for path in WORKFLOWS:
             errors.append(f"{relative}: candidate workflow does not execute the trusted controller")
         if "trusted-pr-delivery.sh" not in source:
             errors.append(f"{relative}: workflow does not use trusted bundle delivery")
+        if relative.name == "agent-update-branch.yml" and "AFK_AGENT_GH_TOKEN" not in source:
+            errors.append(f"{relative}: update-branch fetch does not receive the read token")
         if "skills@latest" in source:
             errors.append(f"{relative}: workflow installs a provider-specific skill at runtime")
 
@@ -90,6 +92,11 @@ for path in WORKFLOWS:
         names = [step.get("name") for step in steps]
         if names.index("Close completed sub-issue") < names.index("Open draft PR if one doesn't exist for this branch"):
             errors.append(f"{relative}: closes a sub-issue before PR delivery succeeds")
+    if relative.name == "agent-implement.yml":
+        steps = [step for job in workflow.get("jobs", {}).values() for step in job.get("steps", [])]
+        push_step = next((step for step in steps if step.get("name") == "Push branch"), {})
+        if "AGENT_PAT" not in push_step.get("env", {}).get("GH_TOKEN", ""):
+            errors.append(f"{relative}: issue branch push does not use AGENT_PAT")
 
 if errors:
     print("\n".join(errors), file=sys.stderr)

@@ -30,7 +30,7 @@ jobs:
         run: |
           test/smoke.sh node
           test/smoke.sh python
-          test/trusted-pr-delivery.sh
+          bash test/trusted-pr-delivery.sh
       - name: Shellcheck (when available)
         run: |
           if command -v shellcheck >/dev/null 2>&1; then

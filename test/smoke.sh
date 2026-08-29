@@ -93,6 +93,10 @@ grep -q '../controller/node_modules/.bin/tsx' "$TARGET/.github/workflows/agent-r
   || { echo "trusted review controller missing" >&2; exit 1; }
 grep -q 'AUTHORIZATION: basic' "$TARGET/.sandcastle/trusted-pr-delivery.sh" \
   || { echo "GitHub read-token Basic auth missing" >&2; exit 1; }
+grep -q 'if \[ -n "{{ISSUE_NUMBER}}" \]' "$TARGET/.sandcastle/review/prompt.md" \
+  || { echo "review prompt does not handle unlinked PRs" >&2; exit 1; }
+grep -q 'if \[ -n "{{ISSUE_NUMBER}}" \]' "$TARGET/.sandcastle/review/axis-prompt.md" \
+  || { echo "review axis prompt does not handle unlinked PRs" >&2; exit 1; }
 grep -q 'Buffer.from("x-access-token:"' "$TARGET/.sandcastle/update-branch/update-branch.ts" \
   || { echo "update-branch Basic auth missing" >&2; exit 1; }
 if grep -R -n 'skills@latest\|GITHUB_TOKEN_FALLBACK' "$TARGET/.github/workflows"; then

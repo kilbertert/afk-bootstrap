@@ -79,7 +79,8 @@ Status: passed on `2026-08-28T23:25:32+0800`.
   ShellCheck enabled.
 - Supplemental strict TypeScript compilation passed for every generated
   `.sandcastle/**/*.ts` file in a temporary Node scaffold.
-- `bash -n bootstrap-afk.sh test/smoke.sh` and `git diff --check` passed.
+- `bash -n bootstrap-afk.sh test/smoke.sh test/trusted-pr-delivery.sh` and
+  `git diff --check` passed.
 - AFK-B07: passed on `2026-08-29T20:12:04+08:00`, build identity
   `fix/grill-phase-gate` at `a539c11`; both smoke cases verified the Claude
   Code and Codex phase gates, preservation of existing Claude instructions,
@@ -103,9 +104,21 @@ Status: passed on `2026-08-28T23:25:32+0800`.
   findings).
 - `dev-worktree audit` passed for all 3 repository worktrees.
 
-AFK-B10 through AFK-B12 are pending for the trusted review-delivery hardening
-change. Their results must name the tested commit, environment, timestamp, and
-retained workflow or command evidence before the change is handed off.
+AFK-B10: passed on `2026-08-30T03:09:04+08:00`, build identity
+`7973f255059c4e71de67ae9375bc0fb28b584824` on Linux 5.15 x86_64, Node
+v24.15.0, Python 3.13.13, actionlint 1.7.12 and ShellCheck 0.11.0. Evidence:
+`python3 test/workflows.py`, actionlint, `bash -n`, ShellCheck and
+`git diff --check` all passed; negative smoke cases reject a missing owner gate
+and a GITHUB_TOKEN final push.
+
+AFK-B11: passed at the same build identity and environment. Evidence:
+`bash test/trusted-pr-delivery.sh` passed stale-main reset, merge-result bundle
+preservation, and remote-race rejection; both Node and Python smoke tests
+passed, including generated policy checks.
+
+AFK-B12 remains pending until the merged template is exercised by an
+owner-authored PR on each configured self-hosted runner. Retain the workflow URL,
+review payload, final labels, and cleanup evidence before marking it passed.
 
 Additional authorized delivery verification:
 

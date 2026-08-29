@@ -96,8 +96,8 @@ removed on `sandbox.close()` (upstream uses `await using` auto-release; ours
 calls `close()` explicitly — equivalent). Branch/worktree cleanup is owned by
 the **sandcastle library**, not app code. `.sandcastle/worktrees/` is gitignored.
 
-**2. Label-Action implement/review (`agent-implement.yml` + `implement.ts`,
-`review.ts`)** — runs on a self-hosted GitHub runner with three explicit
+**2. Label-Action PR implement/review (`agent-implement-pr.yml`,
+`agent-review.yml`, and `agent-update-branch.yml`)** — runs on a self-hosted GitHub runner with three explicit
 checkouts: current-`main` `controller/`, Docker-mounted `candidate/`, and clean
 `delivery/`. Host dependencies and `.sandcastle` controllers come from
 `controller/`; candidate commits cross through a verified Git bundle before a
@@ -111,10 +111,15 @@ controller/candidate/delivery directories, reset candidate `main` to the
 controller SHA, and validate the recorded PR head again before delivery. Do
 not replace this with a single mutable checkout.
 
-Net: **the planner uses docker worktrees for each issue, then integrates the
-completed branches into one delivery branch and opens a PR. The label-Action
-path uses a trusted host controller, Docker candidate, and clean delivery
-checkout.** Neither path pushes the default branch directly.
+The issue executors (`agent-implement.yml` and `agent-implement-prd.yml`) run
+trusted controller code from the freshly checked-out default branch, push a
+task branch with `AGENT_PAT`, and hand off through a PR. They do not execute a
+PR candidate checkout.
+
+Net: **the planner uses docker worktrees for each issue, the issue executors
+create task branches, and the PR mutation path uses a trusted host controller,
+Docker candidate, and clean delivery checkout.** Neither path pushes the
+default branch directly.
 
 ## Gotchas
 

@@ -91,6 +91,10 @@ grep -q 'github.event.pull_request.user.login == github.repository_owner' "$TARG
   || { echo "owner-only PR mutation gate missing" >&2; exit 1; }
 grep -q '../controller/node_modules/.bin/tsx' "$TARGET/.github/workflows/agent-review.yml" \
   || { echo "trusted review controller missing" >&2; exit 1; }
+grep -q 'AUTHORIZATION: basic' "$TARGET/.sandcastle/trusted-pr-delivery.sh" \
+  || { echo "GitHub read-token Basic auth missing" >&2; exit 1; }
+grep -q 'Buffer.from("x-access-token:"' "$TARGET/.sandcastle/update-branch/update-branch.ts" \
+  || { echo "update-branch Basic auth missing" >&2; exit 1; }
 if grep -R -n 'skills@latest\|GITHUB_TOKEN_FALLBACK' "$TARGET/.github/workflows"; then
   echo "runtime skill install or non-triggering delivery fallback remains" >&2
   exit 1

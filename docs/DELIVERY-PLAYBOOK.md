@@ -78,6 +78,11 @@ draft PR, and request `agent:review`. For a PRD, first use the official
 the resulting native sub-issues. Watch the run; verify a PR appears. Then
 close the test issue/PR and delete the branch.
 
+The resulting PR must be authored by the repository owner. Confirm the review
+run checks out `controller`, `candidate`, and `delivery`, and that only the
+candidate step receives `AFK_AGENT_READ_TOKEN`; a missing `AGENT_PAT` must end
+in `agent:blocked`.
+
 ## Gotchas (all hit live — fix before the user sees them)
 
 | # | Symptom | Fix |
@@ -89,7 +94,7 @@ close the test issue/PR and delete the branch.
 | 5 | `gh issue view` → "Could not resolve to an issue" | Explicit `permissions:` block zeroes unspecified scopes; add `issues: write` |
 | 6 | Review prompt `!gh issue view` → "gh auth login" in container | Set the separate read-only `AFK_AGENT_READ_TOKEN`; `profile.ts` maps only `AFK_AGENT_GH_TOKEN` into the container |
 | 7 | Label workflows never dispatch | Orphan `- name:` stubs (Setup pnpm / Checkout PR branch) made YAML unparseable; remove consecutive `- name:` lines |
-| 8 | `pull_request_target` labeled won't fire from API label-adds | Add `workflow_dispatch` (inputs pr_number+branch) as reliable trigger; allow it through the job `if:` |
+| 8 | A label is present but the downstream workflow never starts | The label was added with `GITHUB_TOKEN`; configure `AGENT_PAT`. The workflow must fail closed and add `agent:blocked`, never fall back |
 | 9 | Actions can't create PRs ("not permitted to create") | `can_approve_pull_request_reviews: true` + `default_workflow_permissions: write` |
 | 10 | Artifact quota "usage recalculated 6-12h" blocks windows-verify | Clear scoped caches/artifacts, re-run once, and leave delivery blocked until the deterministic check passes |
 | 11 | Selected model provider is unavailable or out of quota | Select another server-global profile, such as `agentrouter`, and rerun the bounded issue command |
@@ -100,7 +105,7 @@ close the test issue/PR and delete the branch.
 - `agentrouter` → server-managed Claude-compatible settings; availability is credential-dependent.
 - `psydo` → api.psydo.top: **429 rate-limited**.
 - `aliyun-deepseek` → `deepseek-v4-pro-0813`: **usable**, but complex agent
-  sessions (review's two-axis skill, planner parallel) can stall — cancel + retry.
+  sessions (Sandcastle two-axis review, planner parallel) can stall — cancel + retry.
 
 Pick per repo via the `AFK_PROFILE` variable; the tool/scaffold is provider-agnostic.
 

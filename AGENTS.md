@@ -97,26 +97,24 @@ calls `close()` explicitly — equivalent). Branch/worktree cleanup is owned by
 the **sandcastle library**, not app code. `.sandcastle/worktrees/` is gitignored.
 
 **2. Label-Action implement/review (`agent-implement.yml` + `implement.ts`,
-`review.ts`)** — runs on a **self-hosted GitHub runner's persistent workspace**:
-`git checkout -b "$BRANCH"` on the runner workdir, then a `docker()` sandbox
-(for profile/env injection). This is **NOT a per-issue docker worktree**. Note:
-the upstream reference's label-Action path uses `noSandbox()` (agent runs
-directly on the runner, no container) — ours uses `docker()` instead, which is
-a deliberate enhancement for container isolation + profile injection, not a
-mis-replication.
+`review.ts`)** — runs on a self-hosted GitHub runner with three explicit
+checkouts: current-`main` `controller/`, Docker-mounted `candidate/`, and clean
+`delivery/`. Host dependencies and `.sandcastle` controllers come from
+`controller/`; candidate commits cross through a verified Git bundle before a
+short-lived write token pushes them. This is **NOT a per-issue docker
+worktree**. The upstream reference's label-Action path uses `noSandbox()`;
+ours uses `docker()` for candidate isolation and profile injection.
 
-**Runner persistency — the real difference is hosted vs self-hosted, not the
-workflow design.** `actions/checkout` on a hosted (`ubuntu-latest`) runner
-starts from a **fresh** workspace each run; a **self-hosted** runner reuses the
-same `_work/` directory, so `agent/*` local branches and workspace state
-**persist between runs** and can accumulate. Upstream has the same property on
-a self-hosted runner — leftover `agent/*` branches are inherent to the
-label-Action path, not a unique defect.
+**Runner persistency — the real difference is hosted vs self-hosted.** A
+self-hosted runner reuses `_work/`, so every PR mutation path must use the
+controller/candidate/delivery directories, reset candidate `main` to the
+controller SHA, and validate the recorded PR head again before delivery. Do
+not replace this with a single mutable checkout.
 
 Net: **the planner uses docker worktrees for each issue, then integrates the
 completed branches into one delivery branch and opens a PR. The label-Action
-path runs in a persistent runner workspace with a docker container for
-isolation.** Neither path pushes the default branch directly.
+path uses a trusted host controller, Docker candidate, and clean delivery
+checkout.** Neither path pushes the default branch directly.
 
 ## Gotchas
 

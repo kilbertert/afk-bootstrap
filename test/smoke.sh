@@ -42,7 +42,7 @@ fi
 
 for f in \
   .sandcastle/main.ts .sandcastle/profile.ts .sandcastle/planner.ts .sandcastle/run-with-extraction.ts \
-  .sandcastle/policy-check.mjs .sandcastle/consensus-contract.json \
+  .sandcastle/policy-check.mjs .sandcastle/consensus-contract.json .sandcastle/trusted-pr-delivery.sh \
   .sandcastle/implement.md .sandcastle/Dockerfile .sandcastle/.env.example .sandcastle/.gitignore \
   .sandcastle/CODING_STANDARDS.md CONTEXT.md CLAUDE.md docs/afk-workflow.md \
   docs/agents/issue-tracker.md docs/agents/triage-labels.md docs/agents/domain.md \
@@ -54,6 +54,7 @@ for f in \
   .github/workflows/agent-implement.yml .github/workflows/agent-review.yml \
   .github/workflows/agent-update-branch.yml .github/workflows/architecture-review.yml \
   .github/workflows/agent-implement-pr.yml .github/workflows/agent-promote-queued.yml \
+  .github/workflows/afk-policy.yml \
   .afk-bootstrap.json package.json package-lock.json; do
   [ -e "$TARGET/$f" ] || { echo "MISSING: $f" >&2; exit 1; }
 done
@@ -86,9 +87,17 @@ if grep -q 'process.env.GH_TOKEN' "$TARGET/.sandcastle/profile.ts"; then
   echo "host GH_TOKEN is still forwarded by profile" >&2
   exit 1
 fi
+grep -q 'github.event.pull_request.user.login == github.repository_owner' "$TARGET/.github/workflows/agent-review.yml" \
+  || { echo "owner-only PR mutation gate missing" >&2; exit 1; }
+grep -q '../controller/node_modules/.bin/tsx' "$TARGET/.github/workflows/agent-review.yml" \
+  || { echo "trusted review controller missing" >&2; exit 1; }
+if grep -R -n 'skills@latest\|GITHUB_TOKEN_FALLBACK' "$TARGET/.github/workflows"; then
+  echo "runtime skill install or non-triggering delivery fallback remains" >&2
+  exit 1
+fi
 node -e '
   const metadata = require(process.argv[1]);
-  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.1.0" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
+  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.1.1" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
 ' "$TARGET/.afk-bootstrap.json" "$LANGUAGE" "$REPO" || { echo "template metadata invalid" >&2; exit 1; }
 
 AFK_ROOT="$TARGET" AFK_DEFAULT_BRANCH=main node "$TARGET/.sandcastle/policy-check.mjs" version
@@ -98,6 +107,23 @@ if AFK_ROOT="$TARGET" AFK_DEFAULT_BRANCH=main node "$TARGET/.sandcastle/policy-c
 fi
 git -C "$TARGET" checkout -q -b feat/policy-check
 AFK_ROOT="$TARGET" AFK_DEFAULT_BRANCH=main node "$TARGET/.sandcastle/policy-check.mjs" all
+
+REVIEW_WORKFLOW="$TARGET/.github/workflows/agent-review.yml"
+cp "$REVIEW_WORKFLOW" "$TMP/agent-review.yml"
+sed -i '/github.event.pull_request.user.login == github.repository_owner/d' "$REVIEW_WORKFLOW"
+if AFK_ROOT="$TARGET" node "$TARGET/.sandcastle/policy-check.mjs" workflows >/dev/null 2>&1; then
+  echo "policy checker accepted a PR workflow without the owner gate" >&2
+  exit 1
+fi
+mv "$TMP/agent-review.yml" "$REVIEW_WORKFLOW"
+
+cp "$REVIEW_WORKFLOW" "$TMP/agent-review.yml"
+sed -i 's/secrets.AGENT_PAT/secrets.GITHUB_TOKEN/' "$REVIEW_WORKFLOW"
+if AFK_ROOT="$TARGET" node "$TARGET/.sandcastle/policy-check.mjs" workflows >/dev/null 2>&1; then
+  echo "policy checker accepted GITHUB_TOKEN for the final PR push" >&2
+  exit 1
+fi
+mv "$TMP/agent-review.yml" "$REVIEW_WORKFLOW"
 
 cat > "$TARGET/.afk-exceptions.json" <<'JSON'
 {"exceptions":[{"invariant":"runner-isolation","reason":"temporary upstream API mismatch","scope":"docs-only migration","compensating_control":"host runner and Ruleset remain enforced","owner":"owner@example.com","approved_at":"2026-08-01T00:00:00Z","expires_at":"2099-01-01T00:00:00Z"}]}

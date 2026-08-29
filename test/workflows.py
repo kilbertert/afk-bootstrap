@@ -33,8 +33,9 @@ UniqueKeyLoader.add_constructor(yaml.resolver.BaseResolver.DEFAULT_MAPPING_TAG, 
 errors = []
 for path in WORKFLOWS:
     relative = path.relative_to(ROOT)
+    source = path.read_text()
     try:
-        workflow = yaml.load(path.read_text(), Loader=UniqueKeyLoader)
+        workflow = yaml.load(source, Loader=UniqueKeyLoader)
     except Exception as error:
         errors.append(f"{relative}: {error}")
         continue
@@ -43,6 +44,10 @@ for path in WORKFLOWS:
     for job_name, job in workflow.get("jobs", {}).items():
         if pull_request_target and "github.event.pull_request.head.repo.full_name == github.repository" not in job.get("if", ""):
             errors.append(f"{relative}: job {job_name} does not reject fork PRs")
+        if pull_request_target and "github.event.pull_request.user.login == github.repository_owner" not in job.get("if", ""):
+            errors.append(f"{relative}: job {job_name} does not require a repository-owner PR")
+        if pull_request_target and "GH_TOKEN" in job.get("env", {}):
+            errors.append(f"{relative}: job {job_name} exposes a write token to every step")
         for index, step in enumerate(job.get("steps", []), 1):
             actions = [key for key in ("run", "uses") if key in step]
             if len(actions) != 1:
@@ -52,6 +57,29 @@ for path in WORKFLOWS:
             run = step.get("run", "")
             if re.search(r"git\s+push[^\n]*--force(?:-with-lease)?", run):
                 errors.append(f"{relative}: job {job_name} step {index} force-pushes")
+            if pull_request_target and run.strip() == "npm ci" and step.get("working-directory") != "controller":
+                errors.append(f"{relative}: job {job_name} installs candidate-controlled host dependencies")
+            candidate_token = step.get("env", {}).get("GH_TOKEN", "")
+            if pull_request_target and step.get("working-directory") == "candidate" and candidate_token and "AFK_AGENT_READ_TOKEN" not in candidate_token:
+                errors.append(f"{relative}: job {job_name} exposes a write token in the candidate checkout")
+            if pull_request_target and step.get("name") == "Push result from clean delivery workspace" and "AGENT_PAT" not in candidate_token:
+                errors.append(f"{relative}: job {job_name} does not fail closed on the delivery token")
+
+    if pull_request_target:
+        if source.count("persist-credentials: false") < 2:
+            errors.append(f"{relative}: trusted and candidate checkouts do not disable persisted credentials")
+        if "../controller/node_modules/.bin/tsx" not in source:
+            errors.append(f"{relative}: candidate workflow does not execute the trusted controller")
+        if "trusted-pr-delivery.sh" not in source:
+            errors.append(f"{relative}: workflow does not use trusted bundle delivery")
+        if "skills@latest" in source:
+            errors.append(f"{relative}: workflow installs a provider-specific skill at runtime")
+
+    if relative.name in {"agent-implement.yml", "agent-implement-prd.yml", "agent-promote-queued.yml"}:
+        if "GITHUB_TOKEN_FALLBACK" in source:
+            errors.append(f"{relative}: delivery mutation falls back to a token that cannot trigger workflows")
+        if "AGENT_PAT" not in source:
+            errors.append(f"{relative}: delivery mutation does not require AGENT_PAT")
 
 if errors:
     print("\n".join(errors), file=sys.stderr)

@@ -48,7 +48,7 @@ Auto-Test 是首个验证项目和普通消费者，不再承担模板发布职�
 ### 从本仓库 `scaffold/` 原样复制
 
 - `.sandcastle/`：`main.ts`（单 issue runner）、`planner.ts`（planner 循环，`pnpm ralph`）、`profile.ts`、`policy-check.mjs`、`consensus-contract.json`、`run-with-retry.ts`、`retry-feedback.ts`、`run-with-extraction.ts`、`plan/implement/review/merge-prompt.md`、`implement-prd/`、`write-prd-pr/`、`implement/`、`write-pr/`、`review/`、`implement-pr/`、`update-branch/`、`architecture-review/`、`.env.example`、`.gitignore`
-- `.github/workflows/`：`agent-implement-prd`、`agent-implement`、`agent-review`、`agent-implement-pr`、`agent-update-branch`、`agent-promote-queued`、`architecture-review`
+- `.github/workflows/`：`agent-implement-prd`、`agent-implement`、`agent-review`、`agent-implement-pr`、`agent-update-branch`、`agent-promote-queued`、`architecture-review`、`afk-policy`
 - `docs/agents/`：官方 skills 所需的 GitHub tracker、triage labels、domain pointers
 
 ### 按语言生成
@@ -87,9 +87,9 @@ AFK 有**两条并行机制**，别混为一谈（早期会话曾误读并传播
 
 1. **Planner `pnpm ralph`** —— `createSandbox({ branch, sandbox: docker() })` 建**每任务的 docker git worktree**（挂载到 `/home/agent/workspace`），`sandbox.close()` 自动清理；完成的任务汇总到一个 delivery branch，由宿主 push 并开 PR，不直推 `main`。
 
-2. **Label-Action implement/review** —— 跑在 **self-hosted runner 的持久 workspace**：`git checkout -b` + `docker()` 容器（做 profile/凭据注入）。这**不是**每任务 docker worktree。注：上游同路径用 `noSandbox()`（裸 runner 无容器）；我们用 `docker()` 是**有意的增强**（隔离 + profile 注入），不是抄错。
+2. **Label-Action implement/review** —— 跑在 self-hosted runner，但分成三个目录：`controller/` 固定使用当前 `main` 的受信脚本与依赖，`candidate/` 只把 PR 分支挂进 `docker()`，`delivery/` 从验证过的 Git bundle 导入结果后才短时使用写 token 推送。三条 PR mutation workflow 只接受仓库所有者创建的同仓库 PR；不是每任务 docker worktree，也不在宿主执行 candidate 的 `npm ci` 或 `.sandcastle/*.ts`。
 
-**真正差异是 hosted vs self-hosted**：hosted runner 每次全新 workspace，self-hosted 复用同一 `_work/` → `agent/*` 分支会累积。上游在 self-hosted 上同样如此——这不是我们独有缺陷。
+**真正差异是 hosted vs self-hosted**：hosted runner 每次全新 workspace，self-hosted 复用同一 `_work/`。受信 controller/candidate/delivery 分目录 checkout 和精确 head 校验让重复运行不再依赖遗留的本地 `main` 或任务分支状态。
 
 ---
 
@@ -130,7 +130,7 @@ AFK_MERGE_TIMEOUT=3600   # merger 一步
 | pnpm 11 阻止 esbuild 构建脚本 | `pnpm afk` 会先自动跑 `pnpm install`，pnpm 11（`strictDepBuilds`）默认禁止未审核的 build script → `ERR_PNPM_IGNORED_BUILDS: esbuild`，agent 还没启动就退出。工具已生成 `pnpm-workspace.yaml`（`allowBuilds: esbuild: true`）根治，**别手改回 false** |
 | 容器必须匹配项目工具链 | 镜像里缺项目依赖（如 Playwright、python/uv），agent 在容器内跑不了验证 → 误报 `<promise>BLOCKED</promise>`。`Dockerfile.node` 里有 playwright 的注释开关，需要时打开 |
 | self-hosted runner 是仓库级的 | 个人账号无法跨仓库共享 runner（需 Organization）。每个要用 Actions 的仓库要么注册自己的 runner，要么本地跑 `pnpm afk` |
-| Actions 创建 PR/链式触发需要 `AGENT_PAT` secret | 它只留在宿主 runner 用于 PR 创建和标签触发；容器使用单独的 `AFK_AGENT_READ_TOKEN`（只读/最小权限） |
+| Actions 创建 PR/链式触发需要 `AGENT_PAT` secret | 它只留在宿主 runner 的 delivery 步骤；缺失或权限失败会进入 `agent:blocked`，不会退回到无法触发下游 workflow 的 `GITHUB_TOKEN`。容器只接收 `AFK_AGENT_READ_TOKEN` |
 | 首次要 `npm install` | 装配只生成 lockfile；本地跑 `pnpm afk` 前要 `npm install` |
 | issue 号别填错 | `-- <号码>` 必须是一个 **open 的 issue**，不能是 PR 号（PR 和 issue 共用同一数字空间） |
 | 本仓库提交受 git guard 约束 | 别直接在 `main` 提交；用任务 worktree + PR + CI |
@@ -143,5 +143,6 @@ AFK_MERGE_TIMEOUT=3600   # merger 一步
 - **复制，不链接**：目标仓库获得可审查的版本化副本，不依赖 Auto-Test 工作树、符号链接或 submodule。
 - **只适配 4 处**：implement.md、PRD prompt、Dockerfile、package.json——语言相关的全部差异就这些。
 - **宿主 runner 拥有交付**：AFK agent 在容器里只做「实现 → 检查 → 提交」，推分支/开 PR/合并永远是人或宿主 runner 的事。
+- **受信控制面**：PR mutation 的 host 代码固定来自 `main`，candidate 只在 Docker 中运行；Git bundle 是 candidate 到干净 delivery checkout 的唯一提交交接面。
 - **portable checker**：容器内执行 `node .sandcastle/policy-check.mjs commit`；宿主在每次 push 前执行 `... delivery`。它验证 SemVer 兼容、结构化例外、任务分支和 diff，不替代 Git hooks 或 GitHub Ruleset。
 - **凭据只在服务器本地**：仓库里永远不放 API key；profile 桥只读宿主机文件。

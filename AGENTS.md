@@ -45,8 +45,9 @@ the tool prints are your to-do list, not the user's.
      `.env.example`, `.gitignore`
    - `.claude/skills/`: `to-prd-project`, `to-issues-project`
    - `.github/workflows/`: `agent-to-issues-prd.yml`, `agent-implement-prd.yml`
-3. Generates per-language files from `templates/` and renders the target image
-   and GitHub repository placeholders.
+3. Generates files from `templates/`, preserves any existing `CLAUDE.md` while
+   adding the Claude Code planning gate, and renders the target image and
+   GitHub repository placeholders.
 4. Writes `.afk-bootstrap.json` with the template version, language, and
    repository.
 5. Appends `node_modules/` to the target `.gitignore` if missing.
@@ -154,6 +155,7 @@ bootstrap-afk.sh          the tool
 scaffold/                 portable runners, skills, prompts, and workflows
 templates/                per-language generated files (node | python)
   - AGENTS.override.md    Codex entry doc (auto-copied to project root)
+  - CLAUDE.md             Claude Code planning gate (created or appended)
   - codex-config.toml.snippet  notes + the `codebase-memory-mcp install -y`
                             command (the server has a built-in installer
                             that auto-detects Codex CLI; the snippet just

@@ -72,6 +72,12 @@ cp "$S/templates/Dockerfile.$LANGUAGE"        "$TARGET/.sandcastle/Dockerfile"
 cp "$S/templates/CODING_STANDARDS.md"         "$TARGET/.sandcastle/CODING_STANDARDS.md"
 cp "$S/templates/CONTEXT.md"                  "$TARGET/CONTEXT.md"
 cp "$S/templates/AGENTS.override.md"          "$TARGET/AGENTS.override.md"
+if [ -f "$TARGET/CLAUDE.md" ]; then
+  printf '\n' >> "$TARGET/CLAUDE.md"
+  sed -n '1,$p' "$S/templates/CLAUDE.md" >> "$TARGET/CLAUDE.md"
+else
+  cp "$S/templates/CLAUDE.md" "$TARGET/CLAUDE.md"
+fi
 mkdir -p "$TARGET/docs"
 cp "$S/templates/afk-workflow.md"             "$TARGET/docs/afk-workflow.md"
 

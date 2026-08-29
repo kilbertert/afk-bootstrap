@@ -29,8 +29,9 @@ Feature: Self-contained AFK bootstrap baseline
 
   Rule: planning and execution remain explicit phases
 
-    Scenario: Generated Codex entry preserves the grilling phase boundary
-      Given a clean temporary Git repository with a GitHub origin
+    Scenario: Generated agent entries preserve the grilling phase boundary
+      Given a clean temporary Git repository whose Claude instructions may already exist
       When bootstrap-afk runs without building an image
-      Then the generated Codex entry requires explicit confirmation after grilling
+      Then the generated Claude Code and Codex entries require explicit confirmation after grilling
+      And existing Claude instructions remain intact
       And the generated planner can execute only issues marked ready-for-agent

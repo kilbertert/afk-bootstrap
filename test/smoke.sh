@@ -15,6 +15,9 @@ REPO="kilbertert/fake-$LANGUAGE-project"
 mkdir "$TARGET"
 git -C "$TARGET" init -q -b main
 git -C "$TARGET" remote add origin "https://github.com/$REPO.git"
+if [ "$LANGUAGE" = "node" ]; then
+  printf '# Existing Claude instructions\n\nKeep this project rule.\n' > "$TARGET/CLAUDE.md"
+fi
 
 INVALID_TARGET="$TMP/invalid-$LANGUAGE-project"
 mkdir "$INVALID_TARGET"
@@ -31,7 +34,7 @@ for f in \
   .sandcastle/main.ts .sandcastle/profile.ts .sandcastle/planner.ts .sandcastle/run-with-extraction.ts \
   .sandcastle/policy-check.mjs .sandcastle/consensus-contract.json \
   .sandcastle/implement.md .sandcastle/Dockerfile .sandcastle/.env.example .sandcastle/.gitignore \
-  .sandcastle/CODING_STANDARDS.md .sandcastle/skills/code-review/SKILL.md CONTEXT.md AGENTS.override.md docs/afk-workflow.md \
+  .sandcastle/CODING_STANDARDS.md .sandcastle/skills/code-review/SKILL.md CONTEXT.md AGENTS.override.md CLAUDE.md docs/afk-workflow.md \
   .sandcastle/implement-prd/prompt.md .sandcastle/to-issues-prd .sandcastle/write-prd-pr \
   .sandcastle/implement .sandcastle/write-pr .sandcastle/review .sandcastle/implement-pr \
   .sandcastle/update-branch .sandcastle/architecture-review \
@@ -54,8 +57,13 @@ grep -q 'agentrouter' "$TARGET/.sandcastle/profile.ts" || { echo "agentrouter pr
 grep -q 'agentrouter' "$TARGET/.sandcastle/main.ts" || { echo "agentrouter CLI option missing" >&2; exit 1; }
 grep -q 'claude-ark|agentrouter|psydo' "$TARGET/.sandcastle/Dockerfile" || { echo "agentrouter Docker dispatch missing" >&2; exit 1; }
 grep -q 'agentrouter' "$TARGET/docs/afk-workflow.md" || { echo "agentrouter workflow documentation missing" >&2; exit 1; }
-grep -q 'GRILLING_COMPLETE' "$TARGET/AGENTS.override.md" || { echo "planning phase gate missing" >&2; exit 1; }
-grep -q 'user to invoke' "$TARGET/AGENTS.override.md" || { echo "explicit phase invocation gate missing" >&2; exit 1; }
+grep -q 'GRILLING_COMPLETE' "$TARGET/AGENTS.override.md" || { echo "Codex planning phase gate missing" >&2; exit 1; }
+grep -q 'user to invoke' "$TARGET/AGENTS.override.md" || { echo "Codex explicit phase invocation gate missing" >&2; exit 1; }
+grep -q 'GRILLING_COMPLETE' "$TARGET/CLAUDE.md" || { echo "Claude Code planning phase gate missing" >&2; exit 1; }
+grep -q 'explicitly invoke' "$TARGET/CLAUDE.md" || { echo "Claude Code explicit phase invocation gate missing" >&2; exit 1; }
+if [ "$LANGUAGE" = "node" ]; then
+  grep -q 'Keep this project rule.' "$TARGET/CLAUDE.md" || { echo "existing Claude instructions were overwritten" >&2; exit 1; }
+fi
 grep -q 'AFK_AGENT_GH_TOKEN' "$TARGET/.sandcastle/profile.ts" || { echo "agent token boundary missing" >&2; exit 1; }
 if grep -q 'process.env.GH_TOKEN' "$TARGET/.sandcastle/profile.ts"; then
   echo "host GH_TOKEN is still forwarded by profile" >&2

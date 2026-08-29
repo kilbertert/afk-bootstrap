@@ -60,6 +60,7 @@ Auto-Test 是首个验证项目和普通消费者，不再承担模板发布职�
 - `.sandcastle/Dockerfile` —— 沙箱镜像（node 24 + claude-code/codex + AFK_PROFILE 分发；python 项目再加 python3 + uv）
 - `package.json` —— 最小 runner manifest（`afk` + `prd:to-issues` 脚本、`tsx`、`@ai-hero/sandcastle`）；已存在则合并，否则新建并生成 `package-lock.json`
 - `.afk-bootstrap.json` —— 记录 SemVer 模板版本、consensus 版本兼容窗口、语言和 GitHub 仓库名
+- `AGENTS.override.md` / `CLAUDE.md` —— Codex 与 Claude Code 自动加载的阶段门禁；已有 `CLAUDE.md` 只追加、不覆盖
 - 渲染项目镜像名和 `to-prd-project` skill 里的仓库名
 
 ---

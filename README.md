@@ -1,6 +1,6 @@
 # afk-bootstrap
 
-把「想法 → PRD → issue → AFK 实现 → 人工 QA → 后台修复」这条软件开发工作流，一键装配进任意项目。
+把「想法 → grill → PRD → issue → AFK 实现 → 人工 QA → 后台修复」这条软件开发工作流，一键装配进任意项目。
 
 ```
 想法 → grill → PRD(父 issue) → native sub-issues → AFK/Sandcastle Docker
@@ -36,7 +36,7 @@ Auto-Test 是首个验证项目和普通消费者，不再承担模板发布职�
 |---|---|---|
 | `<target>` | 必填 | 目标项目路径（git 仓库，处于默认分支） |
 | `--language` | `node` | 工具链：`node` / `python`，决定 implement.md、PRD prompt、Dockerfile |
-| `--repo` | 从 origin 推断 | 写入 `to-prd-project` skill 的 GitHub 仓库名 |
+| `--repo` | 从 origin 推断 | 记录目标 GitHub 仓库名 |
 | `--no-build` | 构建 | 跳过 `docker build`（改文件时用，先看 diff） |
 
 **它只生成文件，绝不提交、不推送。** 交付由宿主 runner 负责（branch → PR → CI → merge）。
@@ -47,9 +47,9 @@ Auto-Test 是首个验证项目和普通消费者，不再承担模板发布职�
 
 ### 从本仓库 `scaffold/` 原样复制
 
-- `.sandcastle/`：`main.ts`（单 issue runner）、`planner.ts`（planner 循环，`pnpm ralph`）、`profile.ts`、`policy-check.mjs`、`consensus-contract.json`、`run-with-retry.ts`、`retry-feedback.ts`、`run-with-extraction.ts`、`plan/implement/review/merge-prompt.md`、`to-issues-prd/`、`implement-prd/`、`write-prd-pr/`、`implement/`、`write-pr/`、`review/`、`implement-pr/`、`update-branch/`、`architecture-review/`、`.env.example`、`.gitignore`
-- `.claude/skills/`：`to-prd-project`、`to-issues-project`
-- `.github/workflows/`：`agent-to-issues-prd`、`agent-implement-prd`、`agent-implement`、`agent-review`、`agent-implement-pr`、`agent-update-branch`、`agent-promote-queued`、`architecture-review`
+- `.sandcastle/`：`main.ts`（单 issue runner）、`planner.ts`（planner 循环，`pnpm ralph`）、`profile.ts`、`policy-check.mjs`、`consensus-contract.json`、`run-with-retry.ts`、`retry-feedback.ts`、`run-with-extraction.ts`、`plan/implement/review/merge-prompt.md`、`implement-prd/`、`write-prd-pr/`、`implement/`、`write-pr/`、`review/`、`implement-pr/`、`update-branch/`、`architecture-review/`、`.env.example`、`.gitignore`
+- `.github/workflows/`：`agent-implement-prd`、`agent-implement`、`agent-review`、`agent-implement-pr`、`agent-update-branch`、`agent-promote-queued`、`architecture-review`
+- `docs/agents/`：官方 skills 所需的 GitHub tracker、triage labels、domain pointers
 
 ### 按语言生成
 
@@ -58,9 +58,9 @@ Auto-Test 是首个验证项目和普通消费者，不再承担模板发布职�
   - python：`uv sync --extra dev && uv run pytest && uv run ruff check`
 - `.sandcastle/implement-prd/prompt.md` —— PRD 子 issue prompt（同一门禁）
 - `.sandcastle/Dockerfile` —— 沙箱镜像（node 24 + claude-code/codex + AFK_PROFILE 分发；python 项目再加 python3 + uv）
-- `package.json` —— 最小 runner manifest（`afk` + `prd:to-issues` 脚本、`tsx`、`@ai-hero/sandcastle`）；已存在则合并，否则新建并生成 `package-lock.json`
+- `package.json` —— 最小 runner manifest（`afk` + `ralph` 脚本、`tsx`、`@ai-hero/sandcastle`）；已存在则合并，否则新建并生成 `package-lock.json`
 - `.afk-bootstrap.json` —— 记录 SemVer 模板版本、consensus 版本兼容窗口、语言和 GitHub 仓库名
-- 渲染项目镜像名和 `to-prd-project` skill 里的仓库名
+- `AGENTS.md` / 已有 `AGENTS.override.md` / `CLAUDE.md` —— 追加短 managed block，不覆盖项目内容
 
 ---
 

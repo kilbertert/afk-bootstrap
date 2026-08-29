@@ -17,6 +17,9 @@ boundary.
 | AFK-B04 | GitHub Actions syntax job | Python 3 and PyYAML available | Workflow files from this checkout | Run `python3 test/workflows.py`, then inspect CI commands | Validator rejects duplicate keys, incomplete steps, unsafe fork execution, and force-push commands; CI invokes both smoke cases | None |
 | AFK-B05 | Linux host, temporary Git repo | Generated metadata and checker | Compatible and incompatible versions; valid and non-exceptionable exceptions | Run the checker through both smoke cases | SemVer mismatch, default-branch use, malformed/expired exceptions, and non-exceptionable exceptions fail closed; valid exception passes | Test trap removes temporary repo |
 | AFK-B06 | Docker build plus host workflow | Docker and migrated consumer checkouts | Host delivery tokens and read-only `AFK_AGENT_READ_TOKEN` | Build all four consumer images and inspect profile/workflow env | Images build; only the explicit read token can become container `GH_TOKEN`, while host tokens remain host-side | Local images retained for reuse |
+| AFK-B07 | Linux host, temporary Git repo | Node and npm available | Generated Claude Code/Codex entries, pre-existing instruction files, and planner output | Run both smoke cases; inspect generated entries and planner selection check | Both harnesses stop after `GRILLING_COMPLETE` until an explicit next-phase invocation, existing instruction files remain intact, and planner output drops issues without an eligible leaf shape | Test trap removes temporary repo |
+| AFK-B08 | Linux host, generated Node scaffold | Node, npm, TypeScript available | Review axis prompt, orchestration, and provider profile | Compile generated `.sandcastle/**/*.ts` with TypeScript bundler resolution and inspect review workflow | Standards and Spec passes are parallel, provider-neutral, and feed a separate fixer; no container-installed project-local review skill is required | Temporary scaffold is disposable |
+| AFK-B09 | Linux host, generated Node/Python scaffolds | Node, Python, PyYAML, actionlint, ShellCheck available | Deleted splitter payload and native planning docs | Run smoke, workflow validator, actionlint, and repository scans | No splitter workflow/script/skill is generated; official `/to-spec` and `/to-tickets` remain the only interactive planning entry | Test traps remove temporary repos |
 
 ## Traceability
 
@@ -28,6 +31,9 @@ boundary.
 | Drift is detected in CI | Continuous integration validates both language adapters | AFK-B04 |
 | Workflow payload is structurally valid and policy-safe | Continuous integration validates both language adapters | AFK-B04 |
 | Portable policy and token boundaries | An incompatible AFK template is blocked; a container cannot deliver directly to the default branch | AFK-B05, AFK-B06 |
+| Planning phase cannot silently enter implementation | Generated agent entries preserve the grilling phase boundary | AFK-B07 |
+| Official skills are the only planning entry | Official planning skills remain the only interactive planning entry | AFK-B08, AFK-B09 |
+| Provider-neutral two-axis review | Review is provider-neutral and preserves two axes | AFK-B08 |
 
 ## Risk Checks
 
@@ -66,6 +72,15 @@ Status: passed on `2026-08-28T23:25:32+0800`.
 - Supplemental strict TypeScript compilation passed for every generated
   `.sandcastle/**/*.ts` file in a temporary Node scaffold.
 - `bash -n bootstrap-afk.sh test/smoke.sh` and `git diff --check` passed.
+- AFK-B07: passed on `2026-08-29T20:12:04+08:00`, build identity
+  `fix/grill-phase-gate` at `a539c11`; both smoke cases verified the Claude
+  Code and Codex phase gates, preservation of existing Claude instructions,
+  and the host-side `ready-for-agent` planner filter.
+- AFK-B08/B09: passed on `2026-08-29`, build identity `fix/grill-phase-gate`
+  after the native-planning and harness-neutral review changes. Node/Python
+  smoke, TypeScript bundler compilation, actionlint, ShellCheck, workflow
+  validation, and generated-payload scans passed; no automatic splitter or
+  project-local planning/review skill is emitted.
 - Credential-pattern and direct-default-branch/force-push scans returned no
   matches. New files are mode 640 and directories are mode 750.
 - Source accounting: 37 of 49 scaffold files remain byte-identical to the
@@ -75,6 +90,9 @@ Status: passed on `2026-08-28T23:25:32+0800`.
 - OpenCodeReview delegation coverage: 61 total files, 33 reviewable and 28
   excluded by extension; every file was reviewed or explicitly accounted for
   through byte equivalence and manual diff review (100% coverage).
+- Cross-harness gate review: 7 changed files, 2 selected by OpenCodeReview and
+  5 excluded by extension then manually reviewed (100% accounted for, no
+  findings).
 - `dev-worktree audit` passed for all 3 repository worktrees.
 
 Additional authorized delivery verification:

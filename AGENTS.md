@@ -1,6 +1,6 @@
 # AGENTS.md — afk-bootstrap
 
-Scaffold the AFK development workflow (idea → PRD → sub-issues → AFK/Sandcastle
+Scaffold the AFK development workflow (idea → grill → spec → native tickets → AFK/Sandcastle
 → draft PR → QA feedback) into a target project. This is a *tool repo*, not a
 runtime: `bootstrap-afk.sh` writes files into another repo and never commits.
 
@@ -31,8 +31,8 @@ the tool prints are your to-do list, not the user's.
 
 - `--language` drives the 4 generated files: `implement.md`,
   `implement-prd/prompt.md`, `Dockerfile`, `package.json`.
-- `--repo` is written into `.claude/skills/to-prd-project/SKILL.md`
-  (repo slug replace); derive from `git remote get-url origin` if omitted.
+- `--repo` is recorded in generated metadata; derive from `git remote get-url
+  origin` if omitted.
 - `--no-build` skips `docker build` (use while reviewing the diff).
 
 ## Mechanics
@@ -41,16 +41,18 @@ the tool prints are your to-do list, not the user's.
 2. Copies the versioned **portable** payload from this repository's
    `scaffold/` directory:
    - `.sandcastle/`: `main.ts`, `profile.ts`, `run-with-retry.ts`,
-     `retry-feedback.ts`, `to-issues-prd/`, `implement-prd/`, `write-prd-pr/`,
+     `retry-feedback.ts`, `implement-prd/`, `write-prd-pr/`,
      `.env.example`, `.gitignore`
-   - `.claude/skills/`: `to-prd-project`, `to-issues-project`
-   - `.github/workflows/`: `agent-to-issues-prd.yml`, `agent-implement-prd.yml`
-3. Generates per-language files from `templates/` and renders the target image
-   and GitHub repository placeholders.
+   - `.github/workflows/`: `agent-implement-prd.yml`, `agent-implement.yml`,
+     review and branch workflows
+   - `docs/agents/`: official tracker, triage-label, and domain pointers
+3. Generates files from `templates/`, appending a managed phase gate to
+   `AGENTS.md` (or an existing `AGENTS.override.md`) and `CLAUDE.md` without
+   masking project instructions.
 4. Writes `.afk-bootstrap.json` with the template version, language, and
    repository.
 5. Appends `node_modules/` to the target `.gitignore` if missing.
-6. Merges `afk` + `prd:to-issues` scripts and `tsx` + `@ai-hero/sandcastle`
+6. Merges `afk` + `ralph` scripts and `tsx` + `@ai-hero/sandcastle`
    deps into the target `package.json`; creates a minimal one + `npm install
    --package-lock-only` when the target has no manifest.
 7. Builds `sandcastle:<dir-slug>` from the generated Dockerfile (unless
@@ -64,7 +66,6 @@ It does **not** commit, push, or touch GitHub.
 ```
 ls <target>/.sandcastle/{main.ts,profile.ts,implement.md,Dockerfile}
 grep '<language check cmd>' <target>/.sandcastle/implement.md
-grep '<repo slug>'          <target>/.claude/skills/to-prd-project/SKILL.md
 grep '"afk"'                <target>/package.json
 cat                         <target>/.afk-bootstrap.json
 docker images | grep sandcastle:<slug>   (unless --no-build)
@@ -153,7 +154,8 @@ isolation.** Neither path pushes the default branch directly.
 bootstrap-afk.sh          the tool
 scaffold/                 portable runners, skills, prompts, and workflows
 templates/                per-language generated files (node | python)
-  - AGENTS.override.md    Codex entry doc (auto-copied to project root)
+  - AFK-MANAGED-BLOCK.md  managed phase gate appended to project instructions
+  - CLAUDE.md             Claude Code planning gate (created or appended)
   - codex-config.toml.snippet  notes + the `codebase-memory-mcp install -y`
                             command (the server has a built-in installer
                             that auto-detects Codex CLI; the snippet just

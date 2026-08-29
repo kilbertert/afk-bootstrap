@@ -15,6 +15,14 @@ REPO="kilbertert/fake-$LANGUAGE-project"
 mkdir "$TARGET"
 git -C "$TARGET" init -q -b main
 git -C "$TARGET" remote add origin "https://github.com/$REPO.git"
+if [ "$LANGUAGE" = "node" ]; then
+  printf '# Existing Claude instructions\n\nKeep this project rule.\n' > "$TARGET/CLAUDE.md"
+  printf '# Existing Codex instructions\n\nKeep this Codex rule.\n' > "$TARGET/AGENTS.md"
+  CODEX_INSTRUCTIONS="$TARGET/AGENTS.md"
+else
+  printf '# Existing Codex override\n\nKeep this override rule.\n' > "$TARGET/AGENTS.override.md"
+  CODEX_INSTRUCTIONS="$TARGET/AGENTS.override.md"
+fi
 
 INVALID_TARGET="$TMP/invalid-$LANGUAGE-project"
 mkdir "$INVALID_TARGET"
@@ -31,29 +39,39 @@ for f in \
   .sandcastle/main.ts .sandcastle/profile.ts .sandcastle/planner.ts .sandcastle/run-with-extraction.ts \
   .sandcastle/policy-check.mjs .sandcastle/consensus-contract.json \
   .sandcastle/implement.md .sandcastle/Dockerfile .sandcastle/.env.example .sandcastle/.gitignore \
-  .sandcastle/CODING_STANDARDS.md .sandcastle/skills/code-review/SKILL.md CONTEXT.md AGENTS.override.md docs/afk-workflow.md \
-  .sandcastle/implement-prd/prompt.md .sandcastle/to-issues-prd .sandcastle/write-prd-pr \
+  .sandcastle/CODING_STANDARDS.md CONTEXT.md CLAUDE.md docs/afk-workflow.md \
+  docs/agents/issue-tracker.md docs/agents/triage-labels.md docs/agents/domain.md \
+  .sandcastle/implement-prd/prompt.md .sandcastle/write-prd-pr \
   .sandcastle/implement .sandcastle/write-pr .sandcastle/review .sandcastle/implement-pr \
   .sandcastle/update-branch .sandcastle/architecture-review \
   .sandcastle/plan-prompt.md .sandcastle/implement-prompt.md .sandcastle/review-prompt.md .sandcastle/merge-prompt.md \
-  .claude/skills/to-prd-project/SKILL.md .claude/skills/to-issues-project \
-  .github/workflows/agent-implement-prd.yml .github/workflows/agent-to-issues-prd.yml \
+  .github/workflows/agent-implement-prd.yml \
   .github/workflows/agent-implement.yml .github/workflows/agent-review.yml \
   .github/workflows/agent-update-branch.yml .github/workflows/architecture-review.yml \
   .github/workflows/agent-implement-pr.yml .github/workflows/agent-promote-queued.yml \
   .afk-bootstrap.json package.json package-lock.json; do
   [ -e "$TARGET/$f" ] || { echo "MISSING: $f" >&2; exit 1; }
 done
+[ -e "$CODEX_INSTRUCTIONS" ] || { echo "Codex instructions missing" >&2; exit 1; }
 
-grep -q "$REPO" "$TARGET/.claude/skills/to-prd-project/SKILL.md" || { echo "repo slug not rendered" >&2; exit 1; }
 grep -q '"afk"' "$TARGET/package.json" || { echo "afk script missing" >&2; exit 1; }
 grep -q '"ralph"' "$TARGET/package.json" || { echo "ralph script missing" >&2; exit 1; }
+if grep -q 'prd:to-issues' "$TARGET/package.json"; then echo "automatic splitter script remains" >&2; exit 1; fi
 grep -q 'esbuild: true' "$TARGET/pnpm-workspace.yaml" || { echo "pnpm esbuild approval missing" >&2; exit 1; }
 grep -q "sandcastle:fake-$LANGUAGE-project" "$TARGET/.sandcastle/profile.ts" || { echo "profile image name not rendered" >&2; exit 1; }
 grep -q 'agentrouter' "$TARGET/.sandcastle/profile.ts" || { echo "agentrouter profile missing" >&2; exit 1; }
 grep -q 'agentrouter' "$TARGET/.sandcastle/main.ts" || { echo "agentrouter CLI option missing" >&2; exit 1; }
 grep -q 'claude-ark|agentrouter|psydo' "$TARGET/.sandcastle/Dockerfile" || { echo "agentrouter Docker dispatch missing" >&2; exit 1; }
 grep -q 'agentrouter' "$TARGET/docs/afk-workflow.md" || { echo "agentrouter workflow documentation missing" >&2; exit 1; }
+grep -q 'GRILLING_COMPLETE' "$CODEX_INSTRUCTIONS" || { echo "Codex planning phase gate missing" >&2; exit 1; }
+grep -q 'explicitly invoke' "$CODEX_INSTRUCTIONS" || { echo "Codex explicit phase invocation gate missing" >&2; exit 1; }
+grep -q 'GRILLING_COMPLETE' "$TARGET/CLAUDE.md" || { echo "Claude Code planning phase gate missing" >&2; exit 1; }
+grep -q 'explicitly invoke' "$TARGET/CLAUDE.md" || { echo "Claude Code explicit phase invocation gate missing" >&2; exit 1; }
+if [ "$LANGUAGE" = "node" ]; then
+  grep -q 'Keep this project rule.' "$TARGET/CLAUDE.md" || { echo "existing Claude instructions were overwritten" >&2; exit 1; }
+  grep -q 'Keep this Codex rule.' "$TARGET/AGENTS.md" || { echo "existing Codex instructions were overwritten" >&2; exit 1; }
+  [ ! -e "$TARGET/AGENTS.override.md" ] || { echo "new Codex override was generated" >&2; exit 1; }
+fi
 grep -q 'AFK_AGENT_GH_TOKEN' "$TARGET/.sandcastle/profile.ts" || { echo "agent token boundary missing" >&2; exit 1; }
 if grep -q 'process.env.GH_TOKEN' "$TARGET/.sandcastle/profile.ts"; then
   echo "host GH_TOKEN is still forwarded by profile" >&2
@@ -61,7 +79,7 @@ if grep -q 'process.env.GH_TOKEN' "$TARGET/.sandcastle/profile.ts"; then
 fi
 node -e '
   const metadata = require(process.argv[1]);
-  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.0.0" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
+  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.1.0" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
 ' "$TARGET/.afk-bootstrap.json" "$LANGUAGE" "$REPO" || { echo "template metadata invalid" >&2; exit 1; }
 
 AFK_ROOT="$TARGET" AFK_DEFAULT_BRANCH=main node "$TARGET/.sandcastle/policy-check.mjs" version
@@ -114,9 +132,12 @@ else
     cd "$TARGET"
     npm install --silent
     HOME="$PROFILE_HOME" npm exec -- tsx -e '
-      Promise.all([import("./.sandcastle/profile.ts"), import("./.sandcastle/planner.ts")]).then(([{ claudeProfile }, { extractClaimedIssues, parsePlanOutput }]) => {
+      Promise.all([import("./.sandcastle/profile.ts"), import("./.sandcastle/planner.ts")]).then(([{ claudeProfile }, { extractClaimedIssues, parsePlanOutput, selectReadyIssues }]) => {
         if (parsePlanOutput("<plan>{\"issues\":[]}</plan>").length !== 0) process.exit(1);
         if (!extractClaimedIssues(["Closes #12\nFixes #34"]).has(34)) process.exit(1);
+        const planned = parsePlanOutput("<plan>{\"issues\":[{\"number\":12,\"title\":\"ready\",\"branch\":\"agent/12-ready\"},{\"number\":34,\"title\":\"not ready\",\"branch\":\"agent/34-not-ready\"}]}</plan>");
+        if (selectReadyIssues(planned, new Set([12]), new Set(), new Set([12])).length !== 1) process.exit(1);
+        if (selectReadyIssues(planned, new Set([12, 34]), new Set(), new Set([12])).length !== 1) process.exit(1);
         try { claudeProfile("invalid"); }
         catch (error) {
           if (String(error).includes("Unsupported profile")) {

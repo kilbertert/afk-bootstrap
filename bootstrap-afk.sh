@@ -10,7 +10,7 @@
 #
 #   <target-repo>  path to the project (a git repo on its default branch).
 #   --language     project toolchain: node | python  (default: node).
-#   --repo         GitHub slug used to fix the to-prd-project skill
+#   --repo         GitHub slug used by the generated issue-tracker docs
 #                  (default: derived from `git remote get-url origin`).
 #   --no-build     skip building the sandcastle: docker image.
 #
@@ -71,9 +71,35 @@ cp "$S/templates/prompt.$LANGUAGE.md"         "$TARGET/.sandcastle/implement-prd
 cp "$S/templates/Dockerfile.$LANGUAGE"        "$TARGET/.sandcastle/Dockerfile"
 cp "$S/templates/CODING_STANDARDS.md"         "$TARGET/.sandcastle/CODING_STANDARDS.md"
 cp "$S/templates/CONTEXT.md"                  "$TARGET/CONTEXT.md"
-cp "$S/templates/AGENTS.override.md"          "$TARGET/AGENTS.override.md"
 mkdir -p "$TARGET/docs"
 cp "$S/templates/afk-workflow.md"             "$TARGET/docs/afk-workflow.md"
+
+# ---- append the managed instruction block without masking project rules ----
+AFK_MANAGED_BLOCK="$S/templates/AFK-MANAGED-BLOCK.md"
+append_managed_block() {
+  local path="$1"
+  if [ -e "$path" ]; then
+    grep -q '<!-- afk-bootstrap:managed:start -->' "$path" && return 0
+    printf '\n%s\n' "$(cat "$AFK_MANAGED_BLOCK")" >> "$path"
+  else
+    cp "$AFK_MANAGED_BLOCK" "$path"
+  fi
+}
+
+# Codex loads AGENTS.override.md in preference to AGENTS.md. If a project
+# already has one, update it as well so the gate is present in the file Codex
+# will actually read; never create a new override file.
+if [ -e "$TARGET/AGENTS.md" ]; then
+  append_managed_block "$TARGET/AGENTS.md"
+elif [ -e "$TARGET/AGENTS.override.md" ]; then
+  append_managed_block "$TARGET/AGENTS.override.md"
+else
+  append_managed_block "$TARGET/AGENTS.md"
+fi
+if [ -e "$TARGET/AGENTS.md" ] && [ -e "$TARGET/AGENTS.override.md" ]; then
+  append_managed_block "$TARGET/AGENTS.override.md"
+fi
+append_managed_block "$TARGET/CLAUDE.md"
 
 # ---- python: swap `npm run check` in the copied planner/action prompts -----
 # The bundled prompts are node (`npm run check`); a python project's in-container
@@ -97,8 +123,7 @@ if [ "$LANGUAGE" = "python" ]; then
   ' "$TARGET/.sandcastle"
 fi
 
-# ---- render project identity + record scaffold provenance -----------------
-sed -i "s#__AFK_GITHUB_REPOSITORY__#$REPO#g" "$TARGET/.claude/skills/to-prd-project/SKILL.md"
+# ---- record scaffold provenance -------------------------------------------
 node -e '
   const fs = require("fs");
   const [path, version, language, repository, contractPath] = process.argv.slice(1);
@@ -122,7 +147,9 @@ fi
 if [ -f "$TARGET/package.json" ]; then
   node -e '
     const fs = require("fs"); const p = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
-    p.scripts = { ...(p.scripts || {}), "afk": "tsx .sandcastle/main.ts", "ralph": "tsx .sandcastle/planner.ts", "prd:to-issues": "tsx .sandcastle/to-issues-prd/to-issues-prd.ts", "afk:policy": "node .sandcastle/policy-check.mjs all" };
+    const scripts = { ...(p.scripts || {}) };
+    delete scripts["prd:to-issues"];
+    p.scripts = { ...scripts, "afk": "tsx .sandcastle/main.ts", "ralph": "tsx .sandcastle/planner.ts", "afk:policy": "node .sandcastle/policy-check.mjs all" };
     p.dependencies = { ...(p.dependencies || {}), "tsx": "^4.20.0", "zod": "^4.4.3" };
     p.devDependencies = { ...(p.devDependencies || {}), "@ai-hero/sandcastle": "^0.12.0", "@types/node": "^24.0.0" };
     fs.writeFileSync(process.argv[2], JSON.stringify(p, null, 2) + "\n");
@@ -172,8 +199,7 @@ Next steps (host runner owns delivery — this script commits nothing):
      gh variable set AFK_PROFILE --repo $REPO --body claude-ark
    (or agentrouter / psydo / aliyun-deepseek; profiles are server-global, no new credentials)
 3. Create the AFK labels once:
-     gh label create agent:to-issues  --repo $REPO --color ffffff --force
-     gh label create agent:implement  --repo $REPO --color 000000 --force
+  gh label create agent:implement  --repo $REPO --color 000000 --force
      gh label create agent:in-progress --repo $REPO --color 0e8a16 --force
      gh label create agent:blocked     --repo $REPO --color d93f0b --force
 4. For Actions to run you need a self-hosted runner registered for $REPO
@@ -183,8 +209,8 @@ Next steps (host runner owns delivery — this script commits nothing):
      cd $TARGET
      AFK_PROFILE=claude-ark pnpm afk -- <issue-number>     # single issue
      AFK_PROFILE=claude-ark pnpm ralph                     # planner loop
-5. Create the PRD parent issue (via /to-prd-project), label it agent:to-issues
-   to split sub-issues, then agent:implement to start the chain.
+5. Use the installed official skills in order: /to-spec, then /to-tickets.
+   Label the approved PRD agent:implement to run the retained PRD executor.
    The label-driven Actions (implement/review/update-branch/promote-queued/
-   architecture-review) also fire off the same labels.
+   architecture-review) use the native issue shape and labels.
 EOF

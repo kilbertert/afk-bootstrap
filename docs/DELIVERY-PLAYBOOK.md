@@ -32,8 +32,8 @@ re-scaffold.
 ./bootstrap-afk.sh ~/Projects/<name> --language node|python --repo <owner>/<repo>
 ```
 
-Creates `.sandcastle/`, skills, Actions, `CONTEXT.md`, `CODING_STANDARDS.md`,
-`docs/afk-workflow.md`, `.afk-bootstrap.json`, `package.json`(+lock),
+Creates `.sandcastle/`, Actions, `CONTEXT.md`, `CODING_STANDARDS.md`,
+`docs/afk-workflow.md`, `docs/agents/`, `.afk-bootstrap.json`, `package.json`(+lock),
 `pnpm-workspace.yaml`. Verify:
 `planner.ts`, `implement-prompt.md`, `ralph` script, python prompts use uv, esbuild
 approved.
@@ -58,7 +58,7 @@ approved.
 - Build the image: `docker build --build-arg AGENT_UID=$(id -u) --build-arg AGENT_GID=$(id -g) -t sandcastle:<slug> .sandcastle`
 - Config (all via API/gh — do it yourself):
   - `AFK_PROFILE` repo variable (`claude-ark` / `agentrouter` / `psydo` / `aliyun-deepseek`)
-  - 7 `agent:*` labels: `to-issues implement review update-branch in-progress blocked queued`
+  - `agent:*` labels: `implement review update-branch in-progress blocked queued`
   - `AGENT_PAT` repo secret (host-side label chaining only)
   - `AFK_AGENT_READ_TOKEN` repo secret (read-only/minimum-scope token for Docker agents)
   - workflow permissions: `default_workflow_permissions=write` +
@@ -73,7 +73,9 @@ approved.
 
 Create a small, safe, `ready-for-agent` issue → label `agent:implement` → the
 self-hosted runner should implement, push a branch, write PR metadata, open a
-draft PR, and request `agent:review`. Watch the run; verify a PR appears. Then
+draft PR, and request `agent:review`. For a PRD, first use the official
+`/to-spec` and `/to-tickets` skills; the retained PRD workflow executes only
+the resulting native sub-issues. Watch the run; verify a PR appears. Then
 close the test issue/PR and delete the branch.
 
 ## Gotchas (all hit live — fix before the user sees them)

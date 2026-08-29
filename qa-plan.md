@@ -68,10 +68,10 @@ Status: passed on `2026-08-28T23:25:32+0800`.
 - Supplemental strict TypeScript compilation passed for every generated
   `.sandcastle/**/*.ts` file in a temporary Node scaffold.
 - `bash -n bootstrap-afk.sh test/smoke.sh` and `git diff --check` passed.
-- AFK-B07: passed on `2026-08-29T18:18:09+08:00`, build identity
-  `fix/grill-phase-gate` at `6ae8ddd`; the generated phase gate and
-  host-side `ready-for-agent` planner filter were verified by
-  `test/smoke.sh node`.
+- AFK-B07: passed on `2026-08-29T20:12:04+08:00`, build identity
+  `fix/grill-phase-gate` at `a539c11`; both smoke cases verified the Claude
+  Code and Codex phase gates, preservation of existing Claude instructions,
+  and the host-side `ready-for-agent` planner filter.
 - Credential-pattern and direct-default-branch/force-push scans returned no
   matches. New files are mode 640 and directories are mode 750.
 - Source accounting: 37 of 49 scaffold files remain byte-identical to the
@@ -81,6 +81,9 @@ Status: passed on `2026-08-28T23:25:32+0800`.
 - OpenCodeReview delegation coverage: 61 total files, 33 reviewable and 28
   excluded by extension; every file was reviewed or explicitly accounted for
   through byte equivalence and manual diff review (100% coverage).
+- Cross-harness gate review: 7 changed files, 2 selected by OpenCodeReview and
+  5 excluded by extension then manually reviewed (100% accounted for, no
+  findings).
 - `dev-worktree audit` passed for all 3 repository worktrees.
 
 Additional authorized delivery verification:

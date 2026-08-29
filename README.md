@@ -130,7 +130,7 @@ AFK_MERGE_TIMEOUT=3600   # merger 一步
 | pnpm 11 阻止 esbuild 构建脚本 | `pnpm afk` 会先自动跑 `pnpm install`，pnpm 11（`strictDepBuilds`）默认禁止未审核的 build script → `ERR_PNPM_IGNORED_BUILDS: esbuild`，agent 还没启动就退出。工具已生成 `pnpm-workspace.yaml`（`allowBuilds: esbuild: true`）根治，**别手改回 false** |
 | 容器必须匹配项目工具链 | 镜像里缺项目依赖（如 Playwright、python/uv），agent 在容器内跑不了验证 → 误报 `<promise>BLOCKED</promise>`。`Dockerfile.node` 里有 playwright 的注释开关，需要时打开 |
 | self-hosted runner 是仓库级的 | 个人账号无法跨仓库共享 runner（需 Organization）。每个要用 Actions 的仓库要么注册自己的 runner，要么本地跑 `pnpm afk` |
-| 链式触发需要 `AGENT_PAT` secret | 它只留在宿主 runner 用于标签触发；容器使用单独的 `AFK_AGENT_READ_TOKEN`（只读/最小权限） |
+| Actions 创建 PR/链式触发需要 `AGENT_PAT` secret | 它只留在宿主 runner 用于 PR 创建和标签触发；容器使用单独的 `AFK_AGENT_READ_TOKEN`（只读/最小权限） |
 | 首次要 `npm install` | 装配只生成 lockfile；本地跑 `pnpm afk` 前要 `npm install` |
 | issue 号别填错 | `-- <号码>` 必须是一个 **open 的 issue**，不能是 PR 号（PR 和 issue 共用同一数字空间） |
 | 本仓库提交受 git guard 约束 | 别直接在 `main` 提交；用任务 worktree + PR + CI |

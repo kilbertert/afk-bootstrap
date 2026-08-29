@@ -68,6 +68,10 @@ Status: passed on `2026-08-28T23:25:32+0800`.
 - Supplemental strict TypeScript compilation passed for every generated
   `.sandcastle/**/*.ts` file in a temporary Node scaffold.
 - `bash -n bootstrap-afk.sh test/smoke.sh` and `git diff --check` passed.
+- AFK-B07: passed on `2026-08-29T18:18:09+08:00`, build identity
+  `fix/grill-phase-gate` at `6ae8ddd`; the generated phase gate and
+  host-side `ready-for-agent` planner filter were verified by
+  `test/smoke.sh node`.
 - Credential-pattern and direct-default-branch/force-push scans returned no
   matches. New files are mode 640 and directories are mode 750.
 - Source accounting: 37 of 49 scaffold files remain byte-identical to the

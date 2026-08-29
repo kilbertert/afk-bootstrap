@@ -21,7 +21,7 @@ jobs:
         with:
           node-version: 24
       - name: Bash syntax check
-        run: bash -n bootstrap-afk.sh test/smoke.sh
+        run: bash -n bootstrap-afk.sh test/smoke.sh test/trusted-pr-delivery.sh
       - name: Workflow structure check
         run: |
           python3 -m pip install --disable-pip-version-check --quiet --user PyYAML==6.0.2
@@ -30,10 +30,11 @@ jobs:
         run: |
           test/smoke.sh node
           test/smoke.sh python
+          bash test/trusted-pr-delivery.sh
       - name: Shellcheck (when available)
         run: |
           if command -v shellcheck >/dev/null 2>&1; then
-            shellcheck bootstrap-afk.sh test/smoke.sh
+            shellcheck bootstrap-afk.sh test/smoke.sh test/trusted-pr-delivery.sh scaffold/.sandcastle/trusted-pr-delivery.sh
           else
             echo "shellcheck not preinstalled; syntax check only"
           fi

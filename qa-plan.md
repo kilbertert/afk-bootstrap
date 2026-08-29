@@ -20,6 +20,9 @@ boundary.
 | AFK-B07 | Linux host, temporary Git repo | Node and npm available | Generated Claude Code/Codex entries, pre-existing instruction files, and planner output | Run both smoke cases; inspect generated entries and planner selection check | Both harnesses stop after `GRILLING_COMPLETE` until an explicit next-phase invocation, existing instruction files remain intact, and planner output drops issues without an eligible leaf shape | Test trap removes temporary repo |
 | AFK-B08 | Linux host, generated Node scaffold | Node, npm, TypeScript available | Review axis prompt, orchestration, and provider profile | Compile generated `.sandcastle/**/*.ts` with TypeScript bundler resolution and inspect review workflow | Standards and Spec passes are parallel, provider-neutral, and feed a separate fixer; no container-installed project-local review skill is required | Temporary scaffold is disposable |
 | AFK-B09 | Linux host, generated Node/Python scaffolds | Node, Python, PyYAML, actionlint, ShellCheck available | Deleted splitter payload and native planning docs | Run smoke, workflow validator, actionlint, and repository scans | No splitter workflow/script/skill is generated; official `/to-spec` and `/to-tickets` remain the only interactive planning entry | Test traps remove temporary repos |
+| AFK-B10 | Linux host, temporary Git repositories | Git available | Stale local main, advanced origin main, and a PR branch with a merge result | Run `test/trusted-pr-delivery.sh` | Candidate preparation resets local main to the trusted base; bundle delivery preserves commits and rejects a raced remote branch | Test trap removes temporary repositories |
+| AFK-B11 | GitHub Actions syntax job | Python 3 and PyYAML available | The three `pull_request_target` workflows and delivery-label workflows | Run `python3 test/workflows.py` | Mutation jobs require same-repository owner PRs, execute controller scripts, avoid runtime skill installation, keep write tokens out of candidate execution, and fail closed without AGENT_PAT | None |
+| AFK-B12 | Live self-hosted runner canary | Merged template deployment, online runner, configured read token and AGENT_PAT | One owner-authored canary PR | Run `agent:review`, retain the workflow URL, and inspect the resulting branch/review | The review uses current main, completes through trusted bundle delivery, posts its review, and leaves no blocked label | Close or merge the disposable canary PR and remove temporary labels/branches |
 
 ## Traceability
 
@@ -34,13 +37,18 @@ boundary.
 | Planning phase cannot silently enter implementation | Generated agent entries preserve the grilling phase boundary | AFK-B07 |
 | Official skills are the only planning entry | Official planning skills remain the only interactive planning entry | AFK-B08, AFK-B09 |
 | Provider-neutral two-axis review | Review is provider-neutral and preserves two axes | AFK-B08 |
+| Current default-branch review base | Persistent runner review uses the current default branch | AFK-B10, AFK-B12 |
+| Trusted pull-request control plane | Candidate code cannot receive host delivery credentials; untrusted pull requests cannot start mutation workflows | AFK-B10, AFK-B11, AFK-B12 |
+| Delivery credential failures are blocked | Missing delivery credentials stop the workflow | AFK-B11, AFK-B12 |
 
 ## Risk Checks
 
-- Complexity/coverage: not applicable; the change is shell orchestration with
-  observable smoke coverage at its public interface.
-- Mutation testing: not applicable; no authorization, money, persistence, or
-  core business-rule implementation changes.
+- Complexity/coverage: no compatible complexity tool applies to GitHub Actions
+  YAML and the small shell state machine; focused branch coverage is provided by
+  AFK-B10 and AFK-B11.
+- Mutation testing: no practical mutator is configured for workflow YAML or
+  shell delivery guards. AFK-B10 exercises stale-base, merge-preservation, and
+  race rejection; AFK-B12 verifies the credential boundary on the live runner.
 
 ## Execution Results
 
@@ -71,7 +79,8 @@ Status: passed on `2026-08-28T23:25:32+0800`.
   ShellCheck enabled.
 - Supplemental strict TypeScript compilation passed for every generated
   `.sandcastle/**/*.ts` file in a temporary Node scaffold.
-- `bash -n bootstrap-afk.sh test/smoke.sh` and `git diff --check` passed.
+- `bash -n bootstrap-afk.sh test/smoke.sh test/trusted-pr-delivery.sh` and
+  `git diff --check` passed.
 - AFK-B07: passed on `2026-08-29T20:12:04+08:00`, build identity
   `fix/grill-phase-gate` at `a539c11`; both smoke cases verified the Claude
   Code and Codex phase gates, preservation of existing Claude instructions,
@@ -94,6 +103,22 @@ Status: passed on `2026-08-28T23:25:32+0800`.
   5 excluded by extension then manually reviewed (100% accounted for, no
   findings).
 - `dev-worktree audit` passed for all 3 repository worktrees.
+
+AFK-B10: passed on `2026-08-30T03:31:15+08:00`, build identity
+`84e9537c661f676f68951eb3e7480472b91ff728` on Linux 5.15 x86_64, Node
+v24.15.0, Python 3.13.13, actionlint 1.7.12 and ShellCheck 0.11.0. Evidence:
+`python3 test/workflows.py`, actionlint, `bash -n`, ShellCheck and
+`git diff --check` all passed; negative smoke cases reject a missing owner gate
+and a GITHUB_TOKEN final push.
+
+AFK-B11: passed at the same build identity and environment. Evidence:
+`bash test/trusted-pr-delivery.sh` passed stale-main reset, merge-result bundle
+preservation, and remote-race rejection; both Node and Python smoke tests
+passed, including generated policy checks.
+
+AFK-B12 remains pending until the merged template is exercised by an
+owner-authored PR on each configured self-hosted runner. Retain the workflow URL,
+review payload, final labels, and cleanup evidence before marking it passed.
 
 Additional authorized delivery verification:
 

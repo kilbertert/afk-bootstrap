@@ -50,3 +50,31 @@ Feature: Self-contained AFK bootstrap baseline
       Then Sandcastle runs Standards and Spec review passes in parallel
       And a fixer receives both reports without merging their findings
       And the workflow emits validated review comments and thread replies
+      And no provider-specific review skill is installed at runtime
+
+  Rule: pull request automation has a trusted control plane
+
+    Scenario: Persistent runner review uses the current default branch
+      Given a persistent runner whose local main branch is stale
+      And origin main has advanced
+      When the review workflow prepares the candidate checkout
+      Then local main matches the trusted controller checkout
+      And the reviewed diff is computed against the current default branch
+
+    Scenario: Candidate code cannot receive host delivery credentials
+      Given an owner-authored pull request from the same repository
+      When a pull request mutation workflow runs
+      Then host dependencies and orchestration load from the default branch controller
+      And candidate commands run only in the Docker sandbox with the read token
+      And a clean delivery checkout imports and pushes the resulting commits
+
+    Scenario: Untrusted pull requests cannot start mutation workflows
+      Given a pull request from a fork or an author other than the repository owner
+      When an AFK mutation label is added
+      Then the pull request mutation job does not run
+
+    Scenario: Missing delivery credentials stop the workflow
+      Given AGENT_PAT is missing or cannot perform the requested delivery mutation
+      When a workflow must create a pull request or add a workflow-triggering label
+      Then the workflow fails and records an agent:blocked state
+      And it does not report a successful automated handoff

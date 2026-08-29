@@ -59,7 +59,7 @@ approved.
 - Config (all via API/gh — do it yourself):
   - `AFK_PROFILE` repo variable (`claude-ark` / `agentrouter` / `psydo` / `aliyun-deepseek`)
   - `agent:*` labels: `implement review update-branch in-progress blocked queued`
-  - `AGENT_PAT` repo secret (host-side label chaining only)
+  - `AGENT_PAT` repo secret (host-side PR creation and label chaining)
   - `AFK_AGENT_READ_TOKEN` repo secret (read-only/minimum-scope token for Docker agents)
   - workflow permissions: `default_workflow_permissions=write` +
     `can_approve_pull_request_reviews=true` (else Actions can't create PRs)

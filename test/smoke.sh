@@ -15,6 +15,11 @@ REPO="kilbertert/fake-$LANGUAGE-project"
 mkdir "$TARGET"
 git -C "$TARGET" init -q -b main
 git -C "$TARGET" remote add origin "https://github.com/$REPO.git"
+mkdir -p "$TARGET/docs/agents" "$TARGET/docs/adr"
+printf '# Existing glossary\n' > "$TARGET/CONTEXT.md"
+printf '# Existing workflow\nagentrouter\n' > "$TARGET/docs/afk-workflow.md"
+printf '# Existing domain docs\n' > "$TARGET/docs/agents/domain.md"
+printf '# Existing ADR\n' > "$TARGET/docs/adr/0001-existing.md"
 if [ "$LANGUAGE" = "node" ]; then
   printf '# Existing Claude instructions\n\nKeep this project rule.\n' > "$TARGET/CLAUDE.md"
   printf '# Existing Codex instructions\n\nKeep this Codex rule.\n' > "$TARGET/AGENTS.md"
@@ -63,6 +68,10 @@ grep -q 'agentrouter' "$TARGET/.sandcastle/profile.ts" || { echo "agentrouter pr
 grep -q 'agentrouter' "$TARGET/.sandcastle/main.ts" || { echo "agentrouter CLI option missing" >&2; exit 1; }
 grep -q 'claude-ark|agentrouter|psydo' "$TARGET/.sandcastle/Dockerfile" || { echo "agentrouter Docker dispatch missing" >&2; exit 1; }
 grep -q 'agentrouter' "$TARGET/docs/afk-workflow.md" || { echo "agentrouter workflow documentation missing" >&2; exit 1; }
+grep -q '# Existing glossary' "$TARGET/CONTEXT.md" || { echo "existing glossary was overwritten" >&2; exit 1; }
+grep -q '# Existing workflow' "$TARGET/docs/afk-workflow.md" || { echo "existing workflow was overwritten" >&2; exit 1; }
+grep -q '# Existing domain docs' "$TARGET/docs/agents/domain.md" || { echo "existing domain docs were overwritten" >&2; exit 1; }
+grep -q '# Existing ADR' "$TARGET/docs/adr/0001-existing.md" || { echo "existing ADR was overwritten" >&2; exit 1; }
 grep -q 'GRILLING_COMPLETE' "$CODEX_INSTRUCTIONS" || { echo "Codex planning phase gate missing" >&2; exit 1; }
 grep -q 'explicitly invoke' "$CODEX_INSTRUCTIONS" || { echo "Codex explicit phase invocation gate missing" >&2; exit 1; }
 grep -q 'GRILLING_COMPLETE' "$TARGET/CLAUDE.md" || { echo "Claude Code planning phase gate missing" >&2; exit 1; }

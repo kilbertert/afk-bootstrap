@@ -1,6 +1,6 @@
 # afk-bootstrap
 
-把「想法 → PRD → issue → AFK 实现 → 人工 QA → 后台修复」这条软件开发工作流，一键装配进任意项目。
+把「想法 → grill → PRD → issue → AFK 实现 → 人工 QA → 后台修复」这条软件开发工作流，一键装配进任意项目。
 
 ```
 想法 → grill → PRD(父 issue) → native sub-issues → AFK/Sandcastle Docker

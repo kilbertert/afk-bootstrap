@@ -22,7 +22,9 @@ idea
 
 1. **Grill** — `/grill-with-docs` (or `/grill-me` without repo context):
    pressure-test boundary/risk/acceptance; write confirmed terms into
-   `CONTEXT.md` and `docs/adr/`.
+   `CONTEXT.md` and `docs/adr/`. When the frontier is empty, report
+   `GRILLING_COMPLETE`, ask the user to confirm shared understanding, and stop.
+   Grill answers do not select the next phase.
 2. **Spec** — `/to-spec`: turn the idea into a PRD (a GitHub **parent issue**),
    concrete enough for a sub-issue agent to implement without re-deriving.
 3. **Tickets** — `/to-tickets`: break the PRD into flat, execution-ordered

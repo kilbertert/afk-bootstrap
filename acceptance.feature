@@ -26,3 +26,11 @@ Feature: Self-contained AFK bootstrap baseline
       Then the Node and Python smoke tests execute from afk-bootstrap alone
       And a missing or inconsistent scaffold file fails the check
       And bundled workflows reject duplicate keys, incomplete steps, unsafe fork execution, and force-push commands
+
+  Rule: planning and execution remain explicit phases
+
+    Scenario: Generated Codex entry preserves the grilling phase boundary
+      Given a clean temporary Git repository with a GitHub origin
+      When bootstrap-afk runs without building an image
+      Then the generated Codex entry requires explicit confirmation after grilling
+      And the generated planner can execute only issues marked ready-for-agent

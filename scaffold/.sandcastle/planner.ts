@@ -57,6 +57,23 @@ export function extractClaimedIssues(bodies: string[]): Set<number> {
   return numbers;
 }
 
+export function selectReadyIssues(
+  planned: { number: number; title: string; branch: string }[],
+  readyNumbers: Set<number>,
+  claimedNumbers: Set<number>,
+): { number: number; title: string; branch: string }[] {
+  return planned.filter((issue) => readyNumbers.has(issue.number) && !claimedNumbers.has(issue.number));
+}
+
+function readyIssueNumbers(): Set<number> {
+  const issues = JSON.parse(
+    execFileSync("gh", ["issue", "list", "--state", "open", "--label", "ready-for-agent", "--limit", "1000", "--json", "number"], {
+      encoding: "utf8",
+    }),
+  ) as { number: number }[];
+  return new Set(issues.map((issue) => issue.number));
+}
+
 // --- git helpers -----------------------------------------------------------
 
 function currentBranch(): string {
@@ -134,7 +151,7 @@ async function main(): Promise<void> {
       promptFile: ".sandcastle/plan-prompt.md",
     });
     const claimedIssues = openPrIssueNumbers();
-    const issues = parsePlanOutput(plan.stdout).filter((issue) => !claimedIssues.has(issue.number));
+    const issues = selectReadyIssues(parsePlanOutput(plan.stdout), readyIssueNumbers(), claimedIssues);
 
     if (issues.length === 0) {
       console.log("No issues to work on. Exiting.");

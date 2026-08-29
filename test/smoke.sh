@@ -54,6 +54,8 @@ grep -q 'agentrouter' "$TARGET/.sandcastle/profile.ts" || { echo "agentrouter pr
 grep -q 'agentrouter' "$TARGET/.sandcastle/main.ts" || { echo "agentrouter CLI option missing" >&2; exit 1; }
 grep -q 'claude-ark|agentrouter|psydo' "$TARGET/.sandcastle/Dockerfile" || { echo "agentrouter Docker dispatch missing" >&2; exit 1; }
 grep -q 'agentrouter' "$TARGET/docs/afk-workflow.md" || { echo "agentrouter workflow documentation missing" >&2; exit 1; }
+grep -q 'GRILLING_COMPLETE' "$TARGET/AGENTS.override.md" || { echo "planning phase gate missing" >&2; exit 1; }
+grep -q 'user to invoke `/to-spec`' "$TARGET/AGENTS.override.md" || { echo "explicit phase invocation gate missing" >&2; exit 1; }
 grep -q 'AFK_AGENT_GH_TOKEN' "$TARGET/.sandcastle/profile.ts" || { echo "agent token boundary missing" >&2; exit 1; }
 if grep -q 'process.env.GH_TOKEN' "$TARGET/.sandcastle/profile.ts"; then
   echo "host GH_TOKEN is still forwarded by profile" >&2
@@ -61,7 +63,7 @@ if grep -q 'process.env.GH_TOKEN' "$TARGET/.sandcastle/profile.ts"; then
 fi
 node -e '
   const metadata = require(process.argv[1]);
-  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.0.0" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
+  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.1.0" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
 ' "$TARGET/.afk-bootstrap.json" "$LANGUAGE" "$REPO" || { echo "template metadata invalid" >&2; exit 1; }
 
 AFK_ROOT="$TARGET" AFK_DEFAULT_BRANCH=main node "$TARGET/.sandcastle/policy-check.mjs" version
@@ -114,9 +116,11 @@ else
     cd "$TARGET"
     npm install --silent
     HOME="$PROFILE_HOME" npm exec -- tsx -e '
-      Promise.all([import("./.sandcastle/profile.ts"), import("./.sandcastle/planner.ts")]).then(([{ claudeProfile }, { extractClaimedIssues, parsePlanOutput }]) => {
+      Promise.all([import("./.sandcastle/profile.ts"), import("./.sandcastle/planner.ts")]).then(([{ claudeProfile }, { extractClaimedIssues, parsePlanOutput, selectReadyIssues }]) => {
         if (parsePlanOutput("<plan>{\"issues\":[]}</plan>").length !== 0) process.exit(1);
         if (!extractClaimedIssues(["Closes #12\nFixes #34"]).has(34)) process.exit(1);
+        const planned = parsePlanOutput("<plan>{\"issues\":[{\"number\":12,\"title\":\"ready\",\"branch\":\"agent/12-ready\"},{\"number\":34,\"title\":\"not ready\",\"branch\":\"agent/34-not-ready\"}]}</plan>");
+        if (selectReadyIssues(planned, new Set([12]), new Set()).length !== 1) process.exit(1);
         try { claudeProfile("invalid"); }
         catch (error) {
           if (String(error).includes("Unsupported profile")) {

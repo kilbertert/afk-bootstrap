@@ -17,6 +17,7 @@ boundary.
 | AFK-B04 | GitHub Actions syntax job | Python 3 and PyYAML available | Workflow files from this checkout | Run `python3 test/workflows.py`, then inspect CI commands | Validator rejects duplicate keys, incomplete steps, unsafe fork execution, and force-push commands; CI invokes both smoke cases | None |
 | AFK-B05 | Linux host, temporary Git repo | Generated metadata and checker | Compatible and incompatible versions; valid and non-exceptionable exceptions | Run the checker through both smoke cases | SemVer mismatch, default-branch use, malformed/expired exceptions, and non-exceptionable exceptions fail closed; valid exception passes | Test trap removes temporary repo |
 | AFK-B06 | Docker build plus host workflow | Docker and migrated consumer checkouts | Host delivery tokens and read-only `AFK_AGENT_READ_TOKEN` | Build all four consumer images and inspect profile/workflow env | Images build; only the explicit read token can become container `GH_TOKEN`, while host tokens remain host-side | Local images retained for reuse |
+| AFK-B07 | Linux host, temporary Git repo | Node and npm available | Generated Codex entry and planner output | Run `test/smoke.sh node`; inspect the generated entry and planner selection check | The generated entry stops after `GRILLING_COMPLETE` until an explicit next-phase invocation, and planner output drops issues without `ready-for-agent` | Test trap removes temporary repo |
 
 ## Traceability
 
@@ -28,6 +29,7 @@ boundary.
 | Drift is detected in CI | Continuous integration validates both language adapters | AFK-B04 |
 | Workflow payload is structurally valid and policy-safe | Continuous integration validates both language adapters | AFK-B04 |
 | Portable policy and token boundaries | An incompatible AFK template is blocked; a container cannot deliver directly to the default branch | AFK-B05, AFK-B06 |
+| Planning phase cannot silently enter implementation | Generated Codex entry preserves the grilling phase boundary | AFK-B07 |
 
 ## Risk Checks
 

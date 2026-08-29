@@ -19,6 +19,21 @@ that infrastructure, not reinvent it.
 4. `AGENTS.md` (if present) — agent-facing notes local to this repo.
 5. `CLAUDE.md` (if present) — same intent, Claude-oriented.
 
+## Planning phase gate
+
+Use this phase order for new work:
+
+1. `/grill-with-docs` settles terms and decisions. When its frontier is empty,
+   report `GRILLING_COMPLETE`, ask the user to confirm shared understanding,
+   and stop at the phase boundary.
+2. Treat grill answers as decisions, not as permission to choose the next
+   phase. Keep implementation work behind an explicit phase invocation.
+3. Wait for the user to invoke `/to-spec`, `/to-tickets`, `/implement`, or
+   `/implement-spec`; do not call these user-invoked skills automatically.
+4. For multi-session work, `/to-spec` and `/to-tickets` precede implementation.
+   Only an explicitly identified single-session task may use `/implement`
+   directly.
+
 ## Commands at a glance
 
 | Goal | Command |

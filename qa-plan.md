@@ -134,6 +134,13 @@ review evidence. An earlier invalid canary without a linked issue failed before
 the controller; PR #28 fixed that prompt path, and this rerun confirmed the
 linked-issue path end to end.
 
+A follow-up no-linked-issue canary also passed on `2026-08-30T06:47:48+08:00`
+(Auto-Test PR #159; workflow run
+[33279142516](https://github.com/kilbertert/Auto_Test/actions/runs/33279142516)).
+Both axes completed with no findings, the review was posted at head
+`6f46d41ea13bf1def7954e63df4d267b8359585c`, and policy/bundle checks passed
+without `agent:blocked`; the disposable PR and branch were then removed.
+
 Additional authorized delivery verification:
 
 - Consumer migrations merged and verified on their canonical `main` branches:

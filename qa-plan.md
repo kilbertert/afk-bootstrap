@@ -52,13 +52,13 @@ boundary.
 
 ## Execution Results
 
-Status: passed on `2026-08-30T06:25:00+08:00`.
+Status: passed on `2026-08-30T07:35:00+08:00`.
 
 - Current build identity: `afk-bootstrap` `origin/main` at
-  `5391c76d9b6b950dd41fea175c2153c188cb88de` (PR #28). The four consumer
+  `96501ff49d4d2bbcadad6c6232ab3fe20828969c` (PR #33). The four consumer
   repositories were updated through focused PRs and their required checks
   passed; the four local sandbox images were rebuilt from those canonical
-  checkouts.
+  checkouts after the runtime fixes.
 
 - Build identity: `afk-bootstrap` `origin/main` at
   `3ae3f3067479aebdf1d298e85efd24320086aef2` (PR #20). Repository CI runs
@@ -157,3 +157,9 @@ Additional authorized delivery verification:
   PR #78 (`ab22b507b75f3a3ab519823b183cb0c489c62e21`), genesis-evidence PR
   #124 (`e8a03c94f4f2a334d991409b3c03cf76dd9a5cd5`), and AI-Ops PR #62
   (`09a56979946c3fc6f3a4eba48338610b9589241e`).
+
+- Final ADR boundary syncs merged after the runtime fixes: Auto-Test PR #160
+  (`6cff19c2fd56b3349cea6ed84cca684ccf8e8999`), Health-Flow PR #88
+  (`61b26fbc0de6aff9a7668daf653c6effacf78cee`), genesis-evidence PR #135
+  (`5fed7dcb14b856e090e581d8840c6c7519ccb820`), and AI-Ops PR #69
+  (`46c12d893fbb99c0777c89acf2bd7bc96523ed30`).

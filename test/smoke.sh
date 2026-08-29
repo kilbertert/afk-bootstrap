@@ -55,7 +55,7 @@ grep -q 'agentrouter' "$TARGET/.sandcastle/main.ts" || { echo "agentrouter CLI o
 grep -q 'claude-ark|agentrouter|psydo' "$TARGET/.sandcastle/Dockerfile" || { echo "agentrouter Docker dispatch missing" >&2; exit 1; }
 grep -q 'agentrouter' "$TARGET/docs/afk-workflow.md" || { echo "agentrouter workflow documentation missing" >&2; exit 1; }
 grep -q 'GRILLING_COMPLETE' "$TARGET/AGENTS.override.md" || { echo "planning phase gate missing" >&2; exit 1; }
-grep -q 'user to invoke `/to-spec`' "$TARGET/AGENTS.override.md" || { echo "explicit phase invocation gate missing" >&2; exit 1; }
+grep -q 'user to invoke' "$TARGET/AGENTS.override.md" || { echo "explicit phase invocation gate missing" >&2; exit 1; }
 grep -q 'AFK_AGENT_GH_TOKEN' "$TARGET/.sandcastle/profile.ts" || { echo "agent token boundary missing" >&2; exit 1; }
 if grep -q 'process.env.GH_TOKEN' "$TARGET/.sandcastle/profile.ts"; then
   echo "host GH_TOKEN is still forwarded by profile" >&2

@@ -141,6 +141,15 @@ Both axes completed with no findings, the review was posted at head
 `6f46d41ea13bf1def7954e63df4d267b8359585c`, and policy/bundle checks passed
 without `agent:blocked`; the disposable PR and branch were then removed.
 
+The private-GitHub transport path was also exercised on `2026-08-30` against
+`kilbertert/genesis-evidence`: `trusted-pr-delivery.sh push` authenticated its
+`ls-remote` check with the documented `x-access-token` Basic header and advanced
+the disposable branch from `2f3ecb97f15687bb7235c822f70a46ced7ff8d85` to
+`86c2b9d2477bde03dc2e5bd7438e843ed758c845`. The canary used the host GitHub
+credential to verify the real private-repository protocol path; it does not
+claim a separate least-privilege audit of the write-only repository secret.
+The branch was deleted after verification.
+
 Additional authorized delivery verification:
 
 - Consumer migrations merged and verified on their canonical `main` branches:

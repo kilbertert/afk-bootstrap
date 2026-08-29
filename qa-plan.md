@@ -55,7 +55,7 @@ boundary.
 Status: passed on `2026-08-30T07:35:00+08:00`.
 
 - Current build identity: `afk-bootstrap` `origin/main` at
-  `96501ff49d4d2bbcadad6c6232ab3fe20828969c` (PR #33). The four consumer
+  `0cb4a03c364114e75552ce21dccddf7b4d8d7a0d` (PR #34). The four consumer
   repositories were updated through focused PRs and their required checks
   passed; the four local sandbox images were rebuilt from those canonical
   checkouts after the runtime fixes.

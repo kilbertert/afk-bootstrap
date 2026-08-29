@@ -52,7 +52,13 @@ boundary.
 
 ## Execution Results
 
-Status: blocked: deterministic checks passed, but required AFK-B12 live canary is not yet green.
+Status: passed on `2026-08-30T06:25:00+08:00`.
+
+- Current build identity: `afk-bootstrap` `origin/main` at
+  `5391c76d9b6b950dd41fea175c2153c188cb88de` (PR #28). The four consumer
+  repositories were updated through focused PRs and their required checks
+  passed; the four local sandbox images were rebuilt from those canonical
+  checkouts.
 
 - Build identity: `afk-bootstrap` `origin/main` at
   `3ae3f3067479aebdf1d298e85efd24320086aef2` (PR #20). Repository CI runs
@@ -116,14 +122,17 @@ AFK-B11: passed at the same build identity and environment. Evidence:
 preservation, successful push, and remote-race rejection; both Node and Python
 smoke tests passed, including generated policy checks.
 
-AFK-B12: blocked on `2026-08-29` during the authorized Auto-Test canary
-(PR #151, issue #152; workflow run `33272059907`). Checkout, candidate
-isolation, and controller/delivery guards passed. The configured external model
-providers (Aliyun, Claude Ark CodingPlan, and Psydo) were unavailable, so the
-run failed closed with `agent:blocked` and did not fabricate a review or push
-result. Re-run the canary after a provider is available; retain its workflow
-URL, review payload, final labels, and cleanup evidence before marking AFK-B12
-passed.
+AFK-B12: passed on `2026-08-30T06:13:07+08:00` during the authorized Auto-Test
+canary (PR #156, issue #157; workflow run
+[33277541353](https://github.com/kilbertert/Auto_Test/actions/runs/33277541353)).
+The owner-authored PR completed both parallel Standards and Spec passes, posted
+the `COMMENTED` review at head `34bc36681201f300febb42ff15a67f2381d7a464`,
+verified candidate policy, captured the trusted bundle (no candidate commits
+were needed), and finished without `agent:blocked`. The disposable PR and issue
+were closed and the canary branch was deleted after retaining the workflow and
+review evidence. An earlier invalid canary without a linked issue failed before
+the controller; PR #28 fixed that prompt path, and this rerun confirmed the
+linked-issue path end to end.
 
 Additional authorized delivery verification:
 

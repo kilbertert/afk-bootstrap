@@ -58,8 +58,10 @@ SLUG="$(basename "$TARGET" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_.-]
 
 mkdir -p "$TARGET"
 
-# ---- copy the versioned scaffold owned by this repository -----------------
-cp -R "$S/scaffold/." "$TARGET/"
+# ---- copy the versioned scaffold without clobbering project files ----------
+# Bootstrap adds missing files; an existing project document remains its own
+# source of truth and is updated deliberately in a later migration.
+cp -R --no-clobber "$S/scaffold/." "$TARGET/"
 
 # ---- point the copied profile.ts at THIS project's image -------------------
 # Render the AFK_IMAGE default with the image built below.
@@ -70,9 +72,13 @@ cp "$S/templates/implement.$LANGUAGE.md"      "$TARGET/.sandcastle/implement.md"
 cp "$S/templates/prompt.$LANGUAGE.md"         "$TARGET/.sandcastle/implement-prd/prompt.md"
 cp "$S/templates/Dockerfile.$LANGUAGE"        "$TARGET/.sandcastle/Dockerfile"
 cp "$S/templates/CODING_STANDARDS.md"         "$TARGET/.sandcastle/CODING_STANDARDS.md"
-cp "$S/templates/CONTEXT.md"                  "$TARGET/CONTEXT.md"
+if [ ! -e "$TARGET/CONTEXT.md" ]; then
+  cp "$S/templates/CONTEXT.md" "$TARGET/CONTEXT.md"
+fi
 mkdir -p "$TARGET/docs"
-cp "$S/templates/afk-workflow.md"             "$TARGET/docs/afk-workflow.md"
+if [ ! -e "$TARGET/docs/afk-workflow.md" ]; then
+  cp "$S/templates/afk-workflow.md" "$TARGET/docs/afk-workflow.md"
+fi
 
 # ---- append the managed instruction block without masking project rules ----
 AFK_MANAGED_BLOCK="$S/templates/AFK-MANAGED-BLOCK.md"

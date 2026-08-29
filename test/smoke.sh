@@ -122,6 +122,14 @@ fi
 mv "$TMP/agent-review.yml" "$REVIEW_WORKFLOW"
 
 cp "$REVIEW_WORKFLOW" "$TMP/agent-review.yml"
+sed -i 's/^\( *\)github.event.pull_request.user.login == github.repository_owner/\1# github.event.pull_request.user.login == github.repository_owner/' "$REVIEW_WORKFLOW"
+if AFK_ROOT="$TARGET" node "$TARGET/.sandcastle/policy-check.mjs" workflows >/dev/null 2>&1; then
+  echo "policy checker accepted a commented PR owner gate" >&2
+  exit 1
+fi
+mv "$TMP/agent-review.yml" "$REVIEW_WORKFLOW"
+
+cp "$REVIEW_WORKFLOW" "$TMP/agent-review.yml"
 sed -i 's/secrets.AGENT_PAT/secrets.GITHUB_TOKEN/' "$REVIEW_WORKFLOW"
 if AFK_ROOT="$TARGET" node "$TARGET/.sandcastle/policy-check.mjs" workflows >/dev/null 2>&1; then
   echo "policy checker accepted GITHUB_TOKEN for the final PR push" >&2

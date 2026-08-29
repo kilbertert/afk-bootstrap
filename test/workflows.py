@@ -80,6 +80,8 @@ for path in WORKFLOWS:
             errors.append(f"{relative}: workflow installs a provider-specific skill at runtime")
 
     if relative.name in {"agent-implement.yml", "agent-implement-prd.yml", "agent-promote-queued.yml"}:
+        if relative.name in {"agent-implement.yml", "agent-implement-prd.yml"} and "|| echo" in source:
+            errors.append(f"{relative}: GitHub API failures must not be masked by permissive defaults")
         if "GITHUB_TOKEN_FALLBACK" in source:
             errors.append(f"{relative}: delivery mutation falls back to a token that cannot trigger workflows")
         if "AGENT_PAT" not in source:

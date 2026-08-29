@@ -44,6 +44,11 @@ git -C "$TMP/candidate" config serverPolicy.defaultBranch main
 git -C "$TMP/candidate" checkout -q --detach "$feature_head"
 git -C "$TMP/candidate" branch -f main "$base_one"
 
+if AFK_DEFAULT_BRANCH=trunk bash "$HELPER" prepare "$TMP/candidate" "$feature_head" "$base_two" trunk >/dev/null 2>&1; then
+  echo 'trusted delivery accepted the configured default branch' >&2
+  exit 1
+fi
+
 bash "$HELPER" prepare "$TMP/candidate" "$feature_head" "$base_two" feat/review
 test "$(git -C "$TMP/candidate" rev-parse main)" = "$base_two"
 git -C "$TMP/candidate" merge -q --no-edit -m 'chore(test): merge main' main
@@ -56,8 +61,7 @@ git -C "$TMP/delivery" config serverPolicy.defaultBranch main
 AFK_READ_TOKEN=synthetic-read-token bash "$HELPER" import "$TMP/delivery" "$feature_head" feat/review "$TMP/result.bundle"
 test "$(git -C "$TMP/delivery" rev-parse HEAD)" = "$result_head"
 git -C "$TMP/delivery" merge-base --is-ancestor "$base_two" HEAD
-git --git-dir="$TMP/origin.git" fetch -q "$TMP/delivery" feat/review
-git --git-dir="$TMP/origin.git" update-ref refs/heads/feat/review "$result_head" "$feature_head"
+AFK_READ_TOKEN='' bash "$HELPER" push "$TMP/delivery" "$feature_head" feat/review
 test "$(git --git-dir="$TMP/origin.git" rev-parse refs/heads/feat/review)" = "$result_head"
 
 git -C "$TMP/candidate" checkout -q feat/review

@@ -104,8 +104,8 @@ Status: passed on `2026-08-28T23:25:32+0800`.
   findings).
 - `dev-worktree audit` passed for all 3 repository worktrees.
 
-AFK-B10: passed on `2026-08-30T03:09:04+08:00`, build identity
-`7973f255059c4e71de67ae9375bc0fb28b584824` on Linux 5.15 x86_64, Node
+AFK-B10: passed on `2026-08-30T03:31:15+08:00`, build identity
+`84e9537c661f676f68951eb3e7480472b91ff728` on Linux 5.15 x86_64, Node
 v24.15.0, Python 3.13.13, actionlint 1.7.12 and ShellCheck 0.11.0. Evidence:
 `python3 test/workflows.py`, actionlint, `bash -n`, ShellCheck and
 `git diff --check` all passed; negative smoke cases reject a missing owner gate

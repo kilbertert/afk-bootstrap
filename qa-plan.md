@@ -131,8 +131,8 @@ verified candidate policy, captured the trusted bundle (no candidate commits
 were needed), and finished without `agent:blocked`. The disposable PR and issue
 were closed and the canary branch was deleted after retaining the workflow and
 review evidence. An earlier invalid canary without a linked issue failed before
-the controller; PR #28 fixed that prompt path, and this rerun confirmed the
-linked-issue path end to end.
+the controller; this run confirms the linked-issue path end to end. PR #28 then
+fixed the no-linked-issue prompt path, which the follow-up canary below verifies.
 
 A follow-up no-linked-issue canary also passed on `2026-08-30T06:47:48+08:00`
 (Auto-Test PR #159; workflow run

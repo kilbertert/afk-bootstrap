@@ -55,7 +55,7 @@ boundary.
 Status: passed on `2026-08-30T07:35:00+08:00`.
 
 - Template/runtime build identity: `afk-bootstrap` at
-  `96501ff49d4d2bbcadad6c6232ab3fe20828969c` (PR #33). Subsequent commits
+  `5391c76d9b6b950dd41fea175c2153c188cb88de` (PR #28). Subsequent commits
   are documentation-only evidence updates. The four consumer
   repositories were updated through focused PRs and their required checks
   passed; the four local sandbox images were rebuilt from those canonical

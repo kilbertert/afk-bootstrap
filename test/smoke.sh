@@ -97,6 +97,12 @@ grep -q 'agentrouter' "$TARGET/.sandcastle/main.ts" || { echo "agentrouter CLI o
 grep -q 'claude-ark|agentrouter|psydo' "$TARGET/.sandcastle/Dockerfile" || { echo "agentrouter Docker dispatch missing" >&2; exit 1; }
 grep -q 'agentrouter' "$TARGET/docs/afk-workflow.md" || { echo "agentrouter workflow documentation missing" >&2; exit 1; }
 grep -q '# Existing glossary' "$TARGET/CONTEXT.md" || { echo "existing glossary was overwritten" >&2; exit 1; }
+if grep -q '{{PROJECT_NAME}}' "$WORKTREE_TARGET/CONTEXT.md"; then
+  echo "generated glossary contains an unrendered project name" >&2
+  exit 1
+fi
+grep -q "# fake-$LANGUAGE-project" "$WORKTREE_TARGET/CONTEXT.md" \
+  || { echo "generated glossary project name is incorrect" >&2; exit 1; }
 grep -q '# Existing workflow' "$TARGET/docs/afk-workflow.md" || { echo "existing workflow was overwritten" >&2; exit 1; }
 grep -q '# Existing domain docs' "$TARGET/docs/agents/domain.md" || { echo "existing domain docs were overwritten" >&2; exit 1; }
 grep -q '# Existing ADR' "$TARGET/docs/adr/0001-existing.md" || { echo "existing ADR was overwritten" >&2; exit 1; }
@@ -164,7 +170,7 @@ if find "$TARGET" -path '*/skills/ponytail/SKILL.md' -print -quit | grep -q .; t
 fi
 node -e '
   const metadata = require(process.argv[1]);
-  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.1.4" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
+  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.1.5" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
 ' "$TARGET/.afk-bootstrap.json" "$LANGUAGE" "$REPO" || { echo "template metadata invalid" >&2; exit 1; }
 
 AFK_ROOT="$TARGET" AFK_DEFAULT_BRANCH=main node "$TARGET/.sandcastle/policy-check.mjs" version

@@ -43,6 +43,8 @@ fi
 WORKTREE_SEED="$TMP/worktree-seed-$LANGUAGE"
 WORKTREE_TARGET="$TMP/fake-$LANGUAGE-worktree"
 git init -q -b seed "$WORKTREE_SEED"
+git -C "$WORKTREE_SEED" config user.name test
+git -C "$WORKTREE_SEED" config user.email test@example.com
 printf '# worktree seed\n' > "$WORKTREE_SEED/README.md"
 git -C "$WORKTREE_SEED" add README.md
 git -C "$WORKTREE_SEED" commit -qm 'test: worktree seed'

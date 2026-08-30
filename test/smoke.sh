@@ -47,6 +47,10 @@ printf '{"name":"existing","scripts":{"check":"echo check"}}\n' > "$EXISTING_TAR
 "$S/bootstrap-afk.sh" "$EXISTING_TARGET" --language "$LANGUAGE" --repo "$REPO" --no-build >/dev/null
 grep -q '"afk"' "$EXISTING_TARGET/package.json" \
   || { echo "installer could not merge an existing package manifest" >&2; exit 1; }
+[ -f "$EXISTING_TARGET/package-lock.json" ] \
+  || { echo "installer did not update an existing package lockfile" >&2; exit 1; }
+grep -q 'node_modules/tsx' "$EXISTING_TARGET/package-lock.json" \
+  || { echo "existing package lockfile lacks the AFK runtime dependency" >&2; exit 1; }
 
 WORKTREE_SEED="$TMP/worktree-seed-$LANGUAGE"
 WORKTREE_TARGET="$TMP/fake-$LANGUAGE-worktree"

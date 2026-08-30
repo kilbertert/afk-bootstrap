@@ -161,6 +161,8 @@ if [ -f "$TARGET/package.json" ]; then
     p.devDependencies = { ...(p.devDependencies || {}), "@ai-hero/sandcastle": "^0.12.0", "@types/node": "^24.0.0" };
     fs.writeFileSync(process.argv[1], JSON.stringify(p, null, 2) + "\n");
   ' "$TARGET/package.json"
+  echo "== updating package-lock.json for \`npm ci\` in the workflows =="
+  (cd "$TARGET" && npm install --package-lock-only --silent)
 else
   NAME="$(basename "$TARGET")"
   cp "$S/templates/package.json" "$TARGET/package.json"

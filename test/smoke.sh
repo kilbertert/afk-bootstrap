@@ -103,9 +103,41 @@ if grep -R -n 'skills@latest\|GITHUB_TOKEN_FALLBACK' "$TARGET/.github/workflows"
   echo "runtime skill install or non-triggering delivery fallback remains" >&2
   exit 1
 fi
+for required in \
+  '## Engineering economy' \
+  'Trace the affected flow and every caller' \
+  'already-installed dependency' \
+  'deep module with a small interface' \
+  'compatibility contracts' \
+  'smallest end-to-end slice' \
+  'high-switching-cost architecture choices durable' \
+  "\`ponytail:\` comment"; do
+  grep -Fq "$required" "$TARGET/.sandcastle/CODING_STANDARDS.md" \
+    || { echo "engineering economy contract missing: $required" >&2; exit 1; }
+done
+for prompt in \
+  .sandcastle/implement.md \
+  .sandcastle/implement-prd/prompt.md \
+  .sandcastle/implement-prompt.md \
+  .sandcastle/implement/prompt.md \
+  .sandcastle/implement-pr/prompt.md; do
+  grep -q 'Economy ladder' "$TARGET/$prompt" \
+    || { echo "implementation economy pointer missing: $prompt" >&2; exit 1; }
+done
+for prompt in \
+  .sandcastle/review-prompt.md \
+  .sandcastle/review/axis-prompt.md \
+  .sandcastle/review/prompt.md; do
+  grep -Eq 'Economy (audit|ladder)' "$TARGET/$prompt" \
+    || { echo "review economy pointer missing: $prompt" >&2; exit 1; }
+done
+if find "$TARGET" -path '*/skills/ponytail/SKILL.md' -print -quit | grep -q .; then
+  echo "provider-specific Ponytail skill was installed into the project" >&2
+  exit 1
+fi
 node -e '
   const metadata = require(process.argv[1]);
-  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.1.1" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
+  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.1.2" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
 ' "$TARGET/.afk-bootstrap.json" "$LANGUAGE" "$REPO" || { echo "template metadata invalid" >&2; exit 1; }
 
 AFK_ROOT="$TARGET" AFK_DEFAULT_BRANCH=main node "$TARGET/.sandcastle/policy-check.mjs" version

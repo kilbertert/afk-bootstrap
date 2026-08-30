@@ -23,6 +23,7 @@ boundary.
 | AFK-B10 | Linux host, temporary Git repositories | Git available | Stale local main, advanced origin main, and a PR branch with a merge result | Run `test/trusted-pr-delivery.sh` | Candidate preparation resets local main to the trusted base; bundle delivery preserves commits and rejects a raced remote branch | Test trap removes temporary repositories |
 | AFK-B11 | GitHub Actions syntax job | Python 3 and PyYAML available | The three `pull_request_target` workflows and delivery-label workflows | Run `python3 test/workflows.py` | Mutation jobs require same-repository owner PRs, execute controller scripts, avoid runtime skill installation, keep write tokens out of candidate execution, reject masked GitHub API failures, and fail closed without AGENT_PAT | None |
 | AFK-B12 | Live self-hosted runner canary | Merged template deployment, online runner, configured read token and AGENT_PAT | One owner-authored canary PR | Run `agent:review`, retain the workflow URL, and inspect the resulting branch/review | The review uses current main, completes through trusted bundle delivery, posts its review, and leaves no blocked label | Close or merge the disposable canary PR and remove temporary labels/branches |
+| AFK-B13 | Linux host, generated Node/Python scaffolds | Bootstrap script and templates from the same checkout | Shared coding standards plus every code-changing implement/review prompt | Run both smoke cases and inspect the generated prompt graph | Both providers receive the same economy ladder, root-cause, dependency, compatibility, module, vertical-slice, and durable-architecture contract without a container-installed skill | Test traps remove temporary repos |
 
 ## Traceability
 
@@ -37,6 +38,7 @@ boundary.
 | Planning phase cannot silently enter implementation | Generated agent entries preserve the grilling phase boundary | AFK-B07 |
 | Official skills are the only planning entry | Official planning skills remain the only interactive planning entry | AFK-B08, AFK-B09 |
 | Provider-neutral two-axis review | Review is provider-neutral and preserves two axes | AFK-B08 |
+| Provider-neutral implementation economy | Implementation economy is provider-neutral | AFK-B13 |
 | Current default-branch review base | Persistent runner review uses the current default branch | AFK-B10, AFK-B12 |
 | Trusted pull-request control plane | Candidate code cannot receive host delivery credentials; untrusted pull requests cannot start mutation workflows | AFK-B10, AFK-B11, AFK-B12 |
 | Delivery credential failures are blocked | Missing delivery credentials stop the workflow | AFK-B11, AFK-B12 |
@@ -52,14 +54,13 @@ boundary.
 
 ## Execution Results
 
-Status: passed on `2026-08-30T07:35:00+08:00`.
+Status: passed on `2026-08-31T01:09:01+08:00`.
 
-- Template/runtime build identity: `afk-bootstrap` at
-  `5391c76d9b6b950dd41fea175c2153c188cb88de` (PR #28). Subsequent commits
-  are documentation-only evidence updates. The four consumer
-  repositories were updated through focused PRs and their required checks
-  passed; the four local sandbox images were rebuilt from those canonical
-  checkouts after the runtime fixes.
+- Current template/runtime build identity: `afk-bootstrap` at
+  `35eeb6967ce40e42f8147f38b4dae2accc2c126e`. The engineering-economy
+  contract is project content mounted with the worktree; it does not change
+  the Dockerfile or agent CLI toolchain and therefore does not require an
+  image rebuild.
 
 - Build identity: `afk-bootstrap` `origin/main` at
   `3ae3f3067479aebdf1d298e85efd24320086aef2` (PR #20). Repository CI runs
@@ -122,6 +123,13 @@ AFK-B11: passed at the same build identity and environment. Evidence:
 `bash test/trusted-pr-delivery.sh` passed stale-main reset, merge-result bundle
 preservation, successful push, and remote-race rejection; both Node and Python
 smoke tests passed, including generated policy checks.
+
+AFK-B13: passed on `2026-08-31T01:09:01+08:00`, build identity
+`35eeb6967ce40e42f8147f38b4dae2accc2c126e`. Both Node and Python smoke tests
+verified the shared Economy ladder, root-cause, dependency, compatibility,
+deep-module, vertical-slice, and durable-architecture rules; every generated
+code-changing implement/review prompt contains the corresponding ladder or
+audit pointer, and no provider-specific Ponytail skill is installed.
 
 AFK-B12: passed on `2026-08-30T06:13:07+08:00` during the authorized Auto-Test
 canary (PR #156, issue #157; workflow run

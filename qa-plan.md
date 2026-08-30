@@ -23,6 +23,7 @@ boundary.
 | AFK-B10 | Linux host, temporary Git repositories | Git available | Stale local main, advanced origin main, and a PR branch with a merge result | Run `test/trusted-pr-delivery.sh` | Candidate preparation resets local main to the trusted base; bundle delivery preserves commits and rejects a raced remote branch | Test trap removes temporary repositories |
 | AFK-B11 | GitHub Actions syntax job | Python 3 and PyYAML available | The three `pull_request_target` workflows and delivery-label workflows | Run `python3 test/workflows.py` | Mutation jobs require same-repository owner PRs, execute controller scripts, avoid runtime skill installation, keep write tokens out of candidate execution, reject masked GitHub API failures, and fail closed without AGENT_PAT | None |
 | AFK-B12 | Live self-hosted runner canary | Merged template deployment, online runner, configured read token and AGENT_PAT | One owner-authored canary PR | Run `agent:review`, retain the workflow URL, and inspect the resulting branch/review | The review uses current main, completes through trusted bundle delivery, posts its review, and leaves no blocked label | Close or merge the disposable canary PR and remove temporary labels/branches |
+| AFK-B13 | Linux host, generated Node/Python scaffolds | Bootstrap script and templates from the same checkout | Shared coding standards plus every code-changing implement/review prompt | Run both smoke cases and inspect the generated prompt graph | Both providers receive the same economy ladder, root-cause, dependency, compatibility, module, vertical-slice, and durable-architecture contract without a container-installed skill | Test traps remove temporary repos |
 
 ## Traceability
 
@@ -37,6 +38,7 @@ boundary.
 | Planning phase cannot silently enter implementation | Generated agent entries preserve the grilling phase boundary | AFK-B07 |
 | Official skills are the only planning entry | Official planning skills remain the only interactive planning entry | AFK-B08, AFK-B09 |
 | Provider-neutral two-axis review | Review is provider-neutral and preserves two axes | AFK-B08 |
+| Provider-neutral implementation economy | Implementation economy is provider-neutral | AFK-B13 |
 | Current default-branch review base | Persistent runner review uses the current default branch | AFK-B10, AFK-B12 |
 | Trusted pull-request control plane | Candidate code cannot receive host delivery credentials; untrusted pull requests cannot start mutation workflows | AFK-B10, AFK-B11, AFK-B12 |
 | Delivery credential failures are blocked | Missing delivery credentials stop the workflow | AFK-B11, AFK-B12 |

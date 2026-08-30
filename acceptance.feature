@@ -52,6 +52,14 @@ Feature: Self-contained AFK bootstrap baseline
       And the workflow emits validated review comments and thread replies
       And no provider-specific review skill is installed at runtime
 
+    Scenario: Implementation economy is provider-neutral
+      Given a project scaffolded from afk-bootstrap
+      When an implementation or review agent chooses how to change code
+      Then the shared coding standards require the first adequate economy ladder option
+      And the agent traces the affected flow before fixing the root cause
+      And compatibility, dependency, module, and architecture choices follow explicit project boundaries
+      And implement and Standards review prompts apply the same contract without a container-installed skill
+
   Rule: pull request automation has a trusted control plane
 
     Scenario: Persistent runner review uses the current default branch

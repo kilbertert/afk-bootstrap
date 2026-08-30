@@ -76,6 +76,7 @@ cp "$S/templates/Dockerfile.$LANGUAGE"        "$TARGET/.sandcastle/Dockerfile"
 cp "$S/templates/CODING_STANDARDS.md"         "$TARGET/.sandcastle/CODING_STANDARDS.md"
 if [ ! -e "$TARGET/CONTEXT.md" ]; then
   cp "$S/templates/CONTEXT.md" "$TARGET/CONTEXT.md"
+  sed -i "s/{{PROJECT_NAME}}/$SLUG/g" "$TARGET/CONTEXT.md"
 fi
 mkdir -p "$TARGET/docs"
 if [ ! -e "$TARGET/docs/afk-workflow.md" ]; then

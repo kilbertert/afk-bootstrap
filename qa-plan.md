@@ -54,14 +54,13 @@ boundary.
 
 ## Execution Results
 
-Status: passed on `2026-08-30T07:35:00+08:00`.
+Status: passed on `2026-08-31T01:09:01+08:00`.
 
-- Template/runtime build identity: `afk-bootstrap` at
-  `5391c76d9b6b950dd41fea175c2153c188cb88de` (PR #28). Subsequent commits
-  are documentation-only evidence updates. The four consumer
-  repositories were updated through focused PRs and their required checks
-  passed; the four local sandbox images were rebuilt from those canonical
-  checkouts after the runtime fixes.
+- Current template/runtime build identity: `afk-bootstrap` at
+  `35eeb6967ce40e42f8147f38b4dae2accc2c126e`. The engineering-economy
+  contract is project content mounted with the worktree; it does not change
+  the Dockerfile or agent CLI toolchain and therefore does not require an
+  image rebuild.
 
 - Build identity: `afk-bootstrap` `origin/main` at
   `3ae3f3067479aebdf1d298e85efd24320086aef2` (PR #20). Repository CI runs
@@ -124,6 +123,13 @@ AFK-B11: passed at the same build identity and environment. Evidence:
 `bash test/trusted-pr-delivery.sh` passed stale-main reset, merge-result bundle
 preservation, successful push, and remote-race rejection; both Node and Python
 smoke tests passed, including generated policy checks.
+
+AFK-B13: passed on `2026-08-31T01:09:01+08:00`, build identity
+`35eeb6967ce40e42f8147f38b4dae2accc2c126e`. Both Node and Python smoke tests
+verified the shared Economy ladder, root-cause, dependency, compatibility,
+deep-module, vertical-slice, and durable-architecture rules; every generated
+code-changing implement/review prompt contains the corresponding ladder or
+audit pointer, and no provider-specific Ponytail skill is installed.
 
 AFK-B12: passed on `2026-08-30T06:13:07+08:00` during the authorized Auto-Test
 canary (PR #156, issue #157; workflow run

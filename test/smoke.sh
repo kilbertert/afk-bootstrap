@@ -64,6 +64,8 @@ git -C "$WORKTREE_SEED" worktree add -q -b chore/afk-target "$WORKTREE_TARGET" H
 "$S/bootstrap-afk.sh" "$WORKTREE_TARGET" --language "$LANGUAGE" --repo "$REPO" --no-build >/dev/null
 [ -f "$WORKTREE_TARGET/.sandcastle/CODING_STANDARDS.md" ] \
   || { echo "installer rejected a valid linked worktree" >&2; exit 1; }
+grep -q "sandcastle:fake-$LANGUAGE-project" "$WORKTREE_TARGET/.sandcastle/profile.ts" \
+  || { echo "linked worktree image name is not repository-stable" >&2; exit 1; }
 
 for f in \
   .sandcastle/main.ts .sandcastle/profile.ts .sandcastle/planner.ts .sandcastle/run-with-extraction.ts \
@@ -162,7 +164,7 @@ if find "$TARGET" -path '*/skills/ponytail/SKILL.md' -print -quit | grep -q .; t
 fi
 node -e '
   const metadata = require(process.argv[1]);
-  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.1.3" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
+  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.1.4" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
 ' "$TARGET/.afk-bootstrap.json" "$LANGUAGE" "$REPO" || { echo "template metadata invalid" >&2; exit 1; }
 
 AFK_ROOT="$TARGET" AFK_DEFAULT_BRANCH=main node "$TARGET/.sandcastle/policy-check.mjs" version

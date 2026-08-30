@@ -39,7 +39,7 @@ Use red-green-refactor where applicable.
 3. REPEAT until the sub-issue is done
 4. REFACTOR
 
-Before committing, run `npm run typecheck` and `npm test`, then
+Before committing, run `npm run check`, then
 `node .sandcastle/policy-check.mjs commit`.
 
 # COMMIT

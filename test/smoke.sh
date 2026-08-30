@@ -162,7 +162,7 @@ if find "$TARGET" -path '*/skills/ponytail/SKILL.md' -print -quit | grep -q .; t
 fi
 node -e '
   const metadata = require(process.argv[1]);
-  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.1.2" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
+  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.1.3" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
 ' "$TARGET/.afk-bootstrap.json" "$LANGUAGE" "$REPO" || { echo "template metadata invalid" >&2; exit 1; }
 
 AFK_ROOT="$TARGET" AFK_DEFAULT_BRANCH=main node "$TARGET/.sandcastle/policy-check.mjs" version
@@ -232,6 +232,11 @@ if [ "$LANGUAGE" = "python" ]; then
 else
   grep -q 'npm run check' "$TARGET/.sandcastle/implement.md" || { echo "implement.md not node" >&2; exit 1; }
   grep -q 'npm run check' "$TARGET/.sandcastle/implement-prompt.md" || { echo "planner prompt not node" >&2; exit 1; }
+  grep -q 'npm run check' "$TARGET/.sandcastle/implement-prd/prompt.md" || { echo "PRD prompt not node" >&2; exit 1; }
+  if grep -qE 'npm run typecheck|npm test' "$TARGET/.sandcastle/implement-prd/prompt.md"; then
+    echo "PRD prompt requires nonstandard Node checks" >&2
+    exit 1
+  fi
   PROFILE_HOME="$TMP/profile-home"
   mkdir -p "$PROFILE_HOME/.config/auto-test"
   printf 'apiKey,fake-key\nopenAiCompatible,https://example.invalid/v1\n' > "$PROFILE_HOME/.config/auto-test/aliyun-deepseek.csv"

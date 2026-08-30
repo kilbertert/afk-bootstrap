@@ -55,7 +55,8 @@ fi
 [[ "$REPO" =~ ^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$ ]] \
   || { echo "cannot determine GitHub repo; pass --repo owner/name" >&2; exit 1; }
 
-SLUG="$(basename "$TARGET" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_.-]/-/g')"
+SLUG="${REPO##*/}"
+SLUG="$(printf '%s' "$SLUG" | tr '[:upper:]' '[:lower:]' | sed -E 's/[^a-z0-9_.-]/-/g')"
 
 mkdir -p "$TARGET"
 

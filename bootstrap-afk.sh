@@ -153,13 +153,13 @@ fi
 # ---- package.json: merge or create ----------------------------------------
 if [ -f "$TARGET/package.json" ]; then
   node -e '
-    const fs = require("fs"); const p = JSON.parse(fs.readFileSync(process.argv[2], "utf8"));
+    const fs = require("fs"); const p = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
     const scripts = { ...(p.scripts || {}) };
     delete scripts["prd:to-issues"];
     p.scripts = { ...scripts, "afk": "tsx .sandcastle/main.ts", "ralph": "tsx .sandcastle/planner.ts", "afk:policy": "node .sandcastle/policy-check.mjs all" };
     p.dependencies = { ...(p.dependencies || {}), "tsx": "^4.20.0", "zod": "^4.4.3" };
     p.devDependencies = { ...(p.devDependencies || {}), "@ai-hero/sandcastle": "^0.12.0", "@types/node": "^24.0.0" };
-    fs.writeFileSync(process.argv[2], JSON.stringify(p, null, 2) + "\n");
+    fs.writeFileSync(process.argv[1], JSON.stringify(p, null, 2) + "\n");
   ' "$TARGET/package.json"
 else
   NAME="$(basename "$TARGET")"

@@ -40,6 +40,14 @@ fi
 
 "$S/bootstrap-afk.sh" "$TARGET" --language "$LANGUAGE" --no-build >/dev/null
 
+EXISTING_TARGET="$TMP/fake-$LANGUAGE-existing"
+mkdir "$EXISTING_TARGET"
+git -C "$EXISTING_TARGET" init -q -b main
+printf '{"name":"existing","scripts":{"check":"echo check"}}\n' > "$EXISTING_TARGET/package.json"
+"$S/bootstrap-afk.sh" "$EXISTING_TARGET" --language "$LANGUAGE" --repo "$REPO" --no-build >/dev/null
+grep -q '"afk"' "$EXISTING_TARGET/package.json" \
+  || { echo "installer could not merge an existing package manifest" >&2; exit 1; }
+
 WORKTREE_SEED="$TMP/worktree-seed-$LANGUAGE"
 WORKTREE_TARGET="$TMP/fake-$LANGUAGE-worktree"
 git init -q -b seed "$WORKTREE_SEED"

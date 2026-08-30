@@ -41,7 +41,8 @@ case "$LANGUAGE" in node|python) ;; *) echo "unsupported --language: $LANGUAGE" 
 
 # ---- validations -----------------------------------------------------------
 S="$(cd "$(dirname "$0")" && pwd)"
-[ -d "$TARGET/.git" ]        || { echo "not a git repo: $TARGET" >&2; exit 1; }
+git -C "$TARGET" rev-parse --git-dir >/dev/null 2>&1 \
+  || { echo "not a git repo: $TARGET" >&2; exit 1; }
 [ -e "$TARGET/.sandcastle" ] && { echo "already scaffolded (.sandcastle exists): $TARGET" >&2; exit 1; }
 [ -d "$S/scaffold/.sandcastle" ] || { echo "bundled scaffold missing: $S/scaffold" >&2; exit 1; }
 TEMPLATE_VERSION="$(tr -d '[:space:]' < "$S/TEMPLATE_VERSION")"

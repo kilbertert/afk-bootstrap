@@ -40,6 +40,19 @@ fi
 
 "$S/bootstrap-afk.sh" "$TARGET" --language "$LANGUAGE" --no-build >/dev/null
 
+WORKTREE_SEED="$TMP/worktree-seed-$LANGUAGE"
+WORKTREE_TARGET="$TMP/fake-$LANGUAGE-worktree"
+git init -q -b seed "$WORKTREE_SEED"
+git -C "$WORKTREE_SEED" config user.name test
+git -C "$WORKTREE_SEED" config user.email test@example.com
+printf '# worktree seed\n' > "$WORKTREE_SEED/README.md"
+git -C "$WORKTREE_SEED" add README.md
+git -C "$WORKTREE_SEED" commit -qm 'test: worktree seed'
+git -C "$WORKTREE_SEED" worktree add -q -b chore/afk-target "$WORKTREE_TARGET" HEAD
+"$S/bootstrap-afk.sh" "$WORKTREE_TARGET" --language "$LANGUAGE" --repo "$REPO" --no-build >/dev/null
+[ -f "$WORKTREE_TARGET/.sandcastle/CODING_STANDARDS.md" ] \
+  || { echo "installer rejected a valid linked worktree" >&2; exit 1; }
+
 for f in \
   .sandcastle/main.ts .sandcastle/profile.ts .sandcastle/planner.ts .sandcastle/run-with-extraction.ts \
   .sandcastle/policy-check.mjs .sandcastle/consensus-contract.json .sandcastle/trusted-pr-delivery.sh \

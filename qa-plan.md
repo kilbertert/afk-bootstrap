@@ -56,11 +56,12 @@ boundary.
 
 Status: passed on `2026-08-31T01:09:01+08:00`.
 
-- Current template/runtime build identity: `afk-bootstrap` at
-  `35eeb6967ce40e42f8147f38b4dae2accc2c126e`. The engineering-economy
-  contract is project content mounted with the worktree; it does not change
-  the Dockerfile or agent CLI toolchain and therefore does not require an
-  image rebuild.
+- Current template/runtime build identity: `afk-bootstrap` `origin/main` at
+  `3df2fe28cf062a89caf0fe80ada059879f576a76` (PR #38; source implementation
+  commit `35eeb6967ce40e42f8147f38b4dae2accc2c126e`). The
+  engineering-economy contract is project content mounted with the worktree;
+  it does not change the Dockerfile or agent CLI toolchain and therefore does
+  not require an image rebuild.
 
 - Build identity: `afk-bootstrap` `origin/main` at
   `3ae3f3067479aebdf1d298e85efd24320086aef2` (PR #20). Repository CI runs
@@ -124,8 +125,10 @@ AFK-B11: passed at the same build identity and environment. Evidence:
 preservation, successful push, and remote-race rejection; both Node and Python
 smoke tests passed, including generated policy checks.
 
-AFK-B13: passed on `2026-08-31T01:09:01+08:00`, build identity
-`35eeb6967ce40e42f8147f38b4dae2accc2c126e`. Both Node and Python smoke tests
+AFK-B13: passed on `2026-08-31T01:09:01+08:00`, source implementation commit
+`35eeb6967ce40e42f8147f38b4dae2accc2c126e`, merged and delivered as
+`afk-bootstrap` `origin/main` `3df2fe28cf062a89caf0fe80ada059879f576a76`
+(PR #38). Both Node and Python smoke tests
 verified the shared Economy ladder, root-cause, dependency, compatibility,
 deep-module, vertical-slice, and durable-architecture rules; every generated
 code-changing implement/review prompt contains the corresponding ladder or

@@ -91,13 +91,26 @@ subst() {
 # a project edit and is refused rather than overwritten.
 profile_is_generated_shape() {
   local candidate="$1"
-  local refs="$S/test/fixtures/legacy-1.1.x/.sandcastle/profile.ts $S/test/fixtures/handport-1.1.x/.sandcastle/profile.ts"
+  local refs="$S/references/profile-1.1.x.ts $S/references/profile-handport.ts"
   local reference
   for reference in $refs; do
     [ -f "$reference" ] || { echo "profile.ts: migration reference missing: $reference" >&2; return 1; }
   done
   # shellcheck disable=SC2086
   profile_matches "$candidate" $refs
+}
+
+# Like `subst`, but replaces every occurrence. A workflow may carry the same
+# fallback in more than one step, and `subst` refuses an anchor it cannot find —
+# which it would be, on the second pass, once the first pass rewrote it.
+subst_all() {
+  local file="$1" from="$2" to="$3"
+  grep -qF -e "$from" "$file" || return 0
+  node -e '
+    const fs = require("fs");
+    const [path, from, to] = process.argv.slice(1);
+    fs.writeFileSync(path, fs.readFileSync(path, "utf8").split(from).join(to));
+  ' "$file" "$from" "$to"
 }
 
 # Compare a profile.ts to reference shape(s) with the two project-variable
@@ -295,14 +308,42 @@ if [ "$from_minor" -eq 1 ] && [ "$to_minor" -eq 2 ]; then
     exit 1
   fi
 
-  # 5. Workflows: fallback default only. Templates pin `vars.AFK_PROFILE ||
-  #    'psydo'`; the variable itself is a host-side setting, not a file.
-  OLD_FALLBACK="vars.AFK_PROFILE || 'psydo'"
-  NEW_FALLBACK="vars.AFK_PROFILE || 'claude-stepfun'"
+  # 5. Workflows: the fallback default only — the variable itself is a host-side
+  #    setting, not a file. Every retired profile must be rewritten, not just the
+  #    `psydo` the templates shipped: a project may have set the fallback to any
+  #    provider 1.2.0 removes, and leaving it would make the workflow hand
+  #    `claudeProfile` a value it rejects before the agent starts. A fallback
+  #    that is neither retired nor the new default is a project edit, and is
+  #    refused rather than recorded as a completed migration.
   for wf in "$WORK"/.github/workflows/*.yml; do
     [ -e "$wf" ] || continue
-    grep -qF -e "$OLD_FALLBACK" "$wf" || continue
-    subst "$wf" "$OLD_FALLBACK" "$NEW_FALLBACK"
+    # Collect the distinct fallbacks before rewriting anything: the file is
+    # rewritten in place, so re-reading it mid-loop would see an already-rewritten
+    # value and then look for it a second time.
+    fallbacks="$(grep -oE "vars\.AFK_PROFILE \|\| '[^']*'" "$wf" | sort -u || true)"
+    [ -n "$fallbacks" ] || continue
+    while IFS= read -r fallback; do
+      case $fallback in
+        ''|"vars.AFK_PROFILE || 'claude-stepfun'"|"vars.AFK_PROFILE || 'claude'")
+          # Already what this version ships. Leave it.
+          continue ;;
+        "vars.AFK_PROFILE || 'psydo'"|"vars.AFK_PROFILE || 'claude-ark'"|\
+        "vars.AFK_PROFILE || 'agentrouter'"|"vars.AFK_PROFILE || 'aliyun-deepseek'")
+          continue ;;
+      esac
+      # Neither retained nor a profile this version retires. Refuse rather than
+      # record a migration that leaves the workflow handing an unsupported value
+      # to claudeProfile once the profile map stops accepting it.
+      echo "$wf: unrecognised AFK_PROFILE fallback — refusing to guess:" >&2
+      echo "  $fallback" >&2
+      exit 1
+    done <<<"$fallbacks"
+    # Every surviving fallback is either retained or retired, so replace the
+    # retired ones wholesale.
+    for retired in psydo claude-ark agentrouter aliyun-deepseek; do
+      grep -qF -e "vars.AFK_PROFILE || '$retired'" "$wf" || continue
+      subst_all "$wf" "vars.AFK_PROFILE || '$retired'" "vars.AFK_PROFILE || 'claude-stepfun'"
+    done
   done
 
   # 6. Report, never rewrite, the project's own prose. The generated

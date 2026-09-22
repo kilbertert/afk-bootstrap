@@ -182,6 +182,8 @@ default branch directly.
 ```
 bootstrap-afk.sh          the tool (create; refuses an existing .sandcastle/)
 upgrade-afk.sh            migrate an already-scaffolded project to the current version
+references/               profile.ts shapes the migration recognises, read at run
+                          time — deliberately not under test/, which is not shipped
 scaffold/                 portable runners, skills, prompts, and workflows
 templates/                per-language generated files (node | python)
   - AFK-MANAGED-BLOCK.md  managed phase gate appended to project instructions
@@ -193,6 +195,7 @@ templates/                per-language generated files (node | python)
 TEMPLATE_VERSION          generated-project template SemVer
 test/smoke.sh             Node/Python interface smoke test (incl. the upgrade path)
 test/fixtures/legacy-1.1.x/  verbatim previous-template output the upgrade is run against
+test/fixtures/handport-1.1.x/ verbatim hand-ported output the upgrade is run against
 acceptance.feature        observable bootstrap acceptance contract
 qa-plan.md                system verification plan and retained results
 README.md                 human-readable guide

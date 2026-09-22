@@ -370,6 +370,54 @@ fi
 grep -q '1.9.0' "$NEWER/.afk-bootstrap.json" \
   || { echo "downgrade refusal still rewrote the version" >&2; exit 1; }
 
+# Every retired fallback is rewritten, and an unrecognised one is refused:
+# a workflow that still names a profile the new map rejects cannot start its
+# agent, so recording the migration would be a false success.
+for retired in psydo claude-ark agentrouter aliyun-deepseek; do
+  FB="$TMP/fallback-$retired-$LANGUAGE"
+  mkdir -p "$FB/.github/workflows"
+  cp -R "$S/test/fixtures/legacy-1.1.x/.sandcastle" "$FB/"
+  cp "$S/test/fixtures/legacy-1.1.x/.afk-bootstrap.json" "$FB/"
+  node -e '
+    const fs = require("fs"), dir = process.argv[1], provider = process.argv[2];
+    const src = process.argv[3];
+    const moved = fs.readFileSync(src, "utf8")
+      .split("vars.AFK_PROFILE || '"'"'psydo'"'"'").join("vars.AFK_PROFILE || '"'"'" + provider + "'"'"'");
+    fs.writeFileSync(dir + "/.github/workflows/agent-implement.yml", moved);
+  ' "$FB" "$retired" "$S/test/fixtures/legacy-1.1.x/.github/workflows/agent-implement.yml"
+  "$S/upgrade-afk.sh" "$FB" >/dev/null \
+    || { echo "upgrade refused the retired fallback $retired" >&2; exit 1; }
+  if grep -qF -e "$retired" "$FB/.github/workflows/agent-implement.yml"; then
+    echo "upgrade left the retired fallback $retired in place" >&2; exit 1
+  fi
+  grep -qF -e "vars.AFK_PROFILE || 'claude-stepfun'" "$FB/.github/workflows/agent-implement.yml" \
+    || { echo "upgrade did not write the new fallback for $retired" >&2; exit 1; }
+done
+
+UNKNOWN_FB="$TMP/fallback-unknown-$LANGUAGE"
+mkdir -p "$UNKNOWN_FB/.github/workflows"
+cp -R "$S/test/fixtures/legacy-1.1.x/.sandcastle" "$UNKNOWN_FB/"
+cp "$S/test/fixtures/legacy-1.1.x/.afk-bootstrap.json" "$UNKNOWN_FB/"
+node -e '
+  const fs = require("fs"), dir = process.argv[1], src = process.argv[2];
+  fs.writeFileSync(dir + "/.github/workflows/agent-implement.yml",
+    fs.readFileSync(src, "utf8")
+      .split("vars.AFK_PROFILE || '"'"'psydo'"'"'").join("vars.AFK_PROFILE || '"'"'custom-provider'"'"'"));
+' "$UNKNOWN_FB" "$S/test/fixtures/legacy-1.1.x/.github/workflows/agent-implement.yml"
+UNKNOWN_TREE="$(cd "$UNKNOWN_FB" && find . -type f | sort | xargs md5sum)"
+if "$S/upgrade-afk.sh" "$UNKNOWN_FB" >/dev/null 2>&1; then
+  echo "upgrade accepted an unrecognised AFK_PROFILE fallback" >&2; exit 1
+fi
+[ "$UNKNOWN_TREE" = "$(cd "$UNKNOWN_FB" && find . -type f | sort | xargs md5sum)" ] \
+  || { echo "refusing an unrecognised fallback still modified the project" >&2; exit 1; }
+
+# The bootstrap report is the operational handoff for a new project, so the
+# profile it tells the operator to set must be one the scaffold accepts.
+if "$S/bootstrap-afk.sh" "$TMP/report-$LANGUAGE" --language "$LANGUAGE" --repo "$REPO" --no-build 2>/dev/null \
+   | grep -qE 'AFK_PROFILE --body (claude-ark|agentrouter|psydo|aliyun-deepseek)'; then
+  echo "bootstrap still recommends a retired profile" >&2; exit 1
+fi
+
 # A refused migration must leave the project untouched. Each case mutates one
 # file into a shape the step cannot anchor, then asserts every file is
 # byte-identical afterwards — a step that failed after an earlier write would

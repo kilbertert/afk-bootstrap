@@ -339,6 +339,26 @@ fi
 grep -q 'settings.stepfun.json' "$HANDPORT/.sandcastle/profile.ts" \
   || { echo "hand-port did not resolve the mounted settings path" >&2; exit 1; }
 
+# An *added provider* is the case a presence test misses: it needs no change
+# outside the profile table, so the rest of the file stays byte-identical to a
+# generated one. The comparison must still refuse it — replacing the file would
+# delete the provider while recording a successful migration.
+ADDED_PROVIDER="$TMP/added-provider-$LANGUAGE"
+mkdir -p "$ADDED_PROVIDER"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$ADDED_PROVIDER/"
+node -e '
+  const fs = require("fs"), p = process.argv[1] + "/.sandcastle/profile.ts";
+  fs.writeFileSync(p, fs.readFileSync(p, "utf8").replace(
+    "  psydo: undefined,",
+    "  psydo: undefined,\n  \"company-claude\": join(homedir(), \"company/settings.json\"),"));
+' "$ADDED_PROVIDER"
+ADDED_TREE="$(cd "$ADDED_PROVIDER" && find . -type f | sort | xargs md5sum)"
+if "$S/upgrade-afk.sh" "$ADDED_PROVIDER" >/dev/null 2>&1; then
+  echo "upgrade overwrote a profile.ts with an added provider" >&2; exit 1
+fi
+[ "$ADDED_TREE" = "$(cd "$ADDED_PROVIDER" && find . -type f | sort | xargs md5sum)" ] \
+  || { echo "refusing an added provider still modified the project" >&2; exit 1; }
+
 # A profile.ts carrying a project edit must be refused, not replaced: the file is
 # the only one the migration discards rather than edits.
 EDITED_PROFILE="$TMP/edited-profile-$LANGUAGE"
@@ -492,5 +512,35 @@ BEFORE="$(cat "$UPGRADE_TARGET/.sandcastle/Dockerfile")"
   || { echo "dry run wrote to a template file" >&2; exit 1; }
 [ "$(node -e 'process.stdout.write(String(require(process.argv[1]).afk_template_version))' "$UPGRADE_TARGET/.afk-bootstrap.json")" = "1.1.5" ] \
   || { echo "dry run wrote the recorded version" >&2; exit 1; }
+
+# A publish that fails after some files are already written must restore every
+# one of them. The whole publish phase is otherwise the one place a failure can
+# still leave a half-migrated tree, which is what the staging step exists to
+# prevent.
+PUBLISH_SHIM="$TMP/publish-shim-$LANGUAGE"
+mkdir -p "$PUBLISH_SHIM/bin"
+cat > "$PUBLISH_SHIM/bin/cp" <<'SHIM'
+#!/usr/bin/env bash
+# Fail only the metadata publish: it is the copy whose source is the staged
+# project and whose name is .afk-bootstrap.json. Backups copy the other way, and
+# staging creation copies from the real project, so neither matches.
+case "$1" in
+  */project/.afk-bootstrap.json) exit 1 ;;
+esac
+exec /usr/bin/cp "$@"
+SHIM
+chmod 755 "$PUBLISH_SHIM/bin/cp"
+ROLLBACK="$TMP/rollback-$LANGUAGE"
+mkdir -p "$ROLLBACK/.github/workflows"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$ROLLBACK/"
+printf 'name: extra\non: push\n' > "$ROLLBACK/.github/workflows/extra.yml"
+ROLLBACK_TREE="$(cd "$ROLLBACK" && find . -type f | sort | xargs md5sum)"
+if PATH="$PUBLISH_SHIM/bin:$PATH" "$S/upgrade-afk.sh" "$ROLLBACK" >/dev/null 2>&1; then
+  echo "publish failure was not reported" >&2; exit 1
+fi
+[ "$ROLLBACK_TREE" = "$(cd "$ROLLBACK" && find . -type f | sort | xargs md5sum)" ] \
+  || { echo "a failed publish did not restore the project" >&2; exit 1; }
+[ -d "$ROLLBACK/.github/workflows/workflows" ] \
+  && { echo "restoring the workflow directory nested it instead of replacing it" >&2; exit 1; }
 
 echo "$LANGUAGE smoke test passed"

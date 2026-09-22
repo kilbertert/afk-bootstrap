@@ -83,12 +83,11 @@ subst() {
 #
 # Replacing profile.ts is the only step that discards a file rather than editing
 # a line, so this decides what may be discarded. A presence test is not enough: a
-# project that *added* a mount or an env var keeps every marker the scaffold has,
-# so the file is compared to the two shapes that actually exist in the field —
-# the pristine 1.1.x output and the `claude-stepfun` hand-port — with the two
-# things a project legitimately varies normalised away: the profile table, which
-# a hand-port trimmed, and the image name, which is per-project. Anything else is
-# a project edit and is refused rather than overwritten.
+# project that *added* a mount, an env var, or a provider keeps every marker the
+# scaffold has, so the file is compared to the two shapes that actually exist in
+# the field — the pristine 1.1.x output and the `claude-stepfun` hand-port — with
+# only the per-project image name normalised away. Anything else is a project
+# edit and is refused rather than overwritten.
 profile_is_generated_shape() {
   local candidate="$1"
   local refs="$S/references/profile-1.1.x.ts $S/references/profile-handport.ts"
@@ -113,15 +112,21 @@ subst_all() {
   ' "$file" "$from" "$to"
 }
 
-# Compare a profile.ts to reference shape(s) with the two project-variable
-# values normalised away, so its exact bytes are never the question.
+# Compare a profile.ts to reference shape(s). Only the rendered image name is
+# normalised: it is the one value that legitimately differs per project.
+#
+# The profile table is compared verbatim rather than normalised away. Normalising
+# it looks tempting — a hand-port trimmed the table, so the two references differ
+# there — but it would also accept a table a project extended. A settings-driven
+# provider needs no change outside the table, so such a file would otherwise match
+# a reference byte for byte and be replaced, silently deleting that provider.
+# Comparing the tables against the known historical ones keeps that refused.
 profile_matches() {
   node -e '
     const fs = require("fs");
     const [candidate, ...references] = process.argv.slice(1);
-    const normalise = (source) => source
-      .replace(/const profiles = \{[\s\S]*?\} as const;/, "const profiles = TABLE;")
-      .replace(/(imageName: process\.env\.AFK_IMAGE \?\? ")[^"]*(")/, "IMAGE_NAME");
+    const normalise = (source) =>
+      source.replace(/(imageName: process\.env\.AFK_IMAGE \?\? ")[^"]*(")/, "IMAGE_NAME");
     let actual;
     try {
       actual = normalise(fs.readFileSync(candidate, "utf8"));
@@ -407,31 +412,53 @@ if [ "$CHANGED" = "0" ]; then
   say "template files already current for $TEMPLATE_VERSION"
 fi
 
-# Staging protects the transform phase, but publishing still mutates the target
-# one file at a time. Back every destination up first and restore all of them if
-# any write fails, so an interrupted or failing publish cannot leave a migrated
-# Dockerfile next to metadata that still claims the old version.
-PUBLISHED=""
+# Staging protects the transform phase, but publishing still mutates the target.
+# Back every destination up and restore all of them if any write fails, so an
+# interrupted or failing publish cannot leave a migrated Dockerfile next to
+# metadata that still claims the old version.
+#
+# Each destination is registered *before* its write, not after: a copy that fails
+# partway has already truncated or half-written the destination, so restoring
+# only the copies that succeeded would leave the failed one damaged.
+PUBLISHED_FILES=""
+PUBLISHED_DIRS=""
 restore_published() {
   local status=$?
-  if [ -n "$PUBLISHED" ]; then
+  if [ -n "$PUBLISHED_FILES$PUBLISHED_DIRS" ]; then
     say "publish failed; restoring the project" >&2
-    for rel in $PUBLISHED; do
+    # A directory is restored by removing whatever is there now and copying the
+    # backup back. Copying onto a partially-written directory would nest the old
+    # tree inside the new one instead of replacing it.
+    for rel in $PUBLISHED_DIRS; do
+      rm -rf "${TARGET:?}/$rel"
+      cp -R "$STAGE/backup/$rel" "${TARGET:?}/$rel" || say "could not restore $rel" >&2
+    done
+    for rel in $PUBLISHED_FILES; do
       cp "$STAGE/backup/$rel" "$TARGET/$rel" || say "could not restore $rel" >&2
     done
   fi
   rm -rf "$STAGE"
   exit "$status"
 }
-mkdir -p "$STAGE/backup/.sandcastle" "$STAGE/backup/.github"
+mkdir -p "$STAGE/backup"
 trap restore_published EXIT
 
 publish_file() {
   local rel="$1"
-  mkdir -p "$(dirname "$TARGET/$rel")"
-  cp "$TARGET/$rel" "$STAGE/backup/$rel"
+  mkdir -p "$(dirname "$TARGET/$rel")" "$(dirname "$STAGE/backup/$rel")"
+  cp "$TARGET/$rel" "$STAGE/backup/$rel" || return 1
+  PUBLISHED_FILES="$rel $PUBLISHED_FILES"
   cp "$WORK/$rel" "$TARGET/$rel" || return 1
-  PUBLISHED="$rel $PUBLISHED"
+  return 0
+}
+
+publish_dir() {
+  local rel="$1"
+  mkdir -p "$(dirname "$STAGE/backup/$rel")"
+  cp -R "$TARGET/$rel" "$STAGE/backup/$rel" || return 1
+  PUBLISHED_DIRS="$rel $PUBLISHED_DIRS"
+  rm -rf "${TARGET:?}/$rel"
+  cp -R "$WORK/$rel" "${TARGET:?}/$rel" || return 1
   return 0
 }
 
@@ -441,18 +468,13 @@ for rel in .sandcastle/Dockerfile .sandcastle/profile.ts .sandcastle/main.ts; do
   publish_file "$rel" || { say "could not publish $rel" >&2; exit 1; }
 done
 if ! diff -rq "$TARGET/.github/workflows" "$WORK/.github/workflows" >/dev/null 2>&1; then
-  # Back up the whole directory, then copy it across, so a partial copy is undone
-  # by restoring the directory rather than by re-copying per file.
-  cp -R "$TARGET/.github/workflows" "$STAGE/backup/.github/workflows"
-  PUBLISHED=".github/workflows $PUBLISHED"
-  rm -rf "$TARGET/.github/workflows"
-  cp -R "$WORK/.github/workflows" "$TARGET/.github/workflows" \
-    || { say "could not publish .github/workflows" >&2; exit 1; }
+  publish_dir ".github/workflows" || { say "could not publish .github/workflows" >&2; exit 1; }
 fi
 publish_file ".afk-bootstrap.json" || { say "could not publish .afk-bootstrap.json" >&2; exit 1; }
 
 # Every write is done; disarm the rollback rather than restoring over it.
-PUBLISHED=""
+PUBLISHED_FILES=""
+PUBLISHED_DIRS=""
 trap 'rm -rf "$STAGE"' EXIT
 
 say ""

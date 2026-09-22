@@ -30,6 +30,8 @@ boundary.
 | AFK-B17 | Linux host, verbatim previous-template fixture | The checked-in `test/fixtures/legacy-1.1.x` project | The fixture with each retired provider as the workflow fallback, then an unrecognised one | Run `upgrade-afk.sh` against each | Every retired fallback becomes `claude-stepfun`; `claude` and `claude-stepfun` are left alone; an unrecognised fallback is refused and the tree is byte-identical | Test trap removes the temporary copies |
 | AFK-B18 | Linux host, verbatim previous-template fixture | The checked-in `test/fixtures/handport-1.1.x` project | The hand-ported shape: single stepfun entry, endpoint baked with a BuildKit secret | Run `upgrade-afk.sh` against it | It converges to a single dispatch arm pointed at the mounted settings file, and no baked-endpoint reference survives | Test trap removes the temporary copy |
 | AFK-B19 | Linux host, generated Node scaffold | Bootstrap script and templates from the same checkout | A freshly scaffolded project | Run `bootstrap-afk.sh` and read its next-steps report | The report recommends only a profile the generated scaffold accepts | Test trap removes the temporary repo |
+| AFK-B20 | Linux host, verbatim previous-template fixture | A `cp` shim that fails only the metadata publish | The fixture plus an extra workflow file, so the workflow directory is also republished | Run `upgrade-afk.sh` with the shim on `PATH` | Every file is byte-identical afterwards, including the extra workflow, and restoring the workflow directory replaces it rather than nesting a second `workflows/` inside | Test trap removes the temporary copy and shim |
+| AFK-B21 | Linux host, verbatim previous-template fixture | The fixture with a provider added to the profile table | `profile.ts` carrying an added provider | Run `upgrade-afk.sh` against it | Refused, tree byte-identical: an added provider needs no change outside the table, so it must not be accepted as a generated shape | Test trap removes the temporary copy |
 
 ## Traceability
 
@@ -54,6 +56,8 @@ boundary.
 | Retired fallbacks cannot survive | Upgrade a previous-template project onto the current provider | AFK-B17 |
 | A hand-port converges onto the mount | Upgrade a previous-template project onto the current provider | AFK-B18 |
 | The handoff recommends a profile that works | Scaffold a Node project without an Auto-Test checkout | AFK-B19 |
+| A failed publish restores the project | Upgrade refuses what it cannot migrate safely | AFK-B20 |
+| A project provider is never silently dropped | Upgrade refuses what it cannot migrate safely | AFK-B21 |
 | The endpoint is mounted, not baked | Scaffold a Node project without an Auto-Test checkout | AFK-B14 |
 
 ## Risk Checks
@@ -189,7 +193,7 @@ Additional authorized delivery verification:
   (`5fed7dcb14b856e090e581d8840c6c7519ccb820`), and AI-Ops PR #69
   (`46c12d893fbb99c0777c89acf2bd7bc96523ed30`).
 
-### AFK-B14 – B19 — upgrade path
+### AFK-B14 – B21 — upgrade path
 
 Executed on `2026-09-22T17:59+08:00` against `refactor/afk-stepfun-template`
 (base `b36e4a36d72e5ff565e29a6bd9c16c675508da8b`), Linux host,
@@ -231,6 +235,20 @@ Node `v24.15.0`, Python `3.13.13`, ShellCheck `0.11.0`.
   hand-port left at the top of the Dockerfile, which the mount makes obsolete.
 - **AFK-B19 — passed.** The bootstrap report recommends `claude-stepfun` and
   names the settings file it needs; no retired profile appears in it.
+- **AFK-B20 — passed.** With a `cp` shim failing only the metadata publish (the
+  one copy whose source is the staged project and whose target is
+  `.afk-bootstrap.json`), the script reports the failure and restores every file
+  — checksums are identical to before the run, the extra workflow is back, and
+  no nested `workflows/workflows` exists. Registering each destination before its
+  write is what makes this hold when a copy fails partway rather than cleanly.
+- **AFK-B21 — passed.** Adding a provider to the profile table is refused and the
+  tree is byte-identical. Comparing the table verbatim against the historical
+  shapes is what makes this hold: normalising the table away would accept a table
+  a project had extended, and the migration would then delete that provider.
+- Also verified: the `1.3.0` finding re-reported on `upgrade-afk.sh:202` is
+  stale. Line 202 is now the minor-range gate
+  (`[ "$from_minor" -eq 1 ] && [ "$to_minor" -eq 2 ]`); the full-version
+  comparison that refuses a downgrade sits above it.
 
 Deterministic checks at the same identity: `bash -n` on `bootstrap-afk.sh`,
 `upgrade-afk.sh`, `test/smoke.sh` (`test/trusted-pr-delivery.sh` unchanged);

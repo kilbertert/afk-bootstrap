@@ -356,7 +356,7 @@ BEFORE="$(cat "$UPGRADE_TARGET/.sandcastle/Dockerfile")"
 "$S/upgrade-afk.sh" "$UPGRADE_TARGET" --dry-run >/dev/null
 [ "$BEFORE" = "$(cat "$UPGRADE_TARGET/.sandcastle/Dockerfile")" ] \
   || { echo "dry run wrote to a template file" >&2; exit 1; }
-[ "$(cat "$UPGRADE_TARGET/.afk-bootstrap.json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).afk_template_version))')" = "1.1.5" ] \
+[ "$(node -e 'process.stdout.write(String(require(process.argv[1]).afk_template_version))' "$UPGRADE_TARGET/.afk-bootstrap.json")" = "1.1.5" ] \
   || { echo "dry run wrote the recorded version" >&2; exit 1; }
 
 echo "$LANGUAGE smoke test passed"

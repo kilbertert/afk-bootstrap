@@ -24,6 +24,15 @@ boundary.
 | AFK-B11 | GitHub Actions syntax job | Python 3 and PyYAML available | The three `pull_request_target` workflows and delivery-label workflows | Run `python3 test/workflows.py` | Mutation jobs require same-repository owner PRs, execute controller scripts, avoid runtime skill installation, keep write tokens out of candidate execution, reject masked GitHub API failures, and fail closed without AGENT_PAT | None |
 | AFK-B12 | Live self-hosted runner canary | Merged template deployment, online runner, configured read token and AGENT_PAT | One owner-authored canary PR | Run `agent:review`, retain the workflow URL, and inspect the resulting branch/review | The review uses current main, completes through trusted bundle delivery, posts its review, and leaves no blocked label | Close or merge the disposable canary PR and remove temporary labels/branches |
 | AFK-B13 | Linux host, generated Node/Python scaffolds | Bootstrap script and templates from the same checkout | Shared coding standards plus every code-changing implement/review prompt | Run both smoke cases and inspect the generated prompt graph | Both providers receive the same economy ladder, root-cause, dependency, compatibility, module, vertical-slice, and durable-architecture contract without a container-installed skill | Test traps remove temporary repos |
+| AFK-B14 | Linux host, verbatim previous-template fixture | The checked-in `test/fixtures/legacy-1.1.x` project | A 1.1.x project with the retired five-profile map, old dispatch arm, and `psydo` fallback | Run `upgrade-afk.sh` on a copy of the fixture; rerun it; rerun with `--dry-run` | The dispatch arm becomes `claude-stepfun`, no retired profile remains in the generated files, the workflow fallback updates, the new version is recorded, a second run reports "already at", a dry run writes nothing, and a project-owned document naming a retired profile is reported rather than rewritten | Test trap removes the temporary copy |
+| AFK-B15 | Linux host, generated Node/Python scaffolds | Bootstrap script and templates from the same checkout | A target with no `.afk-bootstrap.json`, an unrecognised dispatch arm, a customised `main.ts` usage anchor, and a missing `profile.ts` | Run `upgrade-afk.sh` against each and checksum the tree before and after | Each fails closed without writing; every file is byte-identical afterwards, so a step failing after an earlier write cannot strand a migrated Dockerfile under old metadata | Test trap removes temporary repos |
+| AFK-B16 | Linux host, verbatim previous-template fixture | The checked-in `test/fixtures/legacy-1.1.x` project | The same fixture with its recorded version set to `1.1.1` | Run `upgrade-afk.sh` against it | The migration applies rather than being refused for falling outside an enumerated version list | Test trap removes the temporary copy |
+| AFK-B17 | Linux host, verbatim previous-template fixture | The checked-in `test/fixtures/legacy-1.1.x` project | The fixture with each retired provider as the workflow fallback, then an unrecognised one | Run `upgrade-afk.sh` against each | Every retired fallback becomes `claude-stepfun`; `claude` and `claude-stepfun` are left alone; an unrecognised fallback is refused and the tree is byte-identical | Test trap removes the temporary copies |
+| AFK-B18 | Linux host, verbatim previous-template fixture | The checked-in `test/fixtures/handport-1.1.x` project | The hand-ported shape: single stepfun entry, endpoint baked with a BuildKit secret | Run `upgrade-afk.sh` against it | It converges to a single dispatch arm pointed at the mounted settings file, and no baked-endpoint reference survives | Test trap removes the temporary copy |
+| AFK-B19 | Linux host, generated Node scaffold | Bootstrap script and templates from the same checkout | A freshly scaffolded project | Run `bootstrap-afk.sh` and read its next-steps report | The report recommends only a profile the generated scaffold accepts | Test trap removes the temporary repo |
+| AFK-B20 | Linux host, verbatim previous-template fixture | A `cp` shim that fails only the metadata publish | The fixture plus an extra workflow file, so the workflow directory is also republished | Run `upgrade-afk.sh` with the shim on `PATH` | Every file is byte-identical afterwards, including the extra workflow, and restoring the workflow directory replaces it rather than nesting a second `workflows/` inside | Test trap removes the temporary copy and shim |
+| AFK-B21 | Linux host, verbatim previous-template fixture | The fixture with a provider added to the profile table | `profile.ts` carrying an added provider | Run `upgrade-afk.sh` against it | Refused, tree byte-identical: an added provider needs no change outside the table, so it must not be accepted as a generated shape | Test trap removes the temporary copy |
+| AFK-B22 | Linux host, verbatim previous-template fixture | A workflow named `.yaml` instead of `.yml`, and a tool checkout whose own path contains a space | Both extensions and a spaced path | Run `upgrade-afk.sh` against each | The `.yaml` workflow's retired fallback is rewritten; a spaced checkout path migrates rather than failing to resolve its reference shapes | Test trap removes the temporary copies |
 
 ## Traceability
 
@@ -42,6 +51,16 @@ boundary.
 | Current default-branch review base | Persistent runner review uses the current default branch | AFK-B10, AFK-B12 |
 | Trusted pull-request control plane | Candidate code cannot receive host delivery credentials; untrusted pull requests cannot start mutation workflows | AFK-B10, AFK-B11, AFK-B12 |
 | Delivery credential failures are blocked | Missing delivery credentials stop the workflow | AFK-B11, AFK-B12 |
+| An existing project can be upgraded | Upgrade a previous-template project onto the current provider | AFK-B14 |
+| Upgrade refuses an unsafe migration | Upgrade refuses what it cannot migrate safely | AFK-B15 |
+| Upgrade covers the whole 1.1.x range | Upgrade accepts every version the single step applies to | AFK-B16 |
+| Retired fallbacks cannot survive | Upgrade a previous-template project onto the current provider | AFK-B17 |
+| A hand-port converges onto the mount | Upgrade a previous-template project onto the current provider | AFK-B18 |
+| The handoff recommends a profile that works | Scaffold a Node project without an Auto-Test checkout | AFK-B19 |
+| A failed publish restores the project | Upgrade refuses what it cannot migrate safely | AFK-B20 |
+| A project provider is never silently dropped | Upgrade refuses what it cannot migrate safely | AFK-B21 |
+| Both workflow extensions and spaced paths work | Upgrade accepts every version the single step applies to | AFK-B22 |
+| The endpoint is mounted, not baked | Scaffold a Node project without an Auto-Test checkout | AFK-B14 |
 
 ## Risk Checks
 
@@ -175,3 +194,70 @@ Additional authorized delivery verification:
   (`61b26fbc0de6aff9a7668daf653c6effacf78cee`), genesis-evidence PR #135
   (`5fed7dcb14b856e090e581d8840c6c7519ccb820`), and AI-Ops PR #69
   (`46c12d893fbb99c0777c89acf2bd7bc96523ed30`).
+
+### AFK-B14 – B21 — upgrade path
+
+Executed on `2026-09-22T17:59+08:00` against `refactor/afk-stepfun-template`
+(base `b36e4a36d72e5ff565e29a6bd9c16c675508da8b`), Linux host,
+Node `v24.15.0`, Python `3.13.13`, ShellCheck `0.11.0`.
+
+- **AFK-B14 — passed.** `test/smoke.sh node` and `test/smoke.sh python` both
+  copy the checked-in `test/fixtures/legacy-1.1.x` fixture (verbatim Auto-Test
+  1.1.2 output: five-profile map, `claude-ark|agentrouter|psydo` dispatch arm,
+  `psydo` workflow fallback) and run `upgrade-afk.sh` against it. Observed:
+  the dispatch arm becomes `claude-stepfun`; `claude-ark|agentrouter|psydo` is
+  gone from the Dockerfile; the workflow fallback becomes `claude-stepfun`; the
+  usage string updates; `.afk-bootstrap.json` records `1.2.0`; a second run
+  reports `already at 1.2.0`; the fixture's project-owned `docs/afk-workflow.md`
+  still names `claude-ark` after the run and its path is listed in the report.
+  The migration was also run against all four live consumer checkouts and
+  AI-Ops in a scratch copy: no duplicate dispatch arm, no stale arm, no baked
+  secret reference, correct version and fallback in every case.
+- **AFK-B15 — passed.** Four targets each make `upgrade-afk.sh` exit non-zero:
+  no `.afk-bootstrap.json`; a Dockerfile dispatch arm replaced with an
+  unrecognised one; a `main.ts` usage anchor customised to a third value; and a
+  missing `profile.ts`. For each of the three anchor cases the script now stages
+  every write and publishes only after the last step succeeds, so a checksum of
+  the whole tree is identical before and after — the first two versions of this
+  script rewrote the Dockerfile and then failed, which is exactly what the
+  contract forbids. A `--dry-run` also leaves the tree byte-identical.
+- **AFK-B16 — passed.** The fixture with its recorded version set to `1.1.1`
+  upgrades rather than being refused, confirming the step is selected by range
+  shape rather than an enumerated version list.
+- **AFK-B17 — passed.** With each of `psydo`, `claude-ark`, `agentrouter`, and
+  `aliyun-deepseek` as the workflow fallback, the migration rewrites it to
+  `claude-stepfun`; `claude` and `claude-stepfun` are left unchanged; an
+  unrecognised fallback exits non-zero with the tree byte-identical. The first
+  version of this loop read the fallbacks from the file it was rewriting, so a
+  workflow carrying the same fallback twice failed on the second pass — the
+  fallback set is now collected before any rewrite.
+- **AFK-B18 — passed.** The hand-port shape converges: one dispatch arm, pointed
+  at the mounted settings path, with no `STEPFUN_BASE_URL`, secret mount, or
+  baked settings reference left — including the build instruction comment the
+  hand-port left at the top of the Dockerfile, which the mount makes obsolete.
+- **AFK-B19 — passed.** The bootstrap report recommends `claude-stepfun` and
+  names the settings file it needs; no retired profile appears in it.
+- **AFK-B20 — passed.** With a `cp` shim failing only the metadata publish (the
+  one copy whose source is the staged project and whose target is
+  `.afk-bootstrap.json`), the script reports the failure and restores every file
+  — checksums are identical to before the run, the extra workflow is back, and
+  no nested `workflows/workflows` exists. Registering each destination before its
+  write is what makes this hold when a copy fails partway rather than cleanly.
+- **AFK-B21 — passed.** Adding a provider to the profile table is refused and the
+  tree is byte-identical. Comparing the table verbatim against the historical
+  shapes is what makes this hold: normalising the table away would accept a table
+  a project had extended, and the migration would then delete that provider.
+- **AFK-B22 — passed.** A workflow named `custom-agent.yaml` keeps its retired
+  fallback under the old glob and is now rewritten; and a tool checkout whose
+  own path contains a space migrates rather than splitting the reference list.
+- Also verified: the `1.3.0` finding re-reported on `upgrade-afk.sh:202` is
+  stale. Line 202 is now the minor-range gate
+  (`[ "$from_minor" -eq 1 ] && [ "$to_minor" -eq 2 ]`); the full-version
+  comparison that refuses a downgrade sits above it. It has been re-reported
+  unchanged across two rounds against line numbers that no longer hold that code.
+
+Deterministic checks at the same identity: `bash -n` on `bootstrap-afk.sh`,
+`upgrade-afk.sh`, `test/smoke.sh` (`test/trusted-pr-delivery.sh` unchanged);
+`python3 test/workflows.py` → `workflow structure passed (9 files)`;
+ShellCheck on the changed shell scripts → clean (no new findings relative to
+`b36e4a3`); `test/smoke.sh node` and `test/smoke.sh python` → passed.

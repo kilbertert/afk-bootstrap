@@ -41,6 +41,27 @@ Auto-Test 是首个验证项目和普通消费者，不再承担模板发布职�
 
 **它只生成文件，绝不提交、不推送。** 交付由宿主 runner 负责（branch → PR → CI → merge）。
 
+### 升级已装配的项目
+
+`bootstrap-afk.sh` 见到 `.sandcastle/` 就拒绝，因此它只能新建。已有项目走升级脚本：
+
+```bash
+# 先看会改什么
+./upgrade-afk.sh ~/Projects/某仓库 --dry-run
+./upgrade-afk.sh ~/Projects/某仓库
+```
+
+它按版本逐步迁移，并把新版本号写进 `.afk-bootstrap.json`。**锚点式，不是模板重渲染**：
+装配后的 Dockerfile 归项目所有（README 就让项目自己打开 Playwright 块），整体重渲染会
+把它悄悄改回去。因此每一步只匹配上一个模板确实生成的那几行；锚点对不上就拒绝，绝不猜。
+项目自己的散文（如 `docs/afk-workflow.md`）只报告不修改——那是项目的事实来源。
+
+**拒绝即无副作用**：所有改动先写进暂存副本，全部步骤都成功才发布回项目。否则前一步
+已改、后一步失败，就会留下「Dockerfile 已是新版、元数据还写着旧版」的半迁移状态。
+
+**一个坑**：升级后必须先用新 Dockerfile 重建镜像，再改 `AFK_PROFILE` 变量。顺序反了，
+旧镜像没有对应的 dispatch 分支，wrapper 直接 `exit 2`。
+
 ---
 
 ## 装配后项目长什么样
@@ -71,12 +92,12 @@ Auto-Test 是首个验证项目和普通消费者，不再承担模板发布职�
 ```
 
 生成项目内 AFK 载荷 → 开 PR #70 → `quality` CI 通过 → squash 合并 → 本地 main 同步。
-随后：`sandcastle:genesis-evidence` 镜像构建 ✅、`AFK_PROFILE=claude-ark` 变量设置 ✅、4 个 `agent:*` labels 创建 ✅。
+随后：`sandcastle:genesis-evidence` 镜像构建 ✅、`AFK_PROFILE=claude-stepfun` 变量设置 ✅、4 个 `agent:*` labels 创建 ✅。
 
 ```bash
 cd ~/Projects/genesis-evidence
 npm install                        # 首次：生成 node_modules
-AFK_PROFILE=claude-ark pnpm afk -- <一个 open 的 issue 号>
+AFK_PROFILE=claude-stepfun pnpm afk -- <一个 open 的 issue 号>
 ```
 
 ---
@@ -95,31 +116,42 @@ AFK 有**两条并行机制**，别混为一谈（早期会话曾误读并传播
 
 ## 模型供应商（服务器全局，新项目零新凭据）
 
-`claude` / `claude-ark` / `agentrouter` / `psydo` / `aliyun-deepseek` profile 都在服务器本地。
-Codex profile 优先读 `~/.config/afk/`，并兼容现有的旧配置路径；新项目只要选一个：
+模板只保留两个 profile，端点都是宿主上的一个 settings 文件，只读挂进沙箱：
+
+| profile | 端点 | 宿主文件 |
+|---|---|---|
+| `claude` | Anthropic API | 宿主 shell 已导出的凭据 |
+| `claude-stepfun` | StepFun 原生 Anthropic Messages API | `~/cliproxyapi/settings.stepfun.json` |
 
 ```bash
-gh variable set AFK_PROFILE --repo <owner/name> --body agentrouter   # 或 claude-ark / psydo / aliyun-deepseek
+gh variable set AFK_PROFILE --repo <owner/name> --body claude-stepfun
 ```
 
-默认模型由对应的服务器全局 profile 配置；`psydo → gpt-5.6-sol`，`aliyun-deepseek → deepseek-v4-pro-0813`。
-也可显式覆盖：`AFK_PROFILE=claude-ark AFK_MODEL=<model> pnpm afk -- <issue>`。
+默认模型由该 settings 文件里的 `ANTHROPIC_DEFAULT_*_MODEL` 决定。文件在别处时用
+`AFK_STEPFUN_SETTINGS` 指过去。
 
-### 模型稳定性（慢 / 挂起保护）
+**为什么是挂载而不是烤进镜像**：烤进去的密钥会留在镜像层里，任何能拉这个镜像的人
+都能读出来；轮换密钥还必须记得 `--no-cache`，因为 secret 挂载不会让层缓存失效。
+挂载把密钥留在宿主，轮换就是改一个文件。
 
-部分供应商（尤其 aliyun-deepseek）在完整 session 下会慢或挂起 stall。已内置
-双层保护，可调：
+**已退役**：`claude-ark`、`agentrouter`、`psydo`、`aliyun-deepseek`。前三个解析到
+`cliproxyapi/` 下上游配额已耗尽的 settings 文件，选中必然失败；`aliyun-deepseek`
+曾是唯一的 Codex-provider profile，退役它也让 AFK 不再需要 Codex agent 路径。
+
+### 模型稳定性（挂起保护）
+
+planner 每步有 wall-clock 上限（秒；0 = 不限制）：
 
 ```bash
-# 1) codex 单请求超时 / 重试（秒）
-AFK_REQUEST_TIMEOUT=120 AFK_REQUEST_RETRIES=2
-
-# 2) planner 每步 wall-clock 上限（秒；0 = 不限制）
 AFK_RUN_TIMEOUT=3600     # implement / review 每步
 AFK_MERGE_TIMEOUT=3600   # merger 一步
 ```
 
 超时会把挂起的 agent 当作错误（BLOCKED）并继续，而不是让整个 planner 无限卡住。
+
+单请求级的超时/重试（`AFK_REQUEST_TIMEOUT`）随 `aliyun-deepseek` 的 Codex
+provider 一起退役了——那是它唯一的作用点。两个现存 profile 都走 Claude Code,
+挂起由上面的 wall-clock 兜住。
 
 ---
 

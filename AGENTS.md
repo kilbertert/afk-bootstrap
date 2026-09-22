@@ -35,6 +35,30 @@ the tool prints are your to-do list, not the user's.
   origin` if omitted.
 - `--no-build` skips `docker build` (use while reviewing the diff).
 
+To **upgrade** a project that already has `.sandcastle/`, use `upgrade-afk.sh`
+— `bootstrap-afk.sh` refuses an already-scaffolded target:
+
+```bash
+./upgrade-afk.sh <target-repo> [--dry-run]
+```
+
+It applies each step of the version range recorded in the target's
+`.afk-bootstrap.json`, then writes the new version back. It is **anchored, not
+a template re-render**: a scaffolded Dockerfile is project-owned (the README
+tells projects to enable the Playwright block by uncommenting it), so each step
+matches only the exact lines the previous template generated, and a step whose
+anchor does not match exits non-zero rather than guessing. Project prose is
+reported, never edited. It refuses a major-version jump.
+
+All writes are staged and published only after the last step succeeds, so a
+refused migration leaves every file byte-identical. Without that, a step that
+failed after an earlier step wrote would strand a migrated Dockerfile under
+metadata still claiming the old version.
+
+**Order matters after an upgrade**: rebuild the sandbox image from the new
+Dockerfile *before* changing `AFK_PROFILE`. Pointing the variable at a profile
+the running image does not dispatch on makes the wrapper exit 2.
+
 ## Mechanics
 
 1. Validates target is a git repo, not already scaffolded.
@@ -79,7 +103,7 @@ docker images | grep sandcastle:<slug>   (unless --no-build)
 | `python` | `uv sync --extra dev && uv run pytest && uv run ruff check` | `python3` + `uv` (agent CLIs still come from the node 24 base) |
 
 Both Dockerfiles: node 24 base (carries claude-code + codex 0.146.1), `gh`,
-AFK_PROFILE dispatch wrapper (`claude` vs `claude-ark|agentrouter|psydo`), agent user
+AFK_PROFILE dispatch wrapper (`claude` vs `claude-stepfun`), agent user
 rename with `AGENT_UID`/`AGENT_GID` build args (= host uid/gid).
 
 ## Architecture — two execution paths (read this before comparing to the reference)
@@ -142,19 +166,24 @@ default branch directly.
   in the container). Keep the generated Dockerfile in sync with the project.
 - **Issue number**: the AFK target must be an *open issue*, not a PR (they
   share GitHub's number space).
-- **Model providers are server-global** (`claude`, `claude-ark`, `agentrouter`, `psydo`,
-  `aliyun-deepseek`); a new project adds zero new credentials. Pick one per
-  repo via the `AFK_PROFILE` Actions variable.
-- **Slow/hung providers are guarded**: the scaffold ships codex
-  `request_timeout`/`request_max_retries` (env `AFK_REQUEST_TIMEOUT`,
-  `AFK_REQUEST_RETRIES`) and a planner `withTimeout` wall-clock
-  (`AFK_RUN_TIMEOUT`, `AFK_MERGE_TIMEOUT`, seconds; 0 = no cap). A stalled
-  agent aborts as BLOCKED instead of hanging the loop.
+- **Model providers are server-global** (`claude`, `claude-stepfun`); a new
+  project adds zero new credentials. Pick one per repo via the `AFK_PROFILE`
+  Actions variable. Both mount a host settings file read-only; neither bakes a
+  key into the image, because a baked key is readable from the image layer and
+  rotating it needs `--no-cache`.
+- **Hung providers are guarded**: the planner bounds every step with a
+  wall-clock `withTimeout` (`AFK_RUN_TIMEOUT`, `AFK_MERGE_TIMEOUT`, seconds;
+  0 = no cap). A stalled agent aborts as BLOCKED instead of hanging the loop.
+  The per-request knobs (`AFK_REQUEST_TIMEOUT`, `AFK_REQUEST_RETRIES`) retired
+  with the Codex provider, which was their only consumer.
 
 ## Files
 
 ```
-bootstrap-afk.sh          the tool
+bootstrap-afk.sh          the tool (create; refuses an existing .sandcastle/)
+upgrade-afk.sh            migrate an already-scaffolded project to the current version
+references/               profile.ts shapes the migration recognises, read at run
+                          time — deliberately not under test/, which is not shipped
 scaffold/                 portable runners, skills, prompts, and workflows
 templates/                per-language generated files (node | python)
   - AFK-MANAGED-BLOCK.md  managed phase gate appended to project instructions
@@ -164,7 +193,9 @@ templates/                per-language generated files (node | python)
                             that auto-detects Codex CLI; the snippet just
                             documents the path, no hand-written block)
 TEMPLATE_VERSION          generated-project template SemVer
-test/smoke.sh             Node/Python interface smoke test
+test/smoke.sh             Node/Python interface smoke test (incl. the upgrade path)
+test/fixtures/legacy-1.1.x/  verbatim previous-template output the upgrade is run against
+test/fixtures/handport-1.1.x/ verbatim hand-ported output the upgrade is run against
 acceptance.feature        observable bootstrap acceptance contract
 qa-plan.md                system verification plan and retained results
 README.md                 human-readable guide

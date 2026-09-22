@@ -8,6 +8,7 @@ Feature: Self-contained AFK bootstrap baseline
       When bootstrap-afk runs for the Node language without building an image
       Then the project contains the AFK runners, workflows, official skill pointers, and Node checks
       And the generated profile supports every documented model profile
+      And the generated profile mounts its endpoint instead of baking it into the image
       And the project records the afk-bootstrap template version
       And the planner opens a delivery pull request instead of pushing the default branch
 
@@ -17,6 +18,29 @@ Feature: Self-contained AFK bootstrap baseline
       When bootstrap-afk runs for the Python language without building an image
       Then every generated agent prompt uses the Python verification command
       And the generated Dockerfile contains the Python and uv toolchain
+
+  Rule: an already-scaffolded project can be upgraded to the current template
+
+    Scenario: Upgrade a previous-template project onto the current provider
+      Given a project scaffolded by a previous template version
+      When upgrade-afk runs against it
+      Then the Dockerfile dispatches the current provider profile
+      And the retired provider profiles are gone from the generated files
+      And the workflows fall back to the current profile
+      And the project records the new template version
+      And a project-owned document naming a retired profile is reported, not rewritten
+
+    Scenario: Upgrade refuses what it cannot migrate safely
+      Given a project with no template provenance, or a file whose anchor the migration does not recognise
+      When upgrade-afk runs against it
+      Then the command fails without writing
+      And every file is byte-identical to its state before the run
+      And a dry run writes nothing
+
+    Scenario: Upgrade accepts every version the single step applies to
+      Given a project recorded at any 1.1.x template version
+      When upgrade-afk runs against it
+      Then the migration is applied rather than refused for being outside an enumerated list
 
   Rule: repository checks detect scaffold drift
 

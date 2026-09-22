@@ -207,8 +207,10 @@ Next steps (host runner owns delivery — this script commits nothing):
 
 1. Commit the scaffold on a task branch, push, open a PR, and merge it.
 2. Pick the model provider for Actions:
-     gh variable set AFK_PROFILE --repo $REPO --body claude-ark
-   (or agentrouter / psydo / aliyun-deepseek; profiles are server-global, no new credentials)
+     gh variable set AFK_PROFILE --repo $REPO --body claude-stepfun
+   (or claude, which talks to the Anthropic API directly; profiles are
+   server-global, no new credentials. claude-stepfun needs the host file
+   ~/cliproxyapi/settings.stepfun.json, or AFK_STEPFUN_SETTINGS pointing at it)
 3. Create the AFK labels once:
   gh label create agent:implement  --repo $REPO --color 000000 --force
      gh label create agent:in-progress --repo $REPO --color 0e8a16 --force
@@ -218,8 +220,8 @@ Next steps (host runner owns delivery — this script commits nothing):
    secret for host-side label chaining and the read-only AFK_AGENT_READ_TOKEN
    secret for Docker agents. Until then, drive it locally:
      cd $TARGET
-     AFK_PROFILE=claude-ark pnpm afk -- <issue-number>     # single issue
-     AFK_PROFILE=claude-ark pnpm ralph                     # planner loop
+     AFK_PROFILE=claude-stepfun pnpm afk -- <issue-number>   # single issue
+     AFK_PROFILE=claude-stepfun pnpm ralph                   # planner loop
 5. Use the installed official skills in order: /to-spec, then /to-tickets.
    Label the approved PRD agent:implement to run the retained PRD executor.
    The label-driven Actions (implement/review/update-branch/promote-queued/

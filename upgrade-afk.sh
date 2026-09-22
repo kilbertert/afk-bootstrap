@@ -79,12 +79,89 @@ subst() {
   ' "$file" "$from" "$to"
 }
 
-# Major bumps change structure this script will not guess at, and a downgrade
-# is not a migration.
-old_major="${FROM%%.*}"
-new_major="${TEMPLATE_VERSION%%.*}"
-if [ "$old_major" != "$new_major" ]; then
+# Is this file a shape a template generated, or one a project has edited?
+#
+# Replacing profile.ts is the only step that discards a file rather than editing
+# a line, so this decides what may be discarded. A presence test is not enough: a
+# project that *added* a mount or an env var keeps every marker the scaffold has,
+# so the file is compared to the two shapes that actually exist in the field —
+# the pristine 1.1.x output and the `claude-stepfun` hand-port — with the two
+# things a project legitimately varies normalised away: the profile table, which
+# a hand-port trimmed, and the image name, which is per-project. Anything else is
+# a project edit and is refused rather than overwritten.
+profile_is_generated_shape() {
+  local candidate="$1"
+  local refs="$S/test/fixtures/legacy-1.1.x/.sandcastle/profile.ts $S/test/fixtures/handport-1.1.x/.sandcastle/profile.ts"
+  local reference
+  for reference in $refs; do
+    [ -f "$reference" ] || { echo "profile.ts: migration reference missing: $reference" >&2; return 1; }
+  done
+  # shellcheck disable=SC2086
+  profile_matches "$candidate" $refs
+}
+
+# Compare a profile.ts to reference shape(s) with the two project-variable
+# values normalised away, so its exact bytes are never the question.
+profile_matches() {
+  node -e '
+    const fs = require("fs");
+    const [candidate, ...references] = process.argv.slice(1);
+    const normalise = (source) => source
+      .replace(/const profiles = \{[\s\S]*?\} as const;/, "const profiles = TABLE;")
+      .replace(/(imageName: process\.env\.AFK_IMAGE \?\? ")[^"]*(")/, "IMAGE_NAME");
+    let actual;
+    try {
+      actual = normalise(fs.readFileSync(candidate, "utf8"));
+    } catch {
+      process.exit(1);
+    }
+    const match = references.some((reference) => {
+      try {
+        return normalise(fs.readFileSync(reference, "utf8")) === actual;
+      } catch {
+        return false;
+      }
+    });
+    process.exit(match ? 0 : 1);
+  ' "$@"
+}
+
+# A migration only ever moves forward within one major version. Comparing the
+# majors alone is not enough: a project already at 1.3.0 must not be pulled
+# back to this script's 1.2.0, so the full versions are compared.
+parse_semver() {
+  node -e '
+    const raw = process.argv[1];
+    const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(raw);
+    if (!match) {
+      console.error("invalid SemVer: " + raw);
+      process.exit(1);
+    }
+    process.stdout.write(match.slice(1).join(" "));
+  ' "$1"
+}
+if ! FROM_PARTS="$(parse_semver "$FROM")"; then
+  echo ".afk-bootstrap.json has an invalid afk_template_version: $FROM" >&2
+  exit 1
+fi
+# shellcheck disable=SC2086
+set -- $FROM_PARTS
+from_major=$1 from_minor=$2 from_patch=$3
+if ! TO_PARTS="$(parse_semver "$TEMPLATE_VERSION")"; then
+  echo "TEMPLATE_VERSION is not valid SemVer: $TEMPLATE_VERSION" >&2
+  exit 1
+fi
+# shellcheck disable=SC2086
+set -- $TO_PARTS
+to_major=$1 to_minor=$2 to_patch=$3
+
+if [ "$from_major" != "$to_major" ]; then
   echo "refusing a major template jump ($FROM -> $TEMPLATE_VERSION); migrate by hand" >&2
+  exit 1
+fi
+if [ "$from_minor" -gt "$to_minor" ] ||
+   { [ "$from_minor" -eq "$to_minor" ] && [ "$from_patch" -gt "$to_patch" ]; }; then
+  echo "refusing to downgrade ($FROM -> $TEMPLATE_VERSION)" >&2
   exit 1
 fi
 if [ "$FROM" = "$TEMPLATE_VERSION" ]; then
@@ -109,7 +186,7 @@ cp "$TARGET/.afk-bootstrap.json" "$WORK/.afk-bootstrap.json"
 # the only Codex-provider profile. A run selecting any of them failed before the
 # agent started. They are replaced by claude + claude-stepfun, both Claude Code
 # profiles driven by a mounted host settings file.
-if [ "$TEMPLATE_VERSION" = "1.2.0" ] && [ "$FROM" != "1.2.0" ]; then
+if [ "$from_minor" -eq 1 ] && [ "$to_minor" -eq 2 ]; then
   say "== $FROM -> $TEMPLATE_VERSION: single mount-based provider =="
 
   # 1. Dockerfile dispatch arm. Anchor is the exact arm the old templates wrote.
@@ -143,6 +220,18 @@ if [ "$TEMPLATE_VERSION" = "1.2.0" ] && [ "$FROM" != "1.2.0" ]; then
       const arm = lines.findIndex((l) => l.includes("/home/agent/.afk-stepfun-settings.json"));
       if (arm >= 0) lines.splice(arm, 1);
 
+      // The hand-port also documented the secret build invocation at the top of
+      // the file. Once the endpoint is mounted that instruction tells a reader to
+      // build an image the migration just removed, so it goes with it.
+      const doc = lines.findIndex((l) => l.includes("--secret id=stepfun_api_key"));
+      if (doc >= 0) {
+        let from = doc;
+        while (from > 0 && lines[from - 1].trimStart().startsWith("#")) from -= 1;
+        let to = doc;
+        while (to + 1 < lines.length && lines[to + 1].trimStart().startsWith("#")) to += 1;
+        lines.splice(from, to - from + 1);
+      }
+
       // The baked settings block: its ARG line through the chmod that ends
       // its RUN, plus the comment header directly above the ARG.
       const start = lines.findIndex((l) => l.startsWith("ARG STEPFUN_BASE_URL="));
@@ -167,17 +256,28 @@ if [ "$TEMPLATE_VERSION" = "1.2.0" ] && [ "$FROM" != "1.2.0" ]; then
     note "Dockerfile: no baked StepFun arm or secret block to remove"
   fi
 
-  # 3. profile.ts. Both the 1.1.x five-entry map and a hand-ported single-entry
-  #    map are replaced by the scaffold's own file, because every profile here
-  #    is settings-driven and the scaffold's version is the contract. The one
-  #    project-specific value, the image name, is carried over.
+  # 3. profile.ts. This is the one step that replaces a file rather than editing
+  #    a line, so it verifies what it is about to discard. A project may have
+  #    added a mount, an env var, or a provider of its own to claudeProfile;
+  #    replacing that wholesale would delete the change and record success.
+  #    Only the two generated shapes are migrated — the 1.1.x five-profile map,
+  #    and the single-provider map a project may have hand-ported — identified by
+  #    their profile table and the scaffold body they kept. Anything else is
+  #    reported as a project edit this script will not overwrite.
   PROF="$WORK/.sandcastle/profile.ts"
   IMAGE_NAME="$(grep -oE 'AFK_IMAGE \?\? "[^"]*"' "$PROF" | sed -E 's/.*"([^"]*)"/\1/')"
   [ -n "$IMAGE_NAME" ] || { echo "profile.ts: cannot read the AFK_IMAGE default" >&2; exit 1; }
-  if cmp -s "$PROF" "$S/scaffold/.sandcastle/profile.ts"; then
+  if profile_matches "$PROF" "$S/scaffold/.sandcastle/profile.ts"; then
     note "profile.ts: already current"
-  else
+  elif profile_is_generated_shape "$PROF"; then
     sed "s|__AFK_IMAGE__|${IMAGE_NAME}|" "$S/scaffold/.sandcastle/profile.ts" > "$PROF"
+  else
+    say ""
+    say "profile.ts is not a generated shape — it has project edits this script"
+    say "will not overwrite. Migrate .sandcastle/profile.ts by hand: it must keep"
+    say "only the claude and claude-stepfun profiles, with the endpoint supplied"
+    say "by the mounted settings file (see .sandcastle/Dockerfile)."
+    exit 1
   fi
 
   # 4. main.ts usage string. Both anchors are checked, so a file whose entry
@@ -223,6 +323,17 @@ else
   exit 1
 fi
 
+# The staged metadata is rewritten here, before the change report, so a dry run
+# lists .afk-bootstrap.json like every other file it would touch.
+node -e '
+  const fs = require("fs");
+  const [path, version] = process.argv.slice(1);
+  const metadata = JSON.parse(fs.readFileSync(path, "utf8"));
+  metadata.templateVersion = Number(String(version).split(".")[0]);
+  metadata.afk_template_version = version;
+  fs.writeFileSync(path, JSON.stringify(metadata, null, 2) + "\n");
+' "$WORK/.afk-bootstrap.json" "$TEMPLATE_VERSION"
+
 # ---- report and publish ----------------------------------------------------
 # What changed is derived by comparing staged against original, so it cannot
 # drift from what the steps actually did.
@@ -255,20 +366,53 @@ if [ "$CHANGED" = "0" ]; then
   say "template files already current for $TEMPLATE_VERSION"
 fi
 
-node -e '
-  const fs = require("fs");
-  const [path, version] = process.argv.slice(1);
-  const metadata = JSON.parse(fs.readFileSync(path, "utf8"));
-  metadata.templateVersion = Number(String(version).split(".")[0]);
-  metadata.afk_template_version = version;
-  fs.writeFileSync(path, JSON.stringify(metadata, null, 2) + "\n");
-' "$WORK/.afk-bootstrap.json" "$TEMPLATE_VERSION"
+# Staging protects the transform phase, but publishing still mutates the target
+# one file at a time. Back every destination up first and restore all of them if
+# any write fails, so an interrupted or failing publish cannot leave a migrated
+# Dockerfile next to metadata that still claims the old version.
+PUBLISHED=""
+restore_published() {
+  local status=$?
+  if [ -n "$PUBLISHED" ]; then
+    say "publish failed; restoring the project" >&2
+    for rel in $PUBLISHED; do
+      cp "$STAGE/backup/$rel" "$TARGET/$rel" || say "could not restore $rel" >&2
+    done
+  fi
+  rm -rf "$STAGE"
+  exit "$status"
+}
+mkdir -p "$STAGE/backup/.sandcastle" "$STAGE/backup/.github"
+trap restore_published EXIT
 
-cp "$WORK/.sandcastle/Dockerfile" "$TARGET/.sandcastle/Dockerfile"
-cp "$WORK/.sandcastle/profile.ts" "$TARGET/.sandcastle/profile.ts"
-cp "$WORK/.sandcastle/main.ts" "$TARGET/.sandcastle/main.ts"
-cp "$WORK/.github/workflows/." "$TARGET/.github/workflows/" -R
-cp "$WORK/.afk-bootstrap.json" "$TARGET/.afk-bootstrap.json"
+publish_file() {
+  local rel="$1"
+  mkdir -p "$(dirname "$TARGET/$rel")"
+  cp "$TARGET/$rel" "$STAGE/backup/$rel"
+  cp "$WORK/$rel" "$TARGET/$rel" || return 1
+  PUBLISHED="$rel $PUBLISHED"
+  return 0
+}
+
+# Metadata goes last: until every content file is in place it should keep
+# describing the version the tree actually is.
+for rel in .sandcastle/Dockerfile .sandcastle/profile.ts .sandcastle/main.ts; do
+  publish_file "$rel" || { say "could not publish $rel" >&2; exit 1; }
+done
+if ! diff -rq "$TARGET/.github/workflows" "$WORK/.github/workflows" >/dev/null 2>&1; then
+  # Back up the whole directory, then copy it across, so a partial copy is undone
+  # by restoring the directory rather than by re-copying per file.
+  cp -R "$TARGET/.github/workflows" "$STAGE/backup/.github/workflows"
+  PUBLISHED=".github/workflows $PUBLISHED"
+  rm -rf "$TARGET/.github/workflows"
+  cp -R "$WORK/.github/workflows" "$TARGET/.github/workflows" \
+    || { say "could not publish .github/workflows" >&2; exit 1; }
+fi
+publish_file ".afk-bootstrap.json" || { say "could not publish .afk-bootstrap.json" >&2; exit 1; }
+
+# Every write is done; disarm the rollback rather than restoring over it.
+PUBLISHED=""
+trap 'rm -rf "$STAGE"' EXIT
 
 say ""
 say "== upgraded $TARGET: $FROM -> $TEMPLATE_VERSION =="

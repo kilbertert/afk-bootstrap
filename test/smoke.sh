@@ -323,6 +323,53 @@ cp "$UPGRADE_TARGET/.sandcastle/Dockerfile" "$NO_PROVENANCE/.sandcastle/"
 if "$S/upgrade-afk.sh" "$NO_PROVENANCE" >/dev/null 2>&1; then
   echo "upgrade accepted a project with no .afk-bootstrap.json" >&2; exit 1
 fi
+# The hand-port shape (a project that applied the stepfun profile by hand, with
+# the endpoint baked in) converges onto the same mounted result, and its baked
+# secret block is removed rather than left as a dead arm.
+HANDPORT="$TMP/handport-$LANGUAGE"
+mkdir -p "$HANDPORT/.github/workflows"
+cp -R "$S/test/fixtures/handport-1.1.x/." "$HANDPORT/"
+"$S/upgrade-afk.sh" "$HANDPORT" >/dev/null \
+  || { echo "upgrade refused the hand-port shape" >&2; exit 1; }
+[ "$(grep -c 'claude-stepfun)' "$HANDPORT/.sandcastle/Dockerfile")" = 1 ] \
+  || { echo "hand-port did not converge to a single dispatch arm" >&2; exit 1; }
+if grep -qE 'STEPFUN_BASE_URL|api_key|afk-stepfun-settings\.json' "$HANDPORT/.sandcastle/Dockerfile"; then
+  echo "hand-port kept the baked endpoint instead of mounting it" >&2; exit 1
+fi
+grep -q 'settings.stepfun.json' "$HANDPORT/.sandcastle/profile.ts" \
+  || { echo "hand-port did not resolve the mounted settings path" >&2; exit 1; }
+
+# A profile.ts carrying a project edit must be refused, not replaced: the file is
+# the only one the migration discards rather than edits.
+EDITED_PROFILE="$TMP/edited-profile-$LANGUAGE"
+mkdir -p "$EDITED_PROFILE"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$EDITED_PROFILE/"
+node -e '
+  const fs = require("fs"), p = process.argv[1] + "/.sandcastle/profile.ts";
+  fs.writeFileSync(p, fs.readFileSync(p, "utf8").replace("        ...(agentToken", "        projectExtra: 1,\n        ...(agentToken"));
+' "$EDITED_PROFILE"
+EDITED_TREE="$(cd "$EDITED_PROFILE" && find . -type f | sort | xargs md5sum)"
+if "$S/upgrade-afk.sh" "$EDITED_PROFILE" >/dev/null 2>&1; then
+  echo "upgrade overwrote a profile.ts carrying a project edit" >&2; exit 1
+fi
+[ "$EDITED_TREE" = "$(cd "$EDITED_PROFILE" && find . -type f | sort | xargs md5sum)" ] \
+  || { echo "refusing an edited profile.ts still modified the project" >&2; exit 1; }
+
+# A project already newer than this template must not be pulled backwards.
+NEWER="$TMP/newer-$LANGUAGE"
+mkdir -p "$NEWER"; cp -R "$S/test/fixtures/legacy-1.1.x/." "$NEWER/"
+node -e '
+  const fs = require("fs"), p = process.argv[1];
+  const m = JSON.parse(fs.readFileSync(p, "utf8"));
+  m.afk_template_version = "1.9.0";
+  fs.writeFileSync(p, JSON.stringify(m, null, 2) + "\n");
+' "$NEWER/.afk-bootstrap.json"
+if "$S/upgrade-afk.sh" "$NEWER" >/dev/null 2>&1; then
+  echo "upgrade downgraded a newer project" >&2; exit 1
+fi
+grep -q '1.9.0' "$NEWER/.afk-bootstrap.json" \
+  || { echo "downgrade refusal still rewrote the version" >&2; exit 1; }
+
 # A refused migration must leave the project untouched. Each case mutates one
 # file into a shape the step cannot anchor, then asserts every file is
 # byte-identical afterwards — a step that failed after an earlier write would

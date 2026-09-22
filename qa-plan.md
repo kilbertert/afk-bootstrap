@@ -25,7 +25,8 @@ boundary.
 | AFK-B12 | Live self-hosted runner canary | Merged template deployment, online runner, configured read token and AGENT_PAT | One owner-authored canary PR | Run `agent:review`, retain the workflow URL, and inspect the resulting branch/review | The review uses current main, completes through trusted bundle delivery, posts its review, and leaves no blocked label | Close or merge the disposable canary PR and remove temporary labels/branches |
 | AFK-B13 | Linux host, generated Node/Python scaffolds | Bootstrap script and templates from the same checkout | Shared coding standards plus every code-changing implement/review prompt | Run both smoke cases and inspect the generated prompt graph | Both providers receive the same economy ladder, root-cause, dependency, compatibility, module, vertical-slice, and durable-architecture contract without a container-installed skill | Test traps remove temporary repos |
 | AFK-B14 | Linux host, verbatim previous-template fixture | The checked-in `test/fixtures/legacy-1.1.x` project | A 1.1.x project with the retired five-profile map, old dispatch arm, and `psydo` fallback | Run `upgrade-afk.sh` on a copy of the fixture; rerun it; rerun with `--dry-run` | The dispatch arm becomes `claude-stepfun`, no retired profile remains in the generated files, the workflow fallback updates, the new version is recorded, a second run reports "already at", a dry run writes nothing, and a project-owned document naming a retired profile is reported rather than rewritten | Test trap removes the temporary copy |
-| AFK-B15 | Linux host, generated Node/Python scaffolds | Bootstrap script and templates from the same checkout | A target with no `.afk-bootstrap.json`, and a Dockerfile with an unrecognised dispatch arm | Run `upgrade-afk.sh` against each | Both fail closed without writing, rather than guessing at a migration | Test trap removes temporary repos |
+| AFK-B15 | Linux host, generated Node/Python scaffolds | Bootstrap script and templates from the same checkout | A target with no `.afk-bootstrap.json`, an unrecognised dispatch arm, a customised `main.ts` usage anchor, and a missing `profile.ts` | Run `upgrade-afk.sh` against each and checksum the tree before and after | Each fails closed without writing; every file is byte-identical afterwards, so a step failing after an earlier write cannot strand a migrated Dockerfile under old metadata | Test trap removes temporary repos |
+| AFK-B16 | Linux host, verbatim previous-template fixture | The checked-in `test/fixtures/legacy-1.1.x` project | The same fixture with its recorded version set to `1.1.1` | Run `upgrade-afk.sh` against it | The migration applies rather than being refused for falling outside an enumerated version list | Test trap removes the temporary copy |
 
 ## Traceability
 
@@ -46,6 +47,7 @@ boundary.
 | Delivery credential failures are blocked | Missing delivery credentials stop the workflow | AFK-B11, AFK-B12 |
 | An existing project can be upgraded | Upgrade a previous-template project onto the current provider | AFK-B14 |
 | Upgrade refuses an unsafe migration | Upgrade refuses what it cannot migrate safely | AFK-B15 |
+| Upgrade covers the whole 1.1.x range | Upgrade accepts every version the single step applies to | AFK-B16 |
 | The endpoint is mounted, not baked | Scaffold a Node project without an Auto-Test checkout | AFK-B14 |
 
 ## Risk Checks
@@ -181,7 +183,7 @@ Additional authorized delivery verification:
   (`5fed7dcb14b856e090e581d8840c6c7519ccb820`), and AI-Ops PR #69
   (`46c12d893fbb99c0777c89acf2bd7bc96523ed30`).
 
-### AFK-B14 / AFK-B15 — upgrade path
+### AFK-B14 / B15 / B16 — upgrade path
 
 Executed on `2026-09-22T17:59+08:00` against `refactor/afk-stepfun-template`
 (base `b36e4a36d72e5ff565e29a6bd9c16c675508da8b`), Linux host,
@@ -199,11 +201,17 @@ Node `v24.15.0`, Python `3.13.13`, ShellCheck `0.11.0`.
   The migration was also run against all four live consumer checkouts and
   AI-Ops in a scratch copy: no duplicate dispatch arm, no stale arm, no baked
   secret reference, correct version and fallback in every case.
-- **AFK-B15 — passed.** An otherwise-valid target without
-  `.afk-bootstrap.json` and a target whose Dockerfile dispatch arm was replaced
-  with an unrecognised one each make `upgrade-afk.sh` exit non-zero. A
-  `--dry-run` on a version-mismatched fixture left both the Dockerfile and the
-  recorded version byte-identical.
+- **AFK-B15 — passed.** Four targets each make `upgrade-afk.sh` exit non-zero:
+  no `.afk-bootstrap.json`; a Dockerfile dispatch arm replaced with an
+  unrecognised one; a `main.ts` usage anchor customised to a third value; and a
+  missing `profile.ts`. For each of the three anchor cases the script now stages
+  every write and publishes only after the last step succeeds, so a checksum of
+  the whole tree is identical before and after — the first two versions of this
+  script rewrote the Dockerfile and then failed, which is exactly what the
+  contract forbids. A `--dry-run` also leaves the tree byte-identical.
+- **AFK-B16 — passed.** The fixture with its recorded version set to `1.1.1`
+  upgrades rather than being refused, confirming the step is selected by range
+  shape rather than an enumerated version list.
 
 Deterministic checks at the same identity: `bash -n` on `bootstrap-afk.sh`,
 `upgrade-afk.sh`, `test/smoke.sh` (`test/trusted-pr-delivery.sh` unchanged);

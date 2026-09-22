@@ -323,27 +323,66 @@ cp "$UPGRADE_TARGET/.sandcastle/Dockerfile" "$NO_PROVENANCE/.sandcastle/"
 if "$S/upgrade-afk.sh" "$NO_PROVENANCE" >/dev/null 2>&1; then
   echo "upgrade accepted a project with no .afk-bootstrap.json" >&2; exit 1
 fi
-# Refuses a template whose dispatch arm it does not recognise.
-UNKNOWN="$TMP/unknown-arm-$LANGUAGE"
-mkdir -p "$UNKNOWN/.sandcastle"
-node -e '
-  const fs = require("fs");
-  const source = fs.readFileSync(process.argv[1], "utf8");
-  const lines = source.split("\n").map((line) =>
-    line.includes("claude-stepfun) args=()") ? "    '"'"'  custom-provider) args=(); exit 9 ;;'"'"' \\" : line);
-  fs.writeFileSync(process.argv[2], lines.join("\n"));
-' "$UPGRADE_TARGET/.sandcastle/Dockerfile" "$UNKNOWN/.sandcastle/Dockerfile"
-cp "$UPGRADE_TARGET/.afk-bootstrap.json" "$UNKNOWN/"
-node -e '
-  const fs = require("fs");
-  const p = process.argv[1];
-  const m = JSON.parse(fs.readFileSync(p, "utf8"));
-  m.afk_template_version = "1.1.5";
-  fs.writeFileSync(p, JSON.stringify(m, null, 2) + "\n");
-' "$UNKNOWN/.afk-bootstrap.json"
-if "$S/upgrade-afk.sh" "$UNKNOWN" >/dev/null 2>&1; then
-  echo "upgrade guessed at an unrecognised dispatch arm" >&2; exit 1
+# A refused migration must leave the project untouched. Each case mutates one
+# file into a shape the step cannot anchor, then asserts every file is
+# byte-identical afterwards — a step that failed after an earlier write would
+# otherwise strand a migrated Dockerfile under old metadata.
+assert_refused_untouched() {
+  label=$1
+  mutate=$2
+  CASE="$TMP/refuse-$label-$LANGUAGE"
+  mkdir -p "$CASE"
+  cp -R "$S/test/fixtures/legacy-1.1.x/." "$CASE/"
+  node -e "$mutate" "$CASE"
+  BEFORE_TREE="$(cd "$CASE" && find . -type f | sort | xargs md5sum)"
+  if "$S/upgrade-afk.sh" "$CASE" >/dev/null 2>&1; then
+    echo "upgrade accepted a target it cannot migrate: $label" >&2; exit 1
+  fi
+  [ "$BEFORE_TREE" = "$(cd "$CASE" && find . -type f | sort | xargs md5sum)" ] \
+    || { echo "refused upgrade ($label) modified the project" >&2; exit 1; }
+}
+
+assert_refused_untouched 'unknown-arm' '
+  const fs = require("fs"), p = process.argv[1];
+  const f = p + "/.sandcastle/Dockerfile";
+  fs.writeFileSync(f, fs.readFileSync(f, "utf8")
+    .split("\n").map((l) => l.includes("claude-ark|agentrouter|psydo) args=()")
+      ? "    '"'"'  custom-provider) args=(); exit 9 ;;'"'"' \\" : l).join("\n"));
+'
+assert_refused_untouched 'custom-main-usage' '
+  const fs = require("fs"), p = process.argv[1];
+  const f = p + "/.sandcastle/main.ts";
+  fs.writeFileSync(f, fs.readFileSync(f, "utf8")
+    .replace("--profile claude|claude-ark|agentrouter|psydo|aliyun-deepseek", "--profile custom-provider"));
+'
+assert_refused_untouched 'missing-profile' '
+  const fs = require("fs"), p = process.argv[1];
+  fs.rmSync(p + "/.sandcastle/profile.ts");
+'
+
+# Refuses a target without scaffold provenance.
+NO_PROVENANCE="$TMP/no-provenance-$LANGUAGE"
+mkdir -p "$NO_PROVENANCE/.sandcastle"
+cp "$UPGRADE_TARGET/.sandcastle/Dockerfile" "$NO_PROVENANCE/.sandcastle/"
+if "$S/upgrade-afk.sh" "$NO_PROVENANCE" >/dev/null 2>&1; then
+  echo "upgrade accepted a project with no .afk-bootstrap.json" >&2; exit 1
 fi
+
+# A 1.1.1 project predates the range's lower bound only by coincidence of
+# fixtures; the step applies unchanged, so it must be accepted rather than
+# refused for being outside an enumerated list.
+OLDEST="$TMP/oldest-$LANGUAGE"
+mkdir -p "$OLDEST"; cp -R "$S/test/fixtures/legacy-1.1.x/." "$OLDEST/"
+node -e '
+  const fs = require("fs"), p = process.argv[1];
+  const m = JSON.parse(fs.readFileSync(p, "utf8"));
+  m.afk_template_version = "1.1.1";
+  fs.writeFileSync(p, JSON.stringify(m, null, 2) + "\n");
+' "$OLDEST/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$OLDEST" >/dev/null \
+  || { echo "upgrade refused a 1.1.1 project" >&2; exit 1; }
+grep -q 'claude-stepfun)' "$OLDEST/.sandcastle/Dockerfile" \
+  || { echo "1.1.1 upgrade did not install the stepfun dispatch arm" >&2; exit 1; }
 # Dry run writes nothing.
 node -e '
   const fs = require("fs");

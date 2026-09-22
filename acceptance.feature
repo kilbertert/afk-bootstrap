@@ -31,10 +31,16 @@ Feature: Self-contained AFK bootstrap baseline
       And a project-owned document naming a retired profile is reported, not rewritten
 
     Scenario: Upgrade refuses what it cannot migrate safely
-      Given a project with no template provenance, or a Dockerfile whose provider dispatch it does not recognise
+      Given a project with no template provenance, or a file whose anchor the migration does not recognise
       When upgrade-afk runs against it
       Then the command fails without writing
+      And every file is byte-identical to its state before the run
       And a dry run writes nothing
+
+    Scenario: Upgrade accepts every version the single step applies to
+      Given a project recorded at any 1.1.x template version
+      When upgrade-afk runs against it
+      Then the migration is applied rather than refused for being outside an enumerated list
 
   Rule: repository checks detect scaffold drift
 

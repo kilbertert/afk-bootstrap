@@ -22,6 +22,11 @@
 # not match is refused, never guessed at — a half-migrated file is worse than
 # an unmigrated one.
 #
+# Every step runs against a staging copy and the result is published only after
+# the last step succeeds, so a refused migration leaves the project untouched.
+# A step that fails after an earlier step already wrote would otherwise leave a
+# Dockerfile migrated under metadata that still claims the old version.
+#
 # It only edits files; it never commits, pushes, or rebuilds the image. The
 # host runner owns delivery, and the sandbox image must be rebuilt from the
 # upgraded Dockerfile before AFK_PROFILE is switched to the new profile —
@@ -30,7 +35,7 @@ set -euo pipefail
 umask 027
 
 usage() {
-  sed -n '2,30p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 TARGET="${1:-}"; shift || true
@@ -74,7 +79,8 @@ subst() {
   ' "$file" "$from" "$to"
 }
 
-# Major bumps change structure this script will not guess at.
+# Major bumps change structure this script will not guess at, and a downgrade
+# is not a migration.
 old_major="${FROM%%.*}"
 new_major="${TEMPLATE_VERSION%%.*}"
 if [ "$old_major" != "$new_major" ]; then
@@ -86,8 +92,16 @@ if [ "$FROM" = "$TEMPLATE_VERSION" ]; then
   exit 0
 fi
 
-CHANGED=0
-changed() { CHANGED=1; note "$*"; }
+# Every write below targets the staging copy; the originals are read-only
+# inputs. Publishing happens once, at the end, and only for a run that reached
+# it.
+STAGE="$(mktemp -d)"
+trap 'rm -rf "$STAGE"' EXIT
+WORK="$STAGE/project"
+mkdir -p "$WORK/.github"
+cp -R "$TARGET/.sandcastle" "$WORK/.sandcastle"
+cp -R "$TARGET/.github/workflows" "$WORK/.github/workflows"
+cp "$TARGET/.afk-bootstrap.json" "$WORK/.afk-bootstrap.json"
 
 # ---- step: 1.1.x -> 1.2.0 — mount-based single provider ---------------------
 # Old templates shipped five profiles: three resolved to host settings files
@@ -95,22 +109,16 @@ changed() { CHANGED=1; note "$*"; }
 # the only Codex-provider profile. A run selecting any of them failed before the
 # agent started. They are replaced by claude + claude-stepfun, both Claude Code
 # profiles driven by a mounted host settings file.
-if [ "$FROM" = "1.1.2" ] || [ "$FROM" = "1.1.3" ] || [ "$FROM" = "1.1.4" ] || [ "$FROM" = "1.1.5" ]; then
-  say "== 1.1.x -> 1.2.0: single mount-based provider =="
+if [ "$TEMPLATE_VERSION" = "1.2.0" ] && [ "$FROM" != "1.2.0" ]; then
+  say "== $FROM -> $TEMPLATE_VERSION: single mount-based provider =="
 
-  # 1. Dockerfile dispatch arm. Anchor is the exact arm the old templates wrote,
-  #    plus the baked-secret variant a project may have hand-ported (AI-Ops
-  #    #322 / Auto-Test #216 shape), which this step converges onto the mount.
-  DOCKER="$TARGET/.sandcastle/Dockerfile"
+  # 1. Dockerfile dispatch arm. Anchor is the exact arm the old templates wrote.
+  #    A hand-port that added its own arm is handled by step 2.
+  DOCKER="$WORK/.sandcastle/Dockerfile"
   OLD_ARM="'  claude-ark|agentrouter|psydo) args=();"
   NEW_ARM="'  claude-stepfun) args=();"
   if grep -qF -e "$OLD_ARM" "$DOCKER"; then
-    if [ "$DRY_RUN" = "1" ]; then
-      changed "Dockerfile: dispatch arm claude-ark|agentrouter|psydo -> claude-stepfun"
-    else
-      subst "$DOCKER" "$OLD_ARM" "$NEW_ARM"
-      changed "Dockerfile: dispatch arm claude-ark|agentrouter|psydo -> claude-stepfun"
-    fi
+    subst "$DOCKER" "$OLD_ARM" "$NEW_ARM"
   elif grep -qF -e "$NEW_ARM" "$DOCKER"; then
     note "Dockerfile: dispatch arm already names claude-stepfun"
   else
@@ -126,102 +134,83 @@ if [ "$FROM" = "1.1.2" ] || [ "$FROM" = "1.1.3" ] || [ "$FROM" = "1.1.4" ] || [ 
   #    code pointing at a settings file the image no longer carries.
   BAKED_ARM='/home/agent/.afk-stepfun-settings.json'
   if grep -qE '^ARG STEPFUN_BASE_URL=' "$DOCKER" || grep -qF -e "$BAKED_ARM" "$DOCKER"; then
-    if [ "$DRY_RUN" = "1" ]; then
-      changed "Dockerfile: would drop the baked StepFun arm + secret block (key leaves the image layer)"
-    else
-      node -e '
-        const fs = require("fs");
-        const [path] = process.argv.slice(1);
-        let lines = fs.readFileSync(path, "utf8").split("\n");
+    node -e '
+      const fs = require("fs");
+      const [path] = process.argv.slice(1);
+      let lines = fs.readFileSync(path, "utf8").split("\n");
 
-        // The baked dispatch arm, identified by the settings path only it uses.
-        const arm = lines.findIndex((l) => l.includes("/home/agent/.afk-stepfun-settings.json"));
-        if (arm >= 0) lines.splice(arm, 1);
+      // The baked dispatch arm, identified by the settings path only it uses.
+      const arm = lines.findIndex((l) => l.includes("/home/agent/.afk-stepfun-settings.json"));
+      if (arm >= 0) lines.splice(arm, 1);
 
-        // The baked settings block: its ARG line through the chmod that ends
-        // its RUN, plus the comment header directly above the ARG.
-        const start = lines.findIndex((l) => l.startsWith("ARG STEPFUN_BASE_URL="));
-        if (start >= 0) {
-          let end = start;
-          while (end < lines.length && !/^\s*&& chmod 600 \/home\/agent\/\.afk-stepfun-settings\.json\s*$/.test(lines[end])) end += 1;
-          if (end >= lines.length) {
-            console.error("could not find the end of the baked StepFun block");
-            process.exit(1);
-          }
-          while (end + 1 < lines.length && lines[end + 1].trim() === "") end += 1;
-          let from = start;
-          while (from > 0 && lines[from - 1].startsWith("#")) from -= 1;
-          lines.splice(from, end - from + 1);
+      // The baked settings block: its ARG line through the chmod that ends
+      // its RUN, plus the comment header directly above the ARG.
+      const start = lines.findIndex((l) => l.startsWith("ARG STEPFUN_BASE_URL="));
+      if (start >= 0) {
+        let end = start;
+        while (end < lines.length && !/^\s*&& chmod 600 \/home\/agent\/\.afk-stepfun-settings\.json\s*$/.test(lines[end])) end += 1;
+        if (end >= lines.length) {
+          console.error("could not find the end of the baked StepFun block");
+          process.exit(1);
         }
+        while (end + 1 < lines.length && lines[end + 1].trim() === "") end += 1;
+        let from = start;
+        while (from > 0 && lines[from - 1].startsWith("#")) from -= 1;
+        lines.splice(from, end - from + 1);
+      }
 
-        // Collapse any blank-line run the removals left behind.
-        lines = lines.filter((l, i) => !(l.trim() === "" && lines[i - 1]?.trim() === ""));
-        fs.writeFileSync(path, lines.join("\n"));
-      ' "$DOCKER"
-      changed "Dockerfile: dropped the baked StepFun arm + secret block (key leaves the image layer)"
-    fi
+      // Collapse any blank-line run the removals left behind.
+      lines = lines.filter((l, i) => !(l.trim() === "" && lines[i - 1]?.trim() === ""));
+      fs.writeFileSync(path, lines.join("\n"));
+    ' "$DOCKER"
   else
     note "Dockerfile: no baked StepFun arm or secret block to remove"
   fi
 
-  # 3. profile.ts. A hand-ported file has a single-entry map plus a large
-  #    wholesale rewrite; an untouched 1.1.x file has the five-entry map. Either
-  #    way the target file is the scaffold's own profile.ts, so it is copied
-  #    verbatim — everything project-specific lives in the image-name line,
-  #    which is preserved by re-rendering it.
-  PROF="$TARGET/.sandcastle/profile.ts"
+  # 3. profile.ts. Both the 1.1.x five-entry map and a hand-ported single-entry
+  #    map are replaced by the scaffold's own file, because every profile here
+  #    is settings-driven and the scaffold's version is the contract. The one
+  #    project-specific value, the image name, is carried over.
+  PROF="$WORK/.sandcastle/profile.ts"
   IMAGE_NAME="$(grep -oE 'AFK_IMAGE \?\? "[^"]*"' "$PROF" | sed -E 's/.*"([^"]*)"/\1/')"
   [ -n "$IMAGE_NAME" ] || { echo "profile.ts: cannot read the AFK_IMAGE default" >&2; exit 1; }
   if cmp -s "$PROF" "$S/scaffold/.sandcastle/profile.ts"; then
     note "profile.ts: already current"
-  elif [ "$DRY_RUN" = "1" ]; then
-    changed "profile.ts: would render the current scaffold (keeping image $IMAGE_NAME)"
   else
     sed "s|__AFK_IMAGE__|${IMAGE_NAME}|" "$S/scaffold/.sandcastle/profile.ts" > "$PROF"
-    changed "profile.ts: rendered the current scaffold (keeping image $IMAGE_NAME)"
   fi
 
-  # 4. main.ts usage string, when the file is otherwise the scaffold's.
-  MAIN="$TARGET/.sandcastle/main.ts"
+  # 4. main.ts usage string. Both anchors are checked, so a file whose entry
+  #    was customised to some third value is refused rather than recorded as
+  #    migrated while still advertising a profile the image does not dispatch.
+  MAIN="$WORK/.sandcastle/main.ts"
   OLD_USAGE="--profile claude|claude-ark|agentrouter|psydo|aliyun-deepseek"
   NEW_USAGE="--profile claude|claude-stepfun"
   if grep -qF -e "$OLD_USAGE" "$MAIN"; then
-    if [ "$DRY_RUN" = "1" ]; then
-      changed "main.ts: would update the usage string"
-    else
-      subst "$MAIN" "$OLD_USAGE" "$NEW_USAGE"
-      changed "main.ts: updated the usage string"
-    fi
-  else
+    subst "$MAIN" "$OLD_USAGE" "$NEW_USAGE"
+  elif grep -qF -e "$NEW_USAGE" "$MAIN"; then
     note "main.ts: usage string already current"
+  else
+    echo "main.ts: no usage string anchor found — refusing to guess" >&2
+    exit 1
   fi
 
   # 5. Workflows: fallback default only. Templates pin `vars.AFK_PROFILE ||
   #    'psydo'`; the variable itself is a host-side setting, not a file.
   OLD_FALLBACK="vars.AFK_PROFILE || 'psydo'"
   NEW_FALLBACK="vars.AFK_PROFILE || 'claude-stepfun'"
-  WF_CHANGED=0
-  for wf in "$TARGET"/.github/workflows/*.yml; do
+  for wf in "$WORK"/.github/workflows/*.yml; do
     [ -e "$wf" ] || continue
     grep -qF -e "$OLD_FALLBACK" "$wf" || continue
-    if [ "$DRY_RUN" = "1" ]; then
-      WF_CHANGED=1
-    else
-      subst "$wf" "$OLD_FALLBACK" "$NEW_FALLBACK"
-      WF_CHANGED=1
-    fi
+    subst "$wf" "$OLD_FALLBACK" "$NEW_FALLBACK"
   done
-  if [ "$WF_CHANGED" = "1" ]; then
-    changed "workflows: fallback AFK_PROFILE psydo -> claude-stepfun"
-  else
-    note "workflows: fallback already current"
-  fi
 
   # 6. Report, never rewrite, the project's own prose. The generated
   #    docs/afk-workflow.md belongs to the project once it lands (README says
   #    a project document is its own source of truth), so a provider change in
   #    it is the project's edit to make. Naming the files makes that actionable
-  #    instead of silent.
+  #    instead of silent. Read from the target: the staging copy only holds the
+  #    files this step can write.
   PROSE=""
   for f in "$TARGET/docs/afk-workflow.md" "$TARGET/docs/afk-development.md" "$TARGET/README.md"; do
     [ -e "$f" ] || continue
@@ -229,23 +218,41 @@ if [ "$FROM" = "1.1.2" ] || [ "$FROM" = "1.1.3" ] || [ "$FROM" = "1.1.4" ] || [ 
       PROSE="$PROSE ${f#"$TARGET"/}"
     fi
   done
-  if [ -n "$PROSE" ]; then
-    say ""
-    say "Project prose still names a retired profile (this script does not edit it):"
-    for f in $PROSE; do say "  - $f"; done
-  fi
 else
   echo "no upgrade step defined from $FROM to $TEMPLATE_VERSION" >&2
   exit 1
 fi
 
-# ---- record the new version ------------------------------------------------
-if [ "$CHANGED" = "0" ]; then
-  say "template files already current for $TEMPLATE_VERSION"
+# ---- report and publish ----------------------------------------------------
+# What changed is derived by comparing staged against original, so it cannot
+# drift from what the steps actually did.
+CHANGED=0
+for rel in .sandcastle/Dockerfile .sandcastle/profile.ts .sandcastle/main.ts .afk-bootstrap.json; do
+  cmp -s "$TARGET/$rel" "$WORK/$rel" && continue
+  CHANGED=1
+  note "changed: $rel"
+done
+if ! diff -rq "$TARGET/.github/workflows" "$WORK/.github/workflows" >/dev/null 2>&1; then
+  CHANGED=1
+  note "changed: .github/workflows/"
 fi
+
+if [ -n "$PROSE" ]; then
+  say ""
+  say "Project prose still names a retired profile (this script does not edit it):"
+  for f in $PROSE; do say "  - $f"; done
+fi
+
 if [ "$DRY_RUN" = "1" ]; then
+  # The staged copy is discarded by the trap; nothing under $TARGET was opened
+  # for writing at any point above.
+  say ""
   say "== dry run: nothing written; would record afk_template_version $FROM -> $TEMPLATE_VERSION =="
   exit 0
+fi
+
+if [ "$CHANGED" = "0" ]; then
+  say "template files already current for $TEMPLATE_VERSION"
 fi
 
 node -e '
@@ -255,7 +262,14 @@ node -e '
   metadata.templateVersion = Number(String(version).split(".")[0]);
   metadata.afk_template_version = version;
   fs.writeFileSync(path, JSON.stringify(metadata, null, 2) + "\n");
-' "$TARGET/.afk-bootstrap.json" "$TEMPLATE_VERSION"
+' "$WORK/.afk-bootstrap.json" "$TEMPLATE_VERSION"
+
+cp "$WORK/.sandcastle/Dockerfile" "$TARGET/.sandcastle/Dockerfile"
+cp "$WORK/.sandcastle/profile.ts" "$TARGET/.sandcastle/profile.ts"
+cp "$WORK/.sandcastle/main.ts" "$TARGET/.sandcastle/main.ts"
+cp "$WORK/.github/workflows/." "$TARGET/.github/workflows/" -R
+cp "$WORK/.afk-bootstrap.json" "$TARGET/.afk-bootstrap.json"
+
 say ""
 say "== upgraded $TARGET: $FROM -> $TEMPLATE_VERSION =="
 cat <<EOF

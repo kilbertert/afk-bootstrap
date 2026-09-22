@@ -50,6 +50,11 @@ matches only the exact lines the previous template generated, and a step whose
 anchor does not match exits non-zero rather than guessing. Project prose is
 reported, never edited. It refuses a major-version jump.
 
+All writes are staged and published only after the last step succeeds, so a
+refused migration leaves every file byte-identical. Without that, a step that
+failed after an earlier step wrote would strand a migrated Dockerfile under
+metadata still claiming the old version.
+
 **Order matters after an upgrade**: rebuild the sandbox image from the new
 Dockerfile *before* changing `AFK_PROFILE`. Pointing the variable at a profile
 the running image does not dispatch on makes the wrapper exit 2.

@@ -24,6 +24,8 @@ boundary.
 | AFK-B11 | GitHub Actions syntax job | Python 3 and PyYAML available | The three `pull_request_target` workflows and delivery-label workflows | Run `python3 test/workflows.py` | Mutation jobs require same-repository owner PRs, execute controller scripts, avoid runtime skill installation, keep write tokens out of candidate execution, reject masked GitHub API failures, and fail closed without AGENT_PAT | None |
 | AFK-B12 | Live self-hosted runner canary | Merged template deployment, online runner, configured read token and AGENT_PAT | One owner-authored canary PR | Run `agent:review`, retain the workflow URL, and inspect the resulting branch/review | The review uses current main, completes through trusted bundle delivery, posts its review, and leaves no blocked label | Close or merge the disposable canary PR and remove temporary labels/branches |
 | AFK-B13 | Linux host, generated Node/Python scaffolds | Bootstrap script and templates from the same checkout | Shared coding standards plus every code-changing implement/review prompt | Run both smoke cases and inspect the generated prompt graph | Both providers receive the same economy ladder, root-cause, dependency, compatibility, module, vertical-slice, and durable-architecture contract without a container-installed skill | Test traps remove temporary repos |
+| AFK-B14 | Linux host, verbatim previous-template fixture | The checked-in `test/fixtures/legacy-1.1.x` project | A 1.1.x project with the retired five-profile map, old dispatch arm, and `psydo` fallback | Run `upgrade-afk.sh` on a copy of the fixture; rerun it; rerun with `--dry-run` | The dispatch arm becomes `claude-stepfun`, no retired profile remains in the generated files, the workflow fallback updates, the new version is recorded, a second run reports "already at", a dry run writes nothing, and a project-owned document naming a retired profile is reported rather than rewritten | Test trap removes the temporary copy |
+| AFK-B15 | Linux host, generated Node/Python scaffolds | Bootstrap script and templates from the same checkout | A target with no `.afk-bootstrap.json`, and a Dockerfile with an unrecognised dispatch arm | Run `upgrade-afk.sh` against each | Both fail closed without writing, rather than guessing at a migration | Test trap removes temporary repos |
 
 ## Traceability
 
@@ -42,6 +44,9 @@ boundary.
 | Current default-branch review base | Persistent runner review uses the current default branch | AFK-B10, AFK-B12 |
 | Trusted pull-request control plane | Candidate code cannot receive host delivery credentials; untrusted pull requests cannot start mutation workflows | AFK-B10, AFK-B11, AFK-B12 |
 | Delivery credential failures are blocked | Missing delivery credentials stop the workflow | AFK-B11, AFK-B12 |
+| An existing project can be upgraded | Upgrade a previous-template project onto the current provider | AFK-B14 |
+| Upgrade refuses an unsafe migration | Upgrade refuses what it cannot migrate safely | AFK-B15 |
+| The endpoint is mounted, not baked | Scaffold a Node project without an Auto-Test checkout | AFK-B14 |
 
 ## Risk Checks
 
@@ -175,3 +180,33 @@ Additional authorized delivery verification:
   (`61b26fbc0de6aff9a7668daf653c6effacf78cee`), genesis-evidence PR #135
   (`5fed7dcb14b856e090e581d8840c6c7519ccb820`), and AI-Ops PR #69
   (`46c12d893fbb99c0777c89acf2bd7bc96523ed30`).
+
+### AFK-B14 / AFK-B15 — upgrade path
+
+Executed on `2026-09-22T17:59+08:00` against `refactor/afk-stepfun-template`
+(base `b36e4a36d72e5ff565e29a6bd9c16c675508da8b`), Linux host,
+Node `v24.15.0`, Python `3.13.13`, ShellCheck `0.11.0`.
+
+- **AFK-B14 — passed.** `test/smoke.sh node` and `test/smoke.sh python` both
+  copy the checked-in `test/fixtures/legacy-1.1.x` fixture (verbatim Auto-Test
+  1.1.2 output: five-profile map, `claude-ark|agentrouter|psydo` dispatch arm,
+  `psydo` workflow fallback) and run `upgrade-afk.sh` against it. Observed:
+  the dispatch arm becomes `claude-stepfun`; `claude-ark|agentrouter|psydo` is
+  gone from the Dockerfile; the workflow fallback becomes `claude-stepfun`; the
+  usage string updates; `.afk-bootstrap.json` records `1.2.0`; a second run
+  reports `already at 1.2.0`; the fixture's project-owned `docs/afk-workflow.md`
+  still names `claude-ark` after the run and its path is listed in the report.
+  The migration was also run against all four live consumer checkouts and
+  AI-Ops in a scratch copy: no duplicate dispatch arm, no stale arm, no baked
+  secret reference, correct version and fallback in every case.
+- **AFK-B15 — passed.** An otherwise-valid target without
+  `.afk-bootstrap.json` and a target whose Dockerfile dispatch arm was replaced
+  with an unrecognised one each make `upgrade-afk.sh` exit non-zero. A
+  `--dry-run` on a version-mismatched fixture left both the Dockerfile and the
+  recorded version byte-identical.
+
+Deterministic checks at the same identity: `bash -n` on `bootstrap-afk.sh`,
+`upgrade-afk.sh`, `test/smoke.sh` (`test/trusted-pr-delivery.sh` unchanged);
+`python3 test/workflows.py` → `workflow structure passed (9 files)`;
+ShellCheck on the changed shell scripts → clean (no new findings relative to
+`b36e4a3`); `test/smoke.sh node` and `test/smoke.sh python` → passed.

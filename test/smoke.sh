@@ -92,10 +92,18 @@ grep -q '"ralph"' "$TARGET/package.json" || { echo "ralph script missing" >&2; e
 if grep -q 'prd:to-issues' "$TARGET/package.json"; then echo "automatic splitter script remains" >&2; exit 1; fi
 grep -q 'esbuild: true' "$TARGET/pnpm-workspace.yaml" || { echo "pnpm esbuild approval missing" >&2; exit 1; }
 grep -q "sandcastle:fake-$LANGUAGE-project" "$TARGET/.sandcastle/profile.ts" || { echo "profile image name not rendered" >&2; exit 1; }
-grep -q 'agentrouter' "$TARGET/.sandcastle/profile.ts" || { echo "agentrouter profile missing" >&2; exit 1; }
-grep -q 'agentrouter' "$TARGET/.sandcastle/main.ts" || { echo "agentrouter CLI option missing" >&2; exit 1; }
-grep -q 'claude-ark|agentrouter|psydo' "$TARGET/.sandcastle/Dockerfile" || { echo "agentrouter Docker dispatch missing" >&2; exit 1; }
-grep -q 'agentrouter' "$TARGET/docs/afk-workflow.md" || { echo "agentrouter workflow documentation missing" >&2; exit 1; }
+grep -q 'claude-stepfun' "$TARGET/.sandcastle/profile.ts" || { echo "claude-stepfun profile missing" >&2; exit 1; }
+grep -q 'claude-stepfun' "$TARGET/.sandcastle/main.ts" || { echo "claude-stepfun CLI option missing" >&2; exit 1; }
+grep -q 'claude-stepfun)' "$TARGET/.sandcastle/Dockerfile" || { echo "claude-stepfun Docker dispatch missing" >&2; exit 1; }
+# The generated workflow doc is project-owned once it lands (the fixture above
+# pre-creates one), so the provider documentation is asserted on the template.
+grep -q 'claude-stepfun' "$S/templates/afk-workflow.md" || { echo "claude-stepfun workflow documentation missing" >&2; exit 1; }
+if grep -qE 'claude-ark|agentrouter|psydo|aliyun-deepseek' "$TARGET/.sandcastle/profile.ts" "$TARGET/.sandcastle/main.ts" "$TARGET/.sandcastle/Dockerfile" "$S/templates/afk-workflow.md"; then
+  echo "a retired provider profile is still scaffolded" >&2
+  exit 1
+fi
+grep -q 'vars.AFK_PROFILE || .claude-stepfun.' "$TARGET/.github/workflows/agent-implement.yml" \
+  || { echo "workflow does not fall back to claude-stepfun" >&2; exit 1; }
 grep -q '# Existing glossary' "$TARGET/CONTEXT.md" || { echo "existing glossary was overwritten" >&2; exit 1; }
 if grep -q '{{PROJECT_NAME}}' "$WORKTREE_TARGET/CONTEXT.md"; then
   echo "generated glossary contains an unrendered project name" >&2
@@ -170,7 +178,7 @@ if find "$TARGET" -path '*/skills/ponytail/SKILL.md' -print -quit | grep -q .; t
 fi
 node -e '
   const metadata = require(process.argv[1]);
-  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.1.5" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
+  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.2.0" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
 ' "$TARGET/.afk-bootstrap.json" "$LANGUAGE" "$REPO" || { echo "template metadata invalid" >&2; exit 1; }
 
 AFK_ROOT="$TARGET" AFK_DEFAULT_BRANCH=main node "$TARGET/.sandcastle/policy-check.mjs" version
@@ -245,10 +253,13 @@ else
     echo "PRD prompt requires nonstandard Node checks" >&2
     exit 1
   fi
+  # The generated profile is exercised against a fake host settings file: it
+  # must mount the endpoint rather than bake it, and must reject a profile the
+  # scaffold no longer ships.
   PROFILE_HOME="$TMP/profile-home"
-  mkdir -p "$PROFILE_HOME/.config/auto-test"
-  printf 'apiKey,fake-key\nopenAiCompatible,https://example.invalid/v1\n' > "$PROFILE_HOME/.config/auto-test/aliyun-deepseek.csv"
-  : > "$PROFILE_HOME/.config/auto-test/codex.aliyun-deepseek.toml"
+  mkdir -p "$PROFILE_HOME/cliproxyapi"
+  printf '{"env":{"ANTHROPIC_BASE_URL":"https://example.invalid/step_plan","ANTHROPIC_AUTH_TOKEN":"fake-key"}}\n' \
+    > "$PROFILE_HOME/cliproxyapi/settings.stepfun.json"
   (
     cd "$TARGET"
     npm install --silent
@@ -259,22 +270,93 @@ else
         const planned = parsePlanOutput("<plan>{\"issues\":[{\"number\":12,\"title\":\"ready\",\"branch\":\"agent/12-ready\"},{\"number\":34,\"title\":\"not ready\",\"branch\":\"agent/34-not-ready\"}]}</plan>");
         if (selectReadyIssues(planned, new Set([12]), new Set(), new Set([12])).length !== 1) process.exit(1);
         if (selectReadyIssues(planned, new Set([12, 34]), new Set(), new Set([12])).length !== 1) process.exit(1);
-        try { claudeProfile("invalid"); }
-        catch (error) {
-          if (String(error).includes("Unsupported profile")) {
-            claudeProfile("aliyun-deepseek");
-            return;
-          }
-          throw error;
-        }
-        process.exit(1);
+        // A retired profile must be rejected, not silently resolved.
+        try { claudeProfile("aliyun-deepseek"); process.exit(1); }
+        catch (error) { if (!String(error).includes("Unsupported profile")) throw error; }
+        claudeProfile("claude-stepfun");
       });
     '
   ) || { echo "generated profile did not load" >&2; exit 1; }
-  grep -q 'base_url = "https://example.invalid/v1"' "$PROFILE_HOME/.config/auto-test/codex.aliyun-deepseek.toml" \
-    || { echo "legacy Aliyun settings fallback not used" >&2; exit 1; }
-  [ ! -e "$PROFILE_HOME/.config/afk/codex.aliyun-deepseek.toml" ] \
-    || { echo "new Aliyun settings path bypassed existing legacy config" >&2; exit 1; }
+  [ -e "$PROFILE_HOME/cliproxyapi/settings.stepfun.json" ] \
+    || { echo "host stepfun settings fixture missing" >&2; exit 1; }
+  grep -q 'home/agent/.afk-profile-settings.json' "$TARGET/.sandcastle/Dockerfile" \
+    || { echo "Dockerfile does not use the mounted settings path" >&2; exit 1; }
+  grep -q 'settings.stepfun.json' "$TARGET/.sandcastle/profile.ts" \
+    || { echo "profile.ts does not resolve the stepfun host settings file" >&2; exit 1; }
 fi
+
+# ---- upgrade-afk: anchored migration of an already-scaffolded project --------
+# The fixture is a verbatim 1.1.x project (five-profile map, old dispatch arm,
+# psydo fallback), so the migration is exercised against real previous output
+# rather than a reconstruction of it.
+UPGRADE_TARGET="$TMP/upgrade-$LANGUAGE"
+mkdir -p "$UPGRADE_TARGET/.github" "$UPGRADE_TARGET/docs"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$UPGRADE_TARGET/"
+
+UPGRADE_OUT="$("$S/upgrade-afk.sh" "$UPGRADE_TARGET")"
+printf '%s\n' "$UPGRADE_OUT"
+grep -q 'claude-stepfun)' "$UPGRADE_TARGET/.sandcastle/Dockerfile" \
+  || { echo "upgrade did not install the stepfun dispatch arm" >&2; exit 1; }
+if grep -qE 'claude-ark\|agentrouter\|psydo' "$UPGRADE_TARGET/.sandcastle/Dockerfile"; then
+  echo "upgrade left the retired dispatch arm in place" >&2; exit 1
+fi
+grep -q 'vars.AFK_PROFILE || .claude-stepfun.' "$UPGRADE_TARGET/.github/workflows/agent-implement.yml" \
+  || { echo "upgrade did not update the workflow fallback" >&2; exit 1; }
+grep -q 'claude-stepfun' "$UPGRADE_TARGET/.sandcastle/main.ts" \
+  || { echo "upgrade did not update the CLI usage string" >&2; exit 1; }
+node -e '
+  const m = require(process.argv[1]);
+  if (m.afk_template_version !== "1.2.0") process.exit(1);
+' "$UPGRADE_TARGET/.afk-bootstrap.json" || { echo "upgrade did not record the new version" >&2; exit 1; }
+# A project document is its own source of truth: the migration reports it, never rewrites it.
+grep -q 'afk-workflow.md' <<<"$UPGRADE_OUT" \
+  || { echo "upgrade silently ignored project prose naming a retired profile" >&2; exit 1; }
+grep -q 'claude-ark' "$UPGRADE_TARGET/docs/afk-workflow.md" \
+  || { echo "upgrade rewrote a project-owned document" >&2; exit 1; }
+# Idempotent on a second run.
+"$S/upgrade-afk.sh" "$UPGRADE_TARGET" | grep -q 'already at' \
+  || { echo "upgrade is not idempotent" >&2; exit 1; }
+# Refuses a target without scaffold provenance.
+NO_PROVENANCE="$TMP/no-provenance-$LANGUAGE"
+mkdir -p "$NO_PROVENANCE/.sandcastle"
+cp "$UPGRADE_TARGET/.sandcastle/Dockerfile" "$NO_PROVENANCE/.sandcastle/"
+if "$S/upgrade-afk.sh" "$NO_PROVENANCE" >/dev/null 2>&1; then
+  echo "upgrade accepted a project with no .afk-bootstrap.json" >&2; exit 1
+fi
+# Refuses a template whose dispatch arm it does not recognise.
+UNKNOWN="$TMP/unknown-arm-$LANGUAGE"
+mkdir -p "$UNKNOWN/.sandcastle"
+node -e '
+  const fs = require("fs");
+  const source = fs.readFileSync(process.argv[1], "utf8");
+  const lines = source.split("\n").map((line) =>
+    line.includes("claude-stepfun) args=()") ? "    '"'"'  custom-provider) args=(); exit 9 ;;'"'"' \\" : line);
+  fs.writeFileSync(process.argv[2], lines.join("\n"));
+' "$UPGRADE_TARGET/.sandcastle/Dockerfile" "$UNKNOWN/.sandcastle/Dockerfile"
+cp "$UPGRADE_TARGET/.afk-bootstrap.json" "$UNKNOWN/"
+node -e '
+  const fs = require("fs");
+  const p = process.argv[1];
+  const m = JSON.parse(fs.readFileSync(p, "utf8"));
+  m.afk_template_version = "1.1.5";
+  fs.writeFileSync(p, JSON.stringify(m, null, 2) + "\n");
+' "$UNKNOWN/.afk-bootstrap.json"
+if "$S/upgrade-afk.sh" "$UNKNOWN" >/dev/null 2>&1; then
+  echo "upgrade guessed at an unrecognised dispatch arm" >&2; exit 1
+fi
+# Dry run writes nothing.
+node -e '
+  const fs = require("fs");
+  const p = process.argv[1];
+  const m = JSON.parse(fs.readFileSync(p, "utf8"));
+  m.afk_template_version = "1.1.5";
+  fs.writeFileSync(p, JSON.stringify(m, null, 2) + "\n");
+' "$UPGRADE_TARGET/.afk-bootstrap.json"
+BEFORE="$(cat "$UPGRADE_TARGET/.sandcastle/Dockerfile")"
+"$S/upgrade-afk.sh" "$UPGRADE_TARGET" --dry-run >/dev/null
+[ "$BEFORE" = "$(cat "$UPGRADE_TARGET/.sandcastle/Dockerfile")" ] \
+  || { echo "dry run wrote to a template file" >&2; exit 1; }
+[ "$(cat "$UPGRADE_TARGET/.afk-bootstrap.json" | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>process.stdout.write(JSON.parse(s).afk_template_version))')" = "1.1.5" ] \
+  || { echo "dry run wrote the recorded version" >&2; exit 1; }
 
 echo "$LANGUAGE smoke test passed"

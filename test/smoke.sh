@@ -414,6 +414,36 @@ for retired in psydo claude-ark agentrouter aliyun-deepseek; do
     || { echo "upgrade did not write the new fallback for $retired" >&2; exit 1; }
 done
 
+# GitHub reads .yaml as well as .yml, so a workflow named with the other
+# extension must be migrated too — otherwise it keeps a fallback the new profile
+# map rejects and its next run stops before the agent starts.
+YAML_FB="$TMP/fallback-yaml-$LANGUAGE"
+mkdir -p "$YAML_FB/.github/workflows"
+cp -R "$S/test/fixtures/legacy-1.1.x/.sandcastle" "$YAML_FB/"
+cp "$S/test/fixtures/legacy-1.1.x/.afk-bootstrap.json" "$YAML_FB/"
+cp "$S/test/fixtures/legacy-1.1.x/.github/workflows/agent-implement.yml" \
+   "$YAML_FB/.github/workflows/custom-agent.yaml"
+"$S/upgrade-afk.sh" "$YAML_FB" >/dev/null \
+  || { echo "upgrade refused a .yaml workflow" >&2; exit 1; }
+if grep -qF -e "vars.AFK_PROFILE || 'psydo'" "$YAML_FB/.github/workflows/custom-agent.yaml"; then
+  echo "upgrade left a retired fallback in a .yaml workflow" >&2; exit 1
+fi
+grep -qF -e "vars.AFK_PROFILE || 'claude-stepfun'" "$YAML_FB/.github/workflows/custom-agent.yaml" \
+  || { echo "upgrade did not rewrite the .yaml workflow fallback" >&2; exit 1; }
+
+# A checkout path containing a space must not split the reference list.
+SPACED_TOOL="$TMP/with space"
+mkdir -p "$SPACED_TOOL"
+cp "$S/upgrade-afk.sh" "$SPACED_TOOL/"
+cp -R "$S/references" "$SPACED_TOOL/"
+cp -R "$S/scaffold" "$SPACED_TOOL/"
+cp "$S/TEMPLATE_VERSION" "$SPACED_TOOL/"
+SPACED_PROJECT="$TMP/spaced project"
+mkdir -p "$SPACED_PROJECT/.github/workflows"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$SPACED_PROJECT/"
+"$SPACED_TOOL/upgrade-afk.sh" "$SPACED_PROJECT" >/dev/null \
+  || { echo "upgrade failed when its own path contains a space" >&2; exit 1; }
+
 UNKNOWN_FB="$TMP/fallback-unknown-$LANGUAGE"
 mkdir -p "$UNKNOWN_FB/.github/workflows"
 cp -R "$S/test/fixtures/legacy-1.1.x/.sandcastle" "$UNKNOWN_FB/"

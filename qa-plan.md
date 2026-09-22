@@ -32,6 +32,7 @@ boundary.
 | AFK-B19 | Linux host, generated Node scaffold | Bootstrap script and templates from the same checkout | A freshly scaffolded project | Run `bootstrap-afk.sh` and read its next-steps report | The report recommends only a profile the generated scaffold accepts | Test trap removes the temporary repo |
 | AFK-B20 | Linux host, verbatim previous-template fixture | A `cp` shim that fails only the metadata publish | The fixture plus an extra workflow file, so the workflow directory is also republished | Run `upgrade-afk.sh` with the shim on `PATH` | Every file is byte-identical afterwards, including the extra workflow, and restoring the workflow directory replaces it rather than nesting a second `workflows/` inside | Test trap removes the temporary copy and shim |
 | AFK-B21 | Linux host, verbatim previous-template fixture | The fixture with a provider added to the profile table | `profile.ts` carrying an added provider | Run `upgrade-afk.sh` against it | Refused, tree byte-identical: an added provider needs no change outside the table, so it must not be accepted as a generated shape | Test trap removes the temporary copy |
+| AFK-B22 | Linux host, verbatim previous-template fixture | A workflow named `.yaml` instead of `.yml`, and a tool checkout whose own path contains a space | Both extensions and a spaced path | Run `upgrade-afk.sh` against each | The `.yaml` workflow's retired fallback is rewritten; a spaced checkout path migrates rather than failing to resolve its reference shapes | Test trap removes the temporary copies |
 
 ## Traceability
 
@@ -58,6 +59,7 @@ boundary.
 | The handoff recommends a profile that works | Scaffold a Node project without an Auto-Test checkout | AFK-B19 |
 | A failed publish restores the project | Upgrade refuses what it cannot migrate safely | AFK-B20 |
 | A project provider is never silently dropped | Upgrade refuses what it cannot migrate safely | AFK-B21 |
+| Both workflow extensions and spaced paths work | Upgrade accepts every version the single step applies to | AFK-B22 |
 | The endpoint is mounted, not baked | Scaffold a Node project without an Auto-Test checkout | AFK-B14 |
 
 ## Risk Checks
@@ -245,10 +247,14 @@ Node `v24.15.0`, Python `3.13.13`, ShellCheck `0.11.0`.
   tree is byte-identical. Comparing the table verbatim against the historical
   shapes is what makes this hold: normalising the table away would accept a table
   a project had extended, and the migration would then delete that provider.
+- **AFK-B22 — passed.** A workflow named `custom-agent.yaml` keeps its retired
+  fallback under the old glob and is now rewritten; and a tool checkout whose
+  own path contains a space migrates rather than splitting the reference list.
 - Also verified: the `1.3.0` finding re-reported on `upgrade-afk.sh:202` is
   stale. Line 202 is now the minor-range gate
   (`[ "$from_minor" -eq 1 ] && [ "$to_minor" -eq 2 ]`); the full-version
-  comparison that refuses a downgrade sits above it.
+  comparison that refuses a downgrade sits above it. It has been re-reported
+  unchanged across two rounds against line numbers that no longer hold that code.
 
 Deterministic checks at the same identity: `bash -n` on `bootstrap-afk.sh`,
 `upgrade-afk.sh`, `test/smoke.sh` (`test/trusted-pr-delivery.sh` unchanged);

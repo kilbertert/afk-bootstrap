@@ -90,13 +90,12 @@ subst() {
 # edit and is refused rather than overwritten.
 profile_is_generated_shape() {
   local candidate="$1"
-  local refs="$S/references/profile-1.1.x.ts $S/references/profile-handport.ts"
+  local refs=("$S/references/profile-1.1.x.ts" "$S/references/profile-handport.ts")
   local reference
-  for reference in $refs; do
+  for reference in "${refs[@]}"; do
     [ -f "$reference" ] || { echo "profile.ts: migration reference missing: $reference" >&2; return 1; }
   done
-  # shellcheck disable=SC2086
-  profile_matches "$candidate" $refs
+  profile_matches "$candidate" "${refs[@]}"
 }
 
 # Like `subst`, but replaces every occurrence. A workflow may carry the same
@@ -320,7 +319,10 @@ if [ "$from_minor" -eq 1 ] && [ "$to_minor" -eq 2 ]; then
   #    `claudeProfile` a value it rejects before the agent starts. A fallback
   #    that is neither retired nor the new default is a project edit, and is
   #    refused rather than recorded as a completed migration.
-  for wf in "$WORK"/.github/workflows/*.yml; do
+  # GitHub reads both extensions, so a project that named its workflow .yaml
+  # must be migrated too — otherwise it keeps a fallback the new profile map
+  # rejects and its next run stops before the agent starts.
+  for wf in "$WORK"/.github/workflows/*.yml "$WORK"/.github/workflows/*.yaml; do
     [ -e "$wf" ] || continue
     # Collect the distinct fallbacks before rewriting anything: the file is
     # rewritten in place, so re-reading it mid-loop would see an already-rewritten

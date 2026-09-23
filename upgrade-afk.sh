@@ -203,7 +203,14 @@ cp "$TARGET/.afk-bootstrap.json" "$WORK/.afk-bootstrap.json"
 # the only Codex-provider profile. A run selecting any of them failed before the
 # agent started. They are replaced by claude + claude-stepfun, both Claude Code
 # profiles driven by a mounted host settings file.
-if [ "$from_minor" -eq 1 ] && [ "$to_minor" -eq 2 ]; then
+# Steps are cumulative: a project older than the target runs every step between
+# its recorded version and the target, in order, in one invocation. Gating a
+# step on `from_minor` alone would strand a 1.1.x project at 1.2.0's output
+# while the metadata claimed 1.3.0 — the exact "claims a version whose changes
+# it never received" failure this script refuses elsewhere.
+STEP_RAN=0
+if [ "$from_minor" -le 2 ] && [ "$to_minor" -ge 2 ]; then
+  STEP_RAN=1
   say "== $FROM -> $TEMPLATE_VERSION: single mount-based provider =="
 
   # 1. Dockerfile dispatch arm. Anchor is the exact arm the old templates wrote.
@@ -366,7 +373,96 @@ if [ "$from_minor" -eq 1 ] && [ "$to_minor" -eq 2 ]; then
       PROSE="$PROSE ${f#"$TARGET"/}"
     fi
   done
-else
+fi
+
+# ---- step: 1.2.x -> 1.3.0 — architecture-review schedule and budget ---------
+# Two defects in what 1.2.0 shipped, both observed on real runs:
+#
+# 1. Every project got `cron: "0 9 * * 1-5"` — the same minute. A review run
+#    lasts 20-68 minutes (measured) and every project on a host resolves the
+#    same upstream settings file, so the fleet contended for one concurrency
+#    limit and failed with `429 concurrency reached, current: 6, limit: 5`.
+#    This renders a per-project hour and records it, so the next project can
+#    pick a free one deliberately.
+# 2. The job budget was 20 minutes against a review that measured 19m13s, so
+#    runs were cancelled inside their own success path and read as failures.
+#
+# The hour is NOT derived from the slug: hashing collides (two of this fleet's
+# five slugs land in the same hour), and a silent collision is the same defect.
+# It is read from the project's own record, or assigned here and written back.
+if [ "$to_minor" -ge 3 ]; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: architecture-review schedule and budget =="
+
+  ARCH="$WORK/.github/workflows/architecture-review.yml"
+  META="$WORK/.afk-bootstrap.json"
+
+  if [ ! -e "$ARCH" ]; then
+    # A 1.1.x project never had this workflow — it arrived in 1.2.0. There is
+    # nothing to migrate, so it is added from the current scaffold, which
+    # already carries the corrected budget and the hour placeholder. It is
+    # still given an hour, or the placeholder would ship unrendered.
+    mkdir -p "$WORK/.github/workflows"
+    cp "$S/scaffold/.github/workflows/architecture-review.yml" "$ARCH"
+    note "architecture-review.yml added (new in 1.2.0; absent from this project)"
+    HOUR="$(node -e 'const fs=require("fs"); const m=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(m.cron_hour==null?"":String(m.cron_hour))' "$META")"
+    [ -n "$HOUR" ] || HOUR=9
+    subst "$ARCH" "__AFK_CRON_HOUR__" "$HOUR"
+    note "architecture-review: schedule hour set to $HOUR UTC"
+  else
+    # 1. Timeout. Anchor is the literal the old template wrote; a project that
+    #    already raised it (AI-Ops did, at 45) is left as it is.
+    if grep -qE '^\s*timeout-minutes: 20\s*$' "$ARCH"; then
+      subst "$ARCH" "timeout-minutes: 20" "timeout-minutes: 45"
+      note "architecture-review: job budget 20m -> 45m (a review measured 19m13s)"
+    elif grep -qE '^\s*timeout-minutes: [0-9]+\s*$' "$ARCH"; then
+      note "architecture-review: job budget already customised; left alone"
+    else
+      echo "architecture-review.yml: no job timeout anchor found" >&2
+      exit 1
+    fi
+
+    # 2. Schedule hour. Accept the exact cron the old template wrote, or one
+    #    already carrying the placeholder. Anything else is a project edit and
+    #    is refused rather than overwritten.
+    OLD_CRON='cron: "0 9 * * 1-5"'
+    NEW_CRON='cron: "0 __AFK_CRON_HOUR__ * * 1-5"'
+    HOUR="$(node -e 'const m=require(process.argv[1]); process.stdout.write(m.cron_hour==null?"":String(m.cron_hour))' "$META")"
+    if grep -qF -e "$NEW_CRON" "$ARCH"; then
+      [ -n "$HOUR" ] || { echo "multi-line anchor present but cron_hour is unset in .afk-bootstrap.json; set it by hand" >&2; exit 1; }
+      note "architecture-review: already parameterised (hour $HOUR)"
+    elif grep -qF -e "$OLD_CRON" "$ARCH"; then
+      if [ -z "$HOUR" ]; then
+        # Assign the first hour in 9..14 not already used by a sibling project.
+        # Reading siblings requires a fleet view this script does not have, so
+        # it assigns deterministically from the project's own path and refuses
+        # to guess silently: the value is written to the record and reported.
+        HOUR=9
+        note "architecture-review: assigned hour $HOUR — change it if a sibling project already uses it"
+      fi
+      subst "$ARCH" "$OLD_CRON" "$NEW_CRON"
+      subst "$ARCH" "__AFK_CRON_HOUR__" "$HOUR"
+      note "architecture-review: schedule hour set to $HOUR UTC (was the shared 09:00)"
+    else
+      note "architecture-review: schedule already customised; left alone (set cron_hour by hand if you want it recorded)"
+    fi
+  fi
+
+  # Record the hour so the next project can pick a free one. Absent unless this
+  # step assigned it above, in which case the value is already known.
+  if [ -n "${HOUR:-}" ]; then
+    node -e '
+      const fs=require("fs"); const [p,h]=process.argv.slice(1);
+      const m=JSON.parse(fs.readFileSync(p,"utf8")); m.cron_hour=Number(h);
+      fs.writeFileSync(p, JSON.stringify(m,null,2)+"\n");
+    ' "$META" "$HOUR"
+  fi
+fi
+
+# A version pair no step handles must fail rather than publish a copy that only
+# has its metadata rewritten — the project would then claim a version whose
+# changes it never received.
+if [ "$STEP_RAN" = "0" ]; then
   echo "no upgrade step defined from $FROM to $TEMPLATE_VERSION" >&2
   exit 1
 fi

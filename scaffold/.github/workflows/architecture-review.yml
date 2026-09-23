@@ -2,8 +2,21 @@ name: Architecture Review
 
 on:
   schedule:
-    # 09:00 UTC, Monday–Friday. GitHub may delay scheduled runs under load.
-    - cron: "0 9 * * 1-5"
+    # Monday–Friday, at the hour this project is assigned. GitHub may delay
+    # scheduled runs under load.
+    #
+    # The hour is a `__AFK_CRON_HOUR__` placeholder rather than a literal, and
+    # bootstrap renders it per project. It was a hardcoded `9` for every
+    # project, which put every project's review on the same minute against a
+    # shared upstream key: a run lasts 20–68 minutes (measured), so minute-level
+    # offsets cannot separate them and the reviews took a `429 concurrency
+    # reached, current: 6, limit: 5` and failed.
+    #
+    # The value is assigned by hand in `.afk-bootstrap.json` (`cron_hour`) and
+    # is deliberately NOT derived from the project slug: a hash collides (two
+    # of this fleet's five slugs collide in a six-hour window), and a silent
+    # collision is the same defect this placeholder exists to remove.
+    - cron: "0 __AFK_CRON_HOUR__ * * 1-5"
   workflow_dispatch:
 
 jobs:
@@ -40,7 +53,18 @@ jobs:
     needs: check-backlog
     if: needs.check-backlog.outputs.proceed == 'true'
     runs-on: self-hosted
-    timeout-minutes: 20
+    # Sized against observed runs, not guessed. A real review took 19m13s
+    # against the previous 20m budget, so the job was cancelled inside its own
+    # success path — after the PRD was published, while the post step uploaded
+    # the npm cache — and reported a `cancelled` that reads as failure. 45m
+    # gives ~2.3x the observed review time for a slower day, and sits below the
+    # 60m the other agent workflows budget rather than an order below them.
+    #
+    # Measured across projects: three of them hit the old 20m wall repeatedly
+    # (durations of 20.7, 20.8, 22.0, 22.1, 23.2 minutes, all `cancelled`),
+    # which is the timeout firing, not the model failing. Raise this from
+    # evidence, never from optimism — the number above is a measurement.
+    timeout-minutes: 45
     concurrency:
       group: architecture-review
       cancel-in-progress: false

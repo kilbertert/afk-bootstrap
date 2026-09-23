@@ -177,9 +177,25 @@ if find "$TARGET" -path '*/skills/ponytail/SKILL.md' -print -quit | grep -q .; t
   exit 1
 fi
 node -e '
-  const metadata = require(process.argv[1]);
-  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.2.0" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
+  const fs = require("fs");
+  const metadata = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.3.0" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
+  // The assigned schedule hour must be recorded, or the next project on this
+  // host has nothing to consult and collides by default — the defect that
+  // made every project architecture review run on the same minute.
+  if (typeof metadata.cron_hour !== "number" || metadata.cron_hour < 0 || metadata.cron_hour > 23) process.exit(1);
 ' "$TARGET/.afk-bootstrap.json" "$LANGUAGE" "$REPO" || { echo "template metadata invalid" >&2; exit 1; }
+
+# The scaffolded workflow must carry a rendered hour, never the placeholder:
+# an unrendered placeholder is an invalid cron, which silently disables the
+# workflow entirely rather than failing loudly.
+if grep -q '__AFK_CRON_HOUR__' "$TARGET/.github/workflows/architecture-review.yml"; then
+  echo "architecture-review cron placeholder was not rendered" >&2
+  exit 1
+fi
+grep -qE 'cron: "0 ([0-9]|1[0-9]|2[0-3]) \* \* 1-5"' \
+  "$TARGET/.github/workflows/architecture-review.yml" \
+  || { echo "architecture-review cron is not a rendered hour" >&2; exit 1; }
 
 AFK_ROOT="$TARGET" AFK_DEFAULT_BRANCH=main node "$TARGET/.sandcastle/policy-check.mjs" version
 if AFK_ROOT="$TARGET" AFK_DEFAULT_BRANCH=main node "$TARGET/.sandcastle/policy-check.mjs" commit >/dev/null 2>&1; then
@@ -305,9 +321,27 @@ grep -q 'vars.AFK_PROFILE || .claude-stepfun.' "$UPGRADE_TARGET/.github/workflow
 grep -q 'claude-stepfun' "$UPGRADE_TARGET/.sandcastle/main.ts" \
   || { echo "upgrade did not update the CLI usage string" >&2; exit 1; }
 node -e '
-  const m = require(process.argv[1]);
-  if (m.afk_template_version !== "1.2.0") process.exit(1);
-' "$UPGRADE_TARGET/.afk-bootstrap.json" || { echo "upgrade did not record the new version" >&2; exit 1; }
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  if (m.afk_template_version !== "1.3.0") process.exit(1);
+  // Cumulative migration: a 1.1.x project must come out of ONE run with both
+  // the 1.2.0 provider migration and the 1.3.0 schedule migration applied, and
+  // the assigned hour recorded. A step gated on from_minor alone would leave a
+  // 1.1.x project at 1.2.0 output while the metadata claimed 1.3.0.
+  if (typeof m.cron_hour !== "number" || m.cron_hour < 0 || m.cron_hour > 23) process.exit(1);
+' "$UPGRADE_TARGET/.afk-bootstrap.json" || { echo "upgrade did not record the new version and hour" >&2; exit 1; }
+# The schedule must come out rendered, and the job budget raised: leaving either
+# behind reproduces the two defects this step exists to remove — an invalid cron
+# that silently disables the workflow, or a 20m budget that cancels a 19m review
+# inside its own success path.
+if grep -q '__AFK_CRON_HOUR__' "$UPGRADE_TARGET/.github/workflows/architecture-review.yml"; then
+  echo "upgrade left the cron placeholder unrendered" >&2; exit 1
+fi
+grep -qE 'cron: "0 ([0-9]|1[0-9]|2[0-3]) \* \* 1-5"' \
+  "$UPGRADE_TARGET/.github/workflows/architecture-review.yml" \
+  || { echo "upgrade did not render a valid cron hour" >&2; exit 1; }
+grep -qE '^\s*timeout-minutes: 45\s*$' "$UPGRADE_TARGET/.github/workflows/architecture-review.yml" \
+  || { echo "upgrade did not raise the architecture-review job budget" >&2; exit 1; }
 # A project document is its own source of truth: the migration reports it, never rewrites it.
 grep -q 'afk-workflow.md' <<<"$UPGRADE_OUT" \
   || { echo "upgrade silently ignored project prose naming a retired profile" >&2; exit 1; }

@@ -305,11 +305,28 @@ fi
 # The fixture is a verbatim 1.1.x project (five-profile map, old dispatch arm,
 # psydo fallback), so the migration is exercised against real previous output
 # rather than a reconstruction of it.
+#
+# The 1.3.0 step refuses to invent a schedule hour, because a default would put
+# every migrated project on one hour — the defect that step removes. A 1.1.x
+# project has no architecture-review workflow at all, so it has no schedule to
+# carry over and must be told one, which is the `--cron-hour` operator path.
 UPGRADE_TARGET="$TMP/upgrade-$LANGUAGE"
 mkdir -p "$UPGRADE_TARGET/.github" "$UPGRADE_TARGET/docs"
 cp -R "$S/test/fixtures/legacy-1.1.x/." "$UPGRADE_TARGET/"
 
-UPGRADE_OUT="$("$S/upgrade-afk.sh" "$UPGRADE_TARGET")"
+# A project with no schedule to carry over and no --cron-hour must be refused,
+# not silently defaulted: a default is what put every project on one hour.
+NO_HOUR="$TMP/upgrade-no-hour-$LANGUAGE"
+mkdir -p "$NO_HOUR/.github" "$NO_HOUR/docs"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$NO_HOUR/"
+if "$S/upgrade-afk.sh" "$NO_HOUR" >/dev/null 2>&1; then
+  echo "upgrade assigned a schedule hour instead of refusing to guess" >&2; exit 1
+fi
+grep -q -- '--cron-hour' <<<"$("$S/upgrade-afk.sh" "$NO_HOUR" 2>&1)" \
+  || { echo "refusal did not name the --cron-hour fix" >&2; exit 1; }
+rm -rf "$NO_HOUR"
+
+UPGRADE_OUT="$("$S/upgrade-afk.sh" "$UPGRADE_TARGET" --cron-hour 13)"
 printf '%s\n' "$UPGRADE_OUT"
 grep -q 'claude-stepfun)' "$UPGRADE_TARGET/.sandcastle/Dockerfile" \
   || { echo "upgrade did not install the stepfun dispatch arm" >&2; exit 1; }
@@ -363,7 +380,7 @@ fi
 HANDPORT="$TMP/handport-$LANGUAGE"
 mkdir -p "$HANDPORT/.github/workflows"
 cp -R "$S/test/fixtures/handport-1.1.x/." "$HANDPORT/"
-"$S/upgrade-afk.sh" "$HANDPORT" >/dev/null \
+"$S/upgrade-afk.sh" "$HANDPORT" --cron-hour 11 >/dev/null \
   || { echo "upgrade refused the hand-port shape" >&2; exit 1; }
 [ "$(grep -c 'claude-stepfun)' "$HANDPORT/.sandcastle/Dockerfile")" = 1 ] \
   || { echo "hand-port did not converge to a single dispatch arm" >&2; exit 1; }
@@ -432,14 +449,14 @@ for retired in psydo claude-ark agentrouter aliyun-deepseek; do
   mkdir -p "$FB/.github/workflows"
   cp -R "$S/test/fixtures/legacy-1.1.x/.sandcastle" "$FB/"
   cp "$S/test/fixtures/legacy-1.1.x/.afk-bootstrap.json" "$FB/"
-  node -e '
+    node -e '
     const fs = require("fs"), dir = process.argv[1], provider = process.argv[2];
     const src = process.argv[3];
     const moved = fs.readFileSync(src, "utf8")
       .split("vars.AFK_PROFILE || '"'"'psydo'"'"'").join("vars.AFK_PROFILE || '"'"'" + provider + "'"'"'");
     fs.writeFileSync(dir + "/.github/workflows/agent-implement.yml", moved);
   ' "$FB" "$retired" "$S/test/fixtures/legacy-1.1.x/.github/workflows/agent-implement.yml"
-  "$S/upgrade-afk.sh" "$FB" >/dev/null \
+  "$S/upgrade-afk.sh" "$FB" --cron-hour 13 >/dev/null \
     || { echo "upgrade refused the retired fallback $retired" >&2; exit 1; }
   if grep -qF -e "$retired" "$FB/.github/workflows/agent-implement.yml"; then
     echo "upgrade left the retired fallback $retired in place" >&2; exit 1
@@ -457,7 +474,7 @@ cp -R "$S/test/fixtures/legacy-1.1.x/.sandcastle" "$YAML_FB/"
 cp "$S/test/fixtures/legacy-1.1.x/.afk-bootstrap.json" "$YAML_FB/"
 cp "$S/test/fixtures/legacy-1.1.x/.github/workflows/agent-implement.yml" \
    "$YAML_FB/.github/workflows/custom-agent.yaml"
-"$S/upgrade-afk.sh" "$YAML_FB" >/dev/null \
+"$S/upgrade-afk.sh" "$YAML_FB" --cron-hour 13 >/dev/null \
   || { echo "upgrade refused a .yaml workflow" >&2; exit 1; }
 if grep -qF -e "vars.AFK_PROFILE || 'psydo'" "$YAML_FB/.github/workflows/custom-agent.yaml"; then
   echo "upgrade left a retired fallback in a .yaml workflow" >&2; exit 1
@@ -475,7 +492,7 @@ cp "$S/TEMPLATE_VERSION" "$SPACED_TOOL/"
 SPACED_PROJECT="$TMP/spaced project"
 mkdir -p "$SPACED_PROJECT/.github/workflows"
 cp -R "$S/test/fixtures/legacy-1.1.x/." "$SPACED_PROJECT/"
-"$SPACED_TOOL/upgrade-afk.sh" "$SPACED_PROJECT" >/dev/null \
+"$SPACED_TOOL/upgrade-afk.sh" "$SPACED_PROJECT" --cron-hour 13 >/dev/null \
   || { echo "upgrade failed when its own path contains a space" >&2; exit 1; }
 
 UNKNOWN_FB="$TMP/fallback-unknown-$LANGUAGE"
@@ -558,7 +575,7 @@ node -e '
   m.afk_template_version = "1.1.1";
   fs.writeFileSync(p, JSON.stringify(m, null, 2) + "\n");
 ' "$OLDEST/.afk-bootstrap.json"
-"$S/upgrade-afk.sh" "$OLDEST" >/dev/null \
+"$S/upgrade-afk.sh" "$OLDEST" --cron-hour 13 >/dev/null \
   || { echo "upgrade refused a 1.1.1 project" >&2; exit 1; }
 grep -q 'claude-stepfun)' "$OLDEST/.sandcastle/Dockerfile" \
   || { echo "1.1.1 upgrade did not install the stepfun dispatch arm" >&2; exit 1; }
@@ -599,7 +616,9 @@ mkdir -p "$ROLLBACK/.github/workflows"
 cp -R "$S/test/fixtures/legacy-1.1.x/." "$ROLLBACK/"
 printf 'name: extra\non: push\n' > "$ROLLBACK/.github/workflows/extra.yml"
 ROLLBACK_TREE="$(cd "$ROLLBACK" && find . -type f | sort | xargs md5sum)"
-if PATH="$PUBLISH_SHIM/bin:$PATH" "$S/upgrade-afk.sh" "$ROLLBACK" >/dev/null 2>&1; then
+# --cron-hour so the run reaches the publish step: without it the hour refusal
+# would fail the run first, and this test would pass for the wrong reason.
+if PATH="$PUBLISH_SHIM/bin:$PATH" "$S/upgrade-afk.sh" "$ROLLBACK" --cron-hour 13 >/dev/null 2>&1; then
   echo "publish failure was not reported" >&2; exit 1
 fi
 [ "$ROLLBACK_TREE" = "$(cd "$ROLLBACK" && find . -type f | sort | xargs md5sum)" ] \

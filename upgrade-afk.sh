@@ -4,10 +4,17 @@
 # afk-bootstrap template version.
 #
 # USAGE:
-#   upgrade-afk <target-repo> [--dry-run]
+#   upgrade-afk <target-repo> [--dry-run] [--cron-hour 0-23]
 #
 #   <target-repo>  path to an AFK-scaffolded project (has .sandcastle/).
 #   --dry-run      print what would change; write nothing.
+#   --cron-hour    schedule hour for architecture-review, recorded in
+#                  .afk-bootstrap.json. Required only when the project has no
+#                  hour recorded yet and still runs at the shared 09:00: every
+#                  project on a host shares one upstream credential and one
+#                  concurrency limit, and a review runs 20-68 minutes, so two
+#                  projects on one hour fail with 429. There is no safe
+#                  default, so this is refused rather than guessed.
 #
 # Why this exists: `bootstrap-afk.sh` refuses a target that already has
 # `.sandcastle/`, so it can only create. This script performs the *upgrade*
@@ -35,20 +42,24 @@ set -euo pipefail
 umask 027
 
 usage() {
-  sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 TARGET="${1:-}"; shift || true
 [ -n "$TARGET" ] || { usage; exit 1; }
 
-DRY_RUN=0
+DRY_RUN=0; CRON_HOUR=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --dry-run) DRY_RUN=1; shift;;
-    -h|--help) usage; exit 0;;
+    --dry-run)   DRY_RUN=1; shift;;
+    --cron-hour) CRON_HOUR="${2:?}"; shift 2;;
+    -h|--help)   usage; exit 0;;
     *) echo "unknown arg: $1" >&2; usage; exit 1;;
   esac
 done
+if [ -n "$CRON_HOUR" ] && ! [[ "$CRON_HOUR" =~ ^([0-9]|1[0-9]|2[0-3])$ ]]; then
+  echo "--cron-hour must be 0-23, got: $CRON_HOUR" >&2; exit 1
+fi
 
 S="$(cd "$(dirname "$0")" && pwd)"
 [ -d "$TARGET/.sandcastle" ] || { echo "not an AFK-scaffolded project (no .sandcastle): $TARGET" >&2; exit 1; }
@@ -61,6 +72,39 @@ FROM="$(node -e 'process.stdout.write(String(require(process.argv[1]).afk_templa
 
 say()  { printf '%s\n' "$*"; }
 note() { printf '  %s\n' "$*"; }
+
+# The schedule hour for this project.
+#
+# An explicitly recorded hour wins; otherwise `--cron-hour` is REQUIRED. Carrying
+# the old value over looks tempting — a project at `0 9 * * 1-5` is already on
+# hour 9 — but it is wrong for the case this exists for: five projects on this
+# host all run at hour 9, so "preserve" reproduces the collision exactly. Which
+# hours are free is fleet-level information (it depends on which projects share
+# one upstream credential), and this script sees one project, so it cannot
+# derive it. An operator can.
+#
+# Empty means the caller must be told; the caller refuses rather than default.
+resolve_hour() {
+  if [ -n "$CRON_HOUR" ]; then printf '%s' "$CRON_HOUR"; return 0; fi
+  node -e '
+    const fs = require("fs");
+    const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+    process.stdout.write(m.cron_hour == null ? "" : String(m.cron_hour));
+  ' "$TARGET/.afk-bootstrap.json"
+}
+
+# Every project on a host shares one upstream credential and one concurrency
+# limit, and a review runs 20-68 minutes, so two projects on one hour fail with
+# 429. This script cannot see the fleet, so it asks rather than guesses.
+refuse_hour() {
+  echo "architecture-review: this project needs a schedule hour and none was given." >&2
+  echo "   Every project on this host shares one upstream credential and one concurrency limit," >&2
+  echo "   and a review runs 20-68 minutes — so give it an hour no sibling project uses." >&2
+  echo "   (Carrying the current value over is not enough: a project already at 09:00" >&2
+  echo "   keeps colliding with every sibling that is also at 09:00.)" >&2
+  echo "     $S/upgrade-afk.sh $TARGET --cron-hour <0-23>" >&2
+  exit 1
+}
 
 # Literal string replacement. The anchors below contain `|`, `(`, `)` and `.`
 # — both sed delimiters and regex metacharacters — so `sed s///` either breaks
@@ -405,10 +449,12 @@ if [ "$to_minor" -ge 3 ]; then
     mkdir -p "$WORK/.github/workflows"
     cp "$S/scaffold/.github/workflows/architecture-review.yml" "$ARCH"
     note "architecture-review.yml added (new in 1.2.0; absent from this project)"
-    HOUR="$(node -e 'const fs=require("fs"); const m=JSON.parse(fs.readFileSync(process.argv[1],"utf8")); process.stdout.write(m.cron_hour==null?"":String(m.cron_hour))' "$META")"
-    [ -n "$HOUR" ] || HOUR=9
+    HOUR="$(resolve_hour)"
+    if [ -z "$HOUR" ]; then
+      refuse_hour
+    fi
     subst "$ARCH" "__AFK_CRON_HOUR__" "$HOUR"
-    note "architecture-review: schedule hour set to $HOUR UTC"
+    note "architecture-review: schedule hour set to $HOUR UTC (assigned)"
   else
     # 1. Timeout. Anchor is the literal the old template wrote; a project that
     #    already raised it (AI-Ops did, at 45) is left as it is.
@@ -425,26 +471,27 @@ if [ "$to_minor" -ge 3 ]; then
     # 2. Schedule hour. Accept the exact cron the old template wrote, or one
     #    already carrying the placeholder. Anything else is a project edit and
     #    is refused rather than overwritten.
+    #
+    #    The hour is NOT defaulted when absent. Defaulting it to 9 would
+    #    reproduce, in the migration itself, the exact defect the migration
+    #    exists to remove: every project landing on the same hour. This script
+    #    has no fleet view — it cannot know which hours its siblings hold — so
+    #    it refuses and names the one-line fix rather than guessing silently.
     OLD_CRON='cron: "0 9 * * 1-5"'
     NEW_CRON='cron: "0 __AFK_CRON_HOUR__ * * 1-5"'
-    HOUR="$(node -e 'const m=require(process.argv[1]); process.stdout.write(m.cron_hour==null?"":String(m.cron_hour))' "$META")"
+    HOUR="$(resolve_hour)"
     if grep -qF -e "$NEW_CRON" "$ARCH"; then
-      [ -n "$HOUR" ] || { echo "multi-line anchor present but cron_hour is unset in .afk-bootstrap.json; set it by hand" >&2; exit 1; }
+      [ -n "$HOUR" ] || { echo "$META: cron_hour is unset while the workflow already carries the placeholder; set it" >&2; exit 1; }
       note "architecture-review: already parameterised (hour $HOUR)"
     elif grep -qF -e "$OLD_CRON" "$ARCH"; then
       if [ -z "$HOUR" ]; then
-        # Assign the first hour in 9..14 not already used by a sibling project.
-        # Reading siblings requires a fleet view this script does not have, so
-        # it assigns deterministically from the project's own path and refuses
-        # to guess silently: the value is written to the record and reported.
-        HOUR=9
-        note "architecture-review: assigned hour $HOUR — change it if a sibling project already uses it"
+        refuse_hour
       fi
       subst "$ARCH" "$OLD_CRON" "$NEW_CRON"
       subst "$ARCH" "__AFK_CRON_HOUR__" "$HOUR"
       note "architecture-review: schedule hour set to $HOUR UTC (was the shared 09:00)"
     else
-      note "architecture-review: schedule already customised; left alone (set cron_hour by hand if you want it recorded)"
+      note "architecture-review: schedule already customised; left alone (pass --cron-hour if you want it recorded)"
     fi
   fi
 

@@ -564,6 +564,91 @@ if "$S/upgrade-afk.sh" "$NO_PROVENANCE" >/dev/null 2>&1; then
   echo "upgrade accepted a project with no .afk-bootstrap.json" >&2; exit 1
 fi
 
+# A project already at 1.2.0 takes the schedule-only path: the provider step
+# must NOT re-run (it would refuse a legitimately customised profile.ts and
+# block an unrelated upgrade), and the run must reach publication rather than
+# dying on an unset variable after printing its change report. Both were real
+# defects on this path, and neither is reachable from the 1.1.x fixture above.
+MID="$TMP/mid-$LANGUAGE"
+mkdir -p "$MID/.github/workflows"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$MID/"
+# Make it a 1.2.0 project: provider migration already applied.
+node -e '
+  const fs = require("fs"), p = process.argv[1];
+  const f = p + "/.afk-bootstrap.json";
+  const m = JSON.parse(fs.readFileSync(f, "utf8"));
+  m.afk_template_version = "1.2.0";
+  fs.writeFileSync(f, JSON.stringify(m, null, 2) + "\n");
+' "$MID"
+cp "$S/scaffold/.sandcastle/profile.ts" "$MID/.sandcastle/profile.ts"
+cp "$S/scaffold/.github/workflows/architecture-review.yml" "$MID/.github/workflows/"
+MID_BEFORE="$(cd "$MID" && find . -type f | sort | xargs md5sum)"
+"$S/upgrade-afk.sh" "$MID" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a 1.2.0 project taking the schedule-only path" >&2; exit 1; }
+# The change must actually LAND: a run that prints its report and then aborts
+# leaves the rollback trap to restore the original, which is how an unset
+# variable silently made this path a no-op.
+grep -qE '^\s*timeout-minutes: 45\s*$' "$MID/.github/workflows/architecture-review.yml" \
+  || { echo "1.2.0 path did not land the job budget change" >&2; exit 1; }
+if grep -q '__AFK_CRON_HOUR__' "$MID/.github/workflows/architecture-review.yml"; then
+  echo "1.2.0 path left the cron placeholder unrendered" >&2; exit 1
+fi
+grep -qE 'cron: "0 13 \* \* 1-5"' "$MID/.github/workflows/architecture-review.yml" \
+  || { echo "1.2.0 path did not render the assigned hour" >&2; exit 1; }
+[ "$MID_BEFORE" != "$(cd "$MID" && find . -type f | sort | xargs md5sum)" ] \
+  || { echo "1.2.0 path reported changes but wrote nothing" >&2; exit 1; }
+
+# A 1.2.0 project whose profile.ts carries a legitimate project edit must still
+# be able to take the schedule upgrade. Re-running the provider step on it would
+# refuse the unrecognised shape and block an unrelated change — so the provider
+# step must be gated on the project being BELOW 1.2, not merely at-or-below.
+CUSTOM="$TMP/custom-profile-$LANGUAGE"
+mkdir -p "$CUSTOM/.github/workflows"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$CUSTOM/"
+node -e '
+  const fs = require("fs"), f = process.argv[1] + "/.afk-bootstrap.json";
+  const m = JSON.parse(fs.readFileSync(f, "utf8")); m.afk_template_version = "1.2.0";
+  fs.writeFileSync(f, JSON.stringify(m, null, 2) + "\n");
+' "$CUSTOM"
+cp "$S/scaffold/.sandcastle/profile.ts" "$CUSTOM/.sandcastle/profile.ts"
+cp "$S/scaffold/.github/workflows/architecture-review.yml" "$CUSTOM/.github/workflows/"
+# A project edit the provider migration does not recognise.
+node -e '
+  const fs = require("fs"), p = process.argv[1];
+  fs.writeFileSync(p, fs.readFileSync(p, "utf8").replace("imageName:", "projectExtra: 1,\n      imageName:"));
+' "$CUSTOM/.sandcastle/profile.ts"
+"$S/upgrade-afk.sh" "$CUSTOM" --cron-hour 13 >/dev/null \
+  || { echo "a customised 1.2.0 profile blocked an unrelated schedule upgrade" >&2; exit 1; }
+grep -qE '^\s*timeout-minutes: 45\s*$' "$CUSTOM/.github/workflows/architecture-review.yml" \
+  || { echo "customised 1.2.0 project did not receive the budget change" >&2; exit 1; }
+
+# An invalid recorded hour must be refused, not interpolated into the cron: a
+# non-integer or out-of-range value would produce an invalid schedule, which
+# disables the workflow silently instead of failing.
+BAD_HOUR="$TMP/bad-hour-$LANGUAGE"
+mkdir -p "$BAD_HOUR/.github/workflows"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$BAD_HOUR/"
+node -e '
+  const fs = require("fs"), f = process.argv[1] + "/.afk-bootstrap.json";
+  const m = JSON.parse(fs.readFileSync(f, "utf8"));
+  m.afk_template_version = "1.2.0";   // so the schedule step is the one that runs
+  m.cron_hour = 99;
+  fs.writeFileSync(f, JSON.stringify(m, null, 2) + "\n");
+' "$BAD_HOUR"
+cp "$S/scaffold/.sandcastle/profile.ts" "$BAD_HOUR/.sandcastle/profile.ts"
+cp "$S/scaffold/.github/workflows/architecture-review.yml" "$BAD_HOUR/.github/workflows/"
+# The fixture carries the placeholder; a bad recorded hour must be refused
+# before it is interpolated into the cron.
+subst_hour() { node -e '
+  const fs=require("fs"); const p=process.argv[1]; const h=process.argv[2];
+  fs.writeFileSync(p, fs.readFileSync(p,"utf8").split("__AFK_CRON_HOUR__").join(h));
+' "$1" "$2"; }
+subst_hour "$BAD_HOUR/.github/workflows/architecture-review.yml" 9
+if "$S/upgrade-afk.sh" "$BAD_HOUR" >/dev/null 2>&1; then
+  echo "upgrade accepted an out-of-range cron_hour" >&2; exit 1
+fi
+rm -rf "$BAD_HOUR"
+
 # A 1.1.1 project predates the range's lower bound only by coincidence of
 # fixtures; the step applies unchanged, so it must be accepted rather than
 # refused for being outside an enumerated list.

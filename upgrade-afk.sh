@@ -84,13 +84,27 @@ note() { printf '  %s\n' "$*"; }
 # derive it. An operator can.
 #
 # Empty means the caller must be told; the caller refuses rather than default.
+#
+# A recorded value is validated here, not trusted: it lands directly in the cron
+# expression, so a hand-edited or corrupted `cron_hour` would otherwise produce
+# an invalid schedule — which disables the workflow silently rather than failing.
 resolve_hour() {
-  if [ -n "$CRON_HOUR" ]; then printf '%s' "$CRON_HOUR"; return 0; fi
-  node -e '
-    const fs = require("fs");
-    const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-    process.stdout.write(m.cron_hour == null ? "" : String(m.cron_hour));
-  ' "$TARGET/.afk-bootstrap.json"
+  local hour
+  if [ -n "$CRON_HOUR" ]; then hour="$CRON_HOUR"; else
+    hour="$(node -e '
+      const fs = require("fs");
+      const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      process.stdout.write(m.cron_hour == null ? "" : String(m.cron_hour));
+    ' "$TARGET/.afk-bootstrap.json")"
+  fi
+  [ -z "$hour" ] && return 0
+  case "$hour" in
+    ''|*[!0-9]*) echo "cron_hour is not an integer: $hour" >&2; exit 1;;
+  esac
+  if [ "$hour" -gt 23 ]; then
+    echo "cron_hour is outside 0-23: $hour" >&2; exit 1
+  fi
+  printf '%s' "$hour"
 }
 
 # Every project on a host shares one upstream credential and one concurrency
@@ -252,8 +266,19 @@ cp "$TARGET/.afk-bootstrap.json" "$WORK/.afk-bootstrap.json"
 # step on `from_minor` alone would strand a 1.1.x project at 1.2.0's output
 # while the metadata claimed 1.3.0 — the exact "claims a version whose changes
 # it never received" failure this script refuses elsewhere.
+# Declared before the steps, not inside one: the report below reads it for every
+# path, and `set -u` aborts on an unset variable — which would kill the run
+# AFTER the change report printed but BEFORE the publish, so the rollback trap
+# would silently restore the original files. Each step that finds prose appends.
+PROSE=""
+
 STEP_RAN=0
-if [ "$from_minor" -le 2 ] && [ "$to_minor" -ge 2 ]; then
+# `-lt 2`: a project already at 1.2.0 has had the provider migration. Re-running
+# it is not merely wasted — the step refuses a profile.ts it cannot recognise as
+# generated, so a project that legitimately customised its profile would be
+# blocked from an unrelated schedule upgrade. Only a project still BELOW 1.2.0
+# needs this step.
+if [ "$from_minor" -lt 2 ] && [ "$to_minor" -ge 2 ]; then
   STEP_RAN=1
   say "== $FROM -> $TEMPLATE_VERSION: single mount-based provider =="
 
@@ -456,17 +481,39 @@ if [ "$to_minor" -ge 3 ]; then
     subst "$ARCH" "__AFK_CRON_HOUR__" "$HOUR"
     note "architecture-review: schedule hour set to $HOUR UTC (assigned)"
   else
-    # 1. Timeout. Anchor is the literal the old template wrote; a project that
-    #    already raised it (AI-Ops did, at 45) is left as it is.
-    if grep -qE '^\s*timeout-minutes: 20\s*$' "$ARCH"; then
-      subst "$ARCH" "timeout-minutes: 20" "timeout-minutes: 45"
-      note "architecture-review: job budget 20m -> 45m (a review measured 19m13s)"
-    elif grep -qE '^\s*timeout-minutes: [0-9]+\s*$' "$ARCH"; then
-      note "architecture-review: job budget already customised; left alone"
-    else
-      echo "architecture-review.yml: no job timeout anchor found" >&2
-      exit 1
-    fi
+    # 1. Timeout, scoped to the architecture-review job. A bare search-and-
+    #    replace on `timeout-minutes: 20` would raise EVERY job carrying that
+    #    budget — the file has a second job, and a project may have added more —
+    #    silently granting unrelated jobs a 45-minute budget. So the edit is
+    #    located by the job it belongs to, and only its own line is rewritten.
+    rc=0
+    node -e '
+      const fs = require("fs");
+      const [path, from, to] = process.argv.slice(1);
+      const source = fs.readFileSync(path, "utf8");
+      const lines = source.split("\n");
+      // Find the job whose key is `architecture-review:`, then the first
+      // `timeout-minutes:` inside it (before the next top-level job key).
+      const start = lines.findIndex((l) => /^  architecture-review:\s*$/.test(l));
+      if (start < 0) { console.error("architecture-review job not found"); process.exit(2); }
+      let end = lines.length;
+      for (let i = start + 1; i < lines.length; i++) {
+        if (/^  [A-Za-z0-9_-]+:\s*$/.test(lines[i])) { end = i; break; }
+      }
+      for (let i = start + 1; i < end; i++) {
+        if (lines[i].trim() === "timeout-minutes: " + from) {
+          lines[i] = lines[i].replace(from, to);
+          fs.writeFileSync(path, lines.join("\n"));
+          process.exit(0);
+        }
+      }
+      process.exit(3);   // present but already customised
+    ' "$ARCH" 20 45 || rc=$?
+    case $rc in
+      0) note "architecture-review: job budget 20m -> 45m (a review measured 19m13s)";;
+      3) note "architecture-review: job budget already customised; left alone";;
+      *) echo "architecture-review.yml: could not locate the job timeout" >&2; exit 1;;
+    esac
 
     # 2. Schedule hour. Accept the exact cron the old template wrote, or one
     #    already carrying the placeholder. Anything else is a project edit and
@@ -481,8 +528,12 @@ if [ "$to_minor" -ge 3 ]; then
     NEW_CRON='cron: "0 __AFK_CRON_HOUR__ * * 1-5"'
     HOUR="$(resolve_hour)"
     if grep -qF -e "$NEW_CRON" "$ARCH"; then
-      [ -n "$HOUR" ] || { echo "$META: cron_hour is unset while the workflow already carries the placeholder; set it" >&2; exit 1; }
-      note "architecture-review: already parameterised (hour $HOUR)"
+      [ -n "$HOUR" ] || { echo "$META: cron_hour is unset while the workflow already carries the placeholder; pass --cron-hour" >&2; exit 1; }
+      # The workflow may carry the placeholder from a scaffold, which renders it
+      # only at bootstrap. Leaving it here would ship `cron: "0 __AFK_CRON_HOUR__
+      # * * 1-5"` — an invalid cron, which disables the schedule silently.
+      subst "$ARCH" "__AFK_CRON_HOUR__" "$HOUR"
+      note "architecture-review: placeholder rendered (hour $HOUR)"
     elif grep -qF -e "$OLD_CRON" "$ARCH"; then
       if [ -z "$HOUR" ]; then
         refuse_hour

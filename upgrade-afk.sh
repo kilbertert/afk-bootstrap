@@ -83,6 +83,25 @@ note() { printf '  %s\n' "$*"; }
 # one upstream credential), and this script sees one project, so it cannot
 # derive it. An operator can.
 #
+# The hour a project's own cron line already occupies.
+#
+# This is not a default and not a choice: the hour is already in use by this
+# project, so recording it asserts a fact rather than inventing one. Empty when
+# the shape is something else — a schedule this script cannot read an hour from
+# is reported, never guessed at.
+#
+# A constant minute is required (`30 4 ...` or `0 4 ...`, not `*/30 4 ...`): an
+# hour field only identifies an occupied hour when the minute is fixed, since a
+# 20-68 minute review starting at `*/30 4` spills across the whole hour anyway.
+existing_cron_hour() {
+  node -e '
+    const fs = require("fs");
+    const source = fs.readFileSync(process.argv[1], "utf8");
+    const m = source.match(/- *cron: *"(\d{1,2}) +(\d{1,2}) +\* +\* +[^"]*"/);
+    process.stdout.write(m ? String(Number(m[2])) : "");
+  ' "$ARCH"
+}
+
 # Empty means the caller must be told; the caller refuses rather than default.
 #
 # A recorded value is validated here, not trusted: it lands directly in the cron
@@ -545,7 +564,22 @@ if [ "$to_minor" -ge 3 ]; then
       subst "$ARCH" "__AFK_CRON_HOUR__" "$HOUR"
       note "architecture-review: schedule hour set to $HOUR UTC (was the shared 09:00)"
     else
-      note "architecture-review: schedule already customised; left alone (pass --cron-hour if you want it recorded)"
+      # A schedule neither this template nor the placeholder wrote: the project
+      # set it. The schedule is left alone — it is the project's — but the hour
+      # it already occupies MUST be recorded. Without that, the record says the
+      # project holds no hour, and the next project on this host reads this
+      # hour as free and collides with it. Provenance is what the record is for.
+      HOUR="$(existing_cron_hour)"
+      if [ -n "$HOUR" ]; then
+        note "architecture-review: schedule left as the project set it; hour $HOUR recorded so siblings do not reuse it"
+      else
+        # A schedule shape this script cannot read an hour out of. Recording
+        # nothing is the honest outcome, but it must be said out loud: this
+        # project occupies an hour and the fleet cannot tell which.
+        say "WARNING: architecture-review schedule is in a shape this script cannot read an hour from:" >&2
+        say "         $(grep -m1 'cron:' "$ARCH" || echo '(no cron line)')" >&2
+        say "         No hour is recorded, so a sibling project may be assigned the same one." >&2
+      fi
     fi
   fi
 

@@ -626,6 +626,56 @@ grep -qE 'cron: "0 13 \* \* 1-5"' "$MID/.github/workflows/architecture-review.ym
 [ "$MID_BEFORE" != "$(cd "$MID" && find . -type f | sort | xargs md5sum)" ] \
   || { echo "1.2.0 path reported changes but wrote nothing" >&2; exit 1; }
 
+# A project whose cron this template did NOT write keeps its own schedule, but
+# the hour it already occupies must still be recorded. Without that the record
+# says the project holds no hour, and the next project on this host reads that
+# hour as free and collides with it — provenance is the record's whole purpose.
+CUSTOM_CRON="$TMP/custom-cron-$LANGUAGE"
+mkdir -p "$CUSTOM_CRON/.github/workflows"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$CUSTOM_CRON/"
+node -e '
+  const fs = require("fs"), f = process.argv[1] + "/.afk-bootstrap.json";
+  const m = JSON.parse(fs.readFileSync(f, "utf8")); m.afk_template_version = "1.2.0";
+  fs.writeFileSync(f, JSON.stringify(m, null, 2) + "\n");
+' "$CUSTOM_CRON"
+cp "$S/scaffold/.sandcastle/profile.ts" "$CUSTOM_CRON/.sandcastle/profile.ts"
+cp "$S/scaffold/.github/workflows/architecture-review.yml" "$CUSTOM_CRON/.github/workflows/"
+node -e '
+  const fs = require("fs"), p = process.argv[1] + "/.github/workflows/architecture-review.yml";
+  fs.writeFileSync(p, fs.readFileSync(p, "utf8")
+    .split("__AFK_CRON_HOUR__").join("4")            // a readable custom hour
+    .replace(/cron: "0 4 /, "cron: \"30 4 "));
+' "$CUSTOM_CRON"
+"$S/upgrade-afk.sh" "$CUSTOM_CRON" >/dev/null \
+  || { echo "upgrade refused a project with its own schedule" >&2; exit 1; }
+node -e '
+  const fs=require("fs"); const m=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+  if (m.cron_hour !== 4) { console.error("occupied hour was not recorded: " + m.cron_hour); process.exit(1); }
+' "$CUSTOM_CRON/.afk-bootstrap.json" \
+  || { echo "custom-schedule project did not record its occupied hour" >&2; exit 1; }
+grep -qF 'cron: "30 4 ' "$CUSTOM_CRON/.github/workflows/architecture-review.yml" \
+  || { echo "upgrade rewrote a schedule the project set" >&2; exit 1; }
+
+# An unreadable schedule shape must be reported, not silently recorded as absent.
+UNREADABLE="$TMP/unreadable-cron-$LANGUAGE"
+mkdir -p "$UNREADABLE/.github/workflows"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$UNREADABLE/"
+node -e '
+  const fs = require("fs"), f = process.argv[1] + "/.afk-bootstrap.json";
+  const m = JSON.parse(fs.readFileSync(f, "utf8")); m.afk_template_version = "1.2.0";
+  fs.writeFileSync(f, JSON.stringify(m, null, 2) + "\n");
+' "$UNREADABLE"
+cp "$S/scaffold/.sandcastle/profile.ts" "$UNREADABLE/.sandcastle/profile.ts"
+cp "$S/scaffold/.github/workflows/architecture-review.yml" "$UNREADABLE/.github/workflows/"
+node -e '
+  const fs = require("fs"), p = process.argv[1] + "/.github/workflows/architecture-review.yml";
+  fs.writeFileSync(p, fs.readFileSync(p, "utf8").split("__AFK_CRON_HOUR__").join("4")
+    .replace(/cron: "0 4 /, "cron: \"*/30 4 "));
+' "$UNREADABLE"
+grep -q 'cannot read an hour from' <<<"$("$S/upgrade-afk.sh" "$UNREADABLE" 2>&1)" \
+  || { echo "an unreadable schedule was not reported" >&2; exit 1; }
+rm -rf "$UNREADABLE"
+
 # A 1.2.0 project whose profile.ts carries a legitimate project edit must still
 # be able to take the schedule upgrade. Re-running the provider step on it would
 # refuse the unrecognised shape and block an unrelated change — so the provider

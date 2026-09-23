@@ -487,18 +487,21 @@ if [ "$to_minor" -ge 3 ]; then
     #    silently granting unrelated jobs a 45-minute budget. So the edit is
     #    located by the job it belongs to, and only its own line is rewritten.
     rc=0
+    # shellcheck disable=SC2016  # the JS wants a literal `$`; the trailing `$?`
+    #                             # is shell, and is not inside the quotes.
     node -e '
       const fs = require("fs");
       const [path, from, to] = process.argv.slice(1);
       const source = fs.readFileSync(path, "utf8");
       const lines = source.split("\n");
+      const jobKey = (l) => /^  [A-Za-z0-9_-]+: */.test(l) && l.trim().endsWith(":");
       // Find the job whose key is `architecture-review:`, then the first
       // `timeout-minutes:` inside it (before the next top-level job key).
-      const start = lines.findIndex((l) => /^  architecture-review:\s*$/.test(l));
+      const start = lines.findIndex((l) => l.trim() === "architecture-review:");
       if (start < 0) { console.error("architecture-review job not found"); process.exit(2); }
       let end = lines.length;
       for (let i = start + 1; i < lines.length; i++) {
-        if (/^  [A-Za-z0-9_-]+:\s*$/.test(lines[i])) { end = i; break; }
+        if (jobKey(lines[i])) { end = i; break; }
       }
       for (let i = start + 1; i < end; i++) {
         if (lines[i].trim() === "timeout-minutes: " + from) {

@@ -186,6 +186,34 @@ node -e '
   if (typeof metadata.cron_hour !== "number" || metadata.cron_hour < 0 || metadata.cron_hour > 23) process.exit(1);
 ' "$TARGET/.afk-bootstrap.json" "$LANGUAGE" "$REPO" || { echo "template metadata invalid" >&2; exit 1; }
 
+# The record and the workflow must agree. Bootstrap copies with --no-clobber, so
+# a project that already has architecture-review.yml keeps it — and in that case
+# --cron-hour cannot apply. Recording the hour anyway would make the next project
+# read a free hour as taken, and rendering it would edit a file this run does not
+# own. Asserted on the existing-target fixture below, which pre-dates this run.
+
+# A fresh bootstrap that already carries the workflow: the hour must NOT be
+# recorded, because the workflow's own schedule was not set by this run.
+SKIP_HOUR="$TMP/skip-hour-$LANGUAGE"
+mkdir -p "$SKIP_HOUR/.github/workflows"
+git -C "$SKIP_HOUR" init -q -b main
+printf '# existing\n' > "$SKIP_HOUR/README.md"
+cp "$S/scaffold/.github/workflows/architecture-review.yml" "$SKIP_HOUR/.github/workflows/"
+node -e '
+  const fs=require("fs"); const p=process.argv[1];
+  fs.writeFileSync(p, fs.readFileSync(p,"utf8").split("__AFK_CRON_HOUR__").join("9"));
+' "$SKIP_HOUR/.github/workflows/architecture-review.yml"
+cp "$SKIP_HOUR/.github/workflows/architecture-review.yml" "$TMP/skip-hour-before.yml"
+"$S/bootstrap-afk.sh" "$SKIP_HOUR" --language "$LANGUAGE" --repo "$REPO" --no-build --cron-hour 17 >/dev/null 2>&1 || true
+cmp -s "$TMP/skip-hour-before.yml" "$SKIP_HOUR/.github/workflows/architecture-review.yml" \
+  || { echo "bootstrap rewrote a workflow it did not create" >&2; exit 1; }
+if node -e '
+  const fs=require("fs"); const m=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+  process.exit(m.cron_hour === undefined ? 0 : 1);
+' "$SKIP_HOUR/.afk-bootstrap.json"; then :; else
+  echo "bootstrap recorded an hour for a workflow it did not set" >&2; exit 1
+fi
+
 # The scaffolded workflow must carry a rendered hour, never the placeholder:
 # an unrendered placeholder is an invalid cron, which silently disables the
 # workflow entirely rather than failing loudly.

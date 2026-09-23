@@ -27,7 +27,7 @@ set -euo pipefail
 umask 027
 
 usage() {
-  sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 TARGET="${1:-}"; shift || true
@@ -84,10 +84,28 @@ sed -i "s#__AFK_IMAGE__#sandcastle:$SLUG#g" "$TARGET/.sandcastle/profile.ts"
 # Every project on this host resolves the same upstream credential, so the
 # schedule hour is the only thing keeping two reviews from contending for one
 # concurrency limit. Left unrendered, the placeholder would ship as a literal
-# and the cron would be invalid, silently disabling the workflow — so this
-# always renders, defaulting to 9 when no hour was given.
-sed -i "s#__AFK_CRON_HOUR__#${CRON_HOUR:-9}#g" \
-  "$TARGET/.github/workflows/architecture-review.yml"
+# and the cron would be invalid, silently disabling the workflow — so it always
+# renders... unless this run did not create the file.
+#
+# One value, used for both the render and the record, so the two cannot
+# disagree. The copy above is `--no-clobber`, so a workflow that already existed
+# is NOT replaced: rendering it would edit a file this run does not own, and
+# recording an hour for it would make the next project read a free hour as
+# taken. That case is reported and left entirely alone.
+ARCH_WF="$TARGET/.github/workflows/architecture-review.yml"
+RESOLVED_HOUR="${CRON_HOUR:-9}"
+if [ -e "$ARCH_WF" ] && ! grep -q '__AFK_CRON_HOUR__' "$ARCH_WF"; then
+  cat >&2 <<'EOF'
+warning: .github/workflows/architecture-review.yml already existed and was left
+  as it is (the scaffold does not clobber project files). --cron-hour does not
+  apply to it, and no cron_hour is recorded — the record must not name an hour
+  the schedule does not use. To migrate it and record the hour:
+    ./upgrade-afk.sh <target> --cron-hour N
+EOF
+  RESOLVED_HOUR=""
+else
+  sed -i "s#__AFK_CRON_HOUR__#$RESOLVED_HOUR#g" "$ARCH_WF"
+fi
 
 # ---- per-language generated files -----------------------------------------
 cp "$S/templates/implement.$LANGUAGE.md"      "$TARGET/.sandcastle/implement.md"
@@ -167,10 +185,14 @@ node -e '
     // The assigned architecture-review hour, recorded so the next project on
     // this host can pick a free one instead of colliding by default. Kept in
     // the provenance file rather than inferred from the slug: a hash collides.
-    cron_hour: Number(cronHour),
+    //
+    // Omitted, not defaulted, when this run did not render the workflow (it
+    // already existed). Recording 9 there would name an hour the schedule does
+    // not use, and the next project would then read a free hour as taken.
+    ...(cronHour === "" ? {} : { cron_hour: Number(cronHour) }),
   }, null, 2) + "\n");
 ' "$TARGET/.afk-bootstrap.json" "$TEMPLATE_VERSION" "$LANGUAGE" "$REPO" \
-  "$TARGET/.sandcastle/consensus-contract.json" "${CRON_HOUR:-9}"
+  "$TARGET/.sandcastle/consensus-contract.json" "${RESOLVED_HOUR}"
 
 # ---- node_modules: the scaffold adds Node deps; keep them out of git ------
 if [ -f "$TARGET/.gitignore" ] && ! grep -qx 'node_modules' "$TARGET/.gitignore"; then

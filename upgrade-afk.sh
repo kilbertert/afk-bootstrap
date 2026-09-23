@@ -83,6 +83,7 @@ note() { printf '  %s\n' "$*"; }
 # one upstream credential), and this script sees one project, so it cannot
 # derive it. An operator can.
 #
+
 # The hour a project's own cron line already occupies.
 #
 # This is not a default and not a choice: the hour is already in use by this
@@ -488,11 +489,22 @@ if [ "$to_minor" -ge 3 ]; then
   if [ ! -e "$ARCH" ]; then
     # A 1.1.x project never had this workflow — it arrived in 1.2.0. There is
     # nothing to migrate, so it is added from the current scaffold, which
-    # already carries the corrected budget and the hour placeholder. It is
-    # still given an hour, or the placeholder would ship unrendered.
-    mkdir -p "$WORK/.github/workflows"
+    # already carries the corrected budget and the hour placeholder.
+    #
+    # Adding the WORKFLOW ALONE IS NOT ENOUGH. It invokes
+    # `.sandcastle/architecture-review/architecture-review.ts`, which a 1.1.x
+    # project does not have — the workflow would fail on its first run, and the
+    # migration would have swapped a missing feature for a broken one. The whole
+    # runner ships with it, from the same scaffold, so the two cannot diverge.
+    if [ ! -e "$S/scaffold/.sandcastle/architecture-review/architecture-review.ts" ]; then
+      echo "scaffold is missing the architecture-review runner; cannot add the workflow safely" >&2
+      exit 1
+    fi
+    mkdir -p "$WORK/.github/workflows" "$WORK/.sandcastle/architecture-review"
     cp "$S/scaffold/.github/workflows/architecture-review.yml" "$ARCH"
-    note "architecture-review.yml added (new in 1.2.0; absent from this project)"
+    cp -R "$S/scaffold/.sandcastle/architecture-review/." \
+          "$WORK/.sandcastle/architecture-review/"
+    note "architecture-review added (workflow + runner; new in 1.2.0)"
     HOUR="$(resolve_hour)"
     if [ -z "$HOUR" ]; then
       refuse_hour
@@ -667,6 +679,16 @@ restore_published() {
       cp -R "$STAGE/backup/$rel" "${TARGET:?}/$rel" || say "could not restore $rel" >&2
     done
     for rel in $PUBLISHED_FILES; do
+      if [ -e "$STAGE/backup/$rel.absent" ]; then
+        # The migration added this file; rolling back means removing it, not
+        # restoring a backup that never existed. Its parent directory may also
+        # have been created by the migration, so remove it when it is left
+        # empty — an empty `.sandcastle/architecture-review/` is residue the
+        # project never asked for.
+        rm -f "$TARGET/$rel"
+        rmdir "$(dirname "$TARGET/$rel")" 2>/dev/null || true
+        continue
+      fi
       cp "$STAGE/backup/$rel" "$TARGET/$rel" || say "could not restore $rel" >&2
     done
   fi
@@ -679,7 +701,14 @@ trap restore_published EXIT
 publish_file() {
   local rel="$1"
   mkdir -p "$(dirname "$TARGET/$rel")" "$(dirname "$STAGE/backup/$rel")"
-  cp "$TARGET/$rel" "$STAGE/backup/$rel" || return 1
+  # A file this migration ADDS has nothing to back up. The restore path skips a
+  # backup that is absent, so not creating one is correct — failing here instead
+  # would mean the migration could never add a file, only edit one.
+  if [ -e "$TARGET/$rel" ]; then
+    cp "$TARGET/$rel" "$STAGE/backup/$rel" || return 1
+  else
+    : >"$STAGE/backup/$rel.absent"
+  fi
   PUBLISHED_FILES="$rel $PUBLISHED_FILES"
   cp "$WORK/$rel" "$TARGET/$rel" || return 1
   return 0
@@ -702,6 +731,17 @@ for rel in .sandcastle/Dockerfile .sandcastle/profile.ts .sandcastle/main.ts; do
 done
 if ! diff -rq "$TARGET/.github/workflows" "$WORK/.github/workflows" >/dev/null 2>&1; then
   publish_dir ".github/workflows" || { say "could not publish .github/workflows" >&2; exit 1; }
+fi
+# The architecture-review runner. Published per file, not as a directory: it
+# sits inside `.sandcastle/`, which is project-owned — replacing that directory
+# wholesale would discard every project edit to the other modules.
+if [ -d "$WORK/.sandcastle/architecture-review" ]; then
+  for f in "$WORK/.sandcastle/architecture-review"/*; do
+    [ -f "$f" ] || continue
+    rel=".sandcastle/architecture-review/${f##*/}"
+    cmp -s "$TARGET/$rel" "$f" 2>/dev/null && continue
+    publish_file "$rel" || { say "could not publish $rel" >&2; exit 1; }
+  done
 fi
 publish_file ".afk-bootstrap.json" || { say "could not publish .afk-bootstrap.json" >&2; exit 1; }
 

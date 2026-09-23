@@ -626,6 +626,24 @@ grep -qE 'cron: "0 13 \* \* 1-5"' "$MID/.github/workflows/architecture-review.ym
 [ "$MID_BEFORE" != "$(cd "$MID" && find . -type f | sort | xargs md5sum)" ] \
   || { echo "1.2.0 path reported changes but wrote nothing" >&2; exit 1; }
 
+# A 1.1.x project has no architecture-review workflow AND no runner for it. The
+# migration must add both: adding the workflow alone leaves it invoking
+# `.sandcastle/architecture-review/architecture-review.ts`, which does not exist
+# there — it would fail on its first run, replacing a missing feature with a
+# broken one. Asserted on the runner, not just the workflow file.
+grep -q '.sandcastle/architecture-review/architecture-review.ts' \
+  "$UPGRADE_TARGET/.github/workflows/architecture-review.yml" \
+  || { echo "migrated workflow does not reference the runner" >&2; exit 1; }
+for f in architecture-review.ts extraction.md prompt.md; do
+  [ -f "$UPGRADE_TARGET/.sandcastle/architecture-review/$f" ] \
+    || { echo "migration did not add .sandcastle/architecture-review/$f" >&2; exit 1; }
+done
+# The surrounding .sandcastle files are project-owned and must survive.
+for f in Dockerfile main.ts profile.ts; do
+  [ -f "$UPGRADE_TARGET/.sandcastle/$f" ] \
+    || { echo "migration discarded .sandcastle/$f" >&2; exit 1; }
+done
+
 # A project whose cron this template did NOT write keeps its own schedule, but
 # the hour it already occupies must still be recorded. Without that the record
 # says the project holds no hour, and the next project on this host reads that
@@ -774,6 +792,17 @@ esac
 exec /usr/bin/cp "$@"
 SHIM
 chmod 755 "$PUBLISH_SHIM/bin/cp"
+
+# A rollback must REMOVE a file the migration added, not try to restore a backup
+# that never existed — an added file has none.
+ADDED_ROLLBACK="$TMP/added-rollback-$LANGUAGE"
+mkdir -p "$ADDED_ROLLBACK/.github" "$ADDED_ROLLBACK/docs"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$ADDED_ROLLBACK/"
+if PATH="$PUBLISH_SHIM/bin:$PATH" "$S/upgrade-afk.sh" "$ADDED_ROLLBACK" --cron-hour 13 >/dev/null 2>&1; then
+  echo "a failing publish was not reported" >&2; exit 1
+fi
+[ ! -e "$ADDED_ROLLBACK/.sandcastle/architecture-review" ] \
+  || { echo "rollback left a file the migration had added" >&2; exit 1; }
 ROLLBACK="$TMP/rollback-$LANGUAGE"
 mkdir -p "$ROLLBACK/.github/workflows"
 cp -R "$S/test/fixtures/legacy-1.1.x/." "$ROLLBACK/"

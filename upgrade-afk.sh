@@ -487,7 +487,10 @@ fi
 # The hour is NOT derived from the slug: hashing collides (two of this fleet's
 # five slugs land in the same hour), and a silent collision is the same defect.
 # It is read from the project's own record, or assigned here and written back.
-if [ "$to_minor" -ge 3 ]; then
+# `from_minor -lt 3`: a project already at 1.3.x has run this step. Re-running it
+# re-does the schedule migration on a workflow it already migrated — the same
+# over-broad gating that once made a 1.2.0 project redo the provider step.
+if [ "$from_minor" -lt 3 ] && [ "$to_minor" -ge 3 ]; then
   STEP_RAN=1
   say "== $FROM -> $TEMPLATE_VERSION: architecture-review schedule and budget =="
 
@@ -615,6 +618,10 @@ if [ "$to_minor" -ge 3 ]; then
         fs.writeFileSync(path, lines.join("\n"));
       ' "$ARCH" "$OLD_CRON" "$NEW_CRON"
       subst "$ARCH" "__AFK_CRON_HOUR__" "$HOUR"
+      # The 1.2.0 file hardcoded the comment as well as the cron. Moving one
+      # without the other leaves the file describing a schedule it no longer
+      # runs, and the next reader schedules against the wrong hour.
+      subst "$ARCH" "# 09:00 UTC, Monday" "# $HOUR:00 UTC, Monday" || true
       note "architecture-review: schedule hour set to $HOUR UTC (was the shared 09:00)"
     else
       # A schedule neither this template nor the placeholder wrote: the project
@@ -644,6 +651,55 @@ if [ "$to_minor" -ge 3 ]; then
       const m=JSON.parse(fs.readFileSync(p,"utf8")); m.cron_hour=Number(h);
       fs.writeFileSync(p, JSON.stringify(m,null,2)+"\n");
     ' "$META" "$HOUR"
+  fi
+fi
+
+# ---- step: 1.3.x -> 1.3.1 — raise the job budget against a longer observation --
+# 1.3.0 set the budget to 45 minutes from a single 19m13s run. The fleet has since
+# produced a COMPLETED review at 54.8 minutes (AI-Ops), which that budget would
+# have killed in its own success path — the same defect the 20-minute budget
+# caused, one size up. 75m is ~1.37x the longest observed successful run.
+#
+# Only a run that COMPLETED counts as evidence: a cancelled run's duration is the
+# budget it hit, not the work it did. That is the distinction the 45m sizing got
+# wrong, so it is stated here rather than left implicit.
+if [ "$to_patch" -ge 1 ] && [ "$to_minor" -ge 3 ]; then
+  STEP_RAN=1
+  ARCH="$WORK/.github/workflows/architecture-review.yml"
+  if [ ! -e "$ARCH" ]; then
+    note "architecture-review.yml absent; no budget to raise"
+  elif grep -qE '^\s*timeout-minutes: 45\s*$' "$ARCH"; then
+    say "== $FROM -> $TEMPLATE_VERSION: architecture-review job budget =="
+    # shellcheck disable=SC2016  # the JS pattern wants a literal `$`; none is shell here.
+    node -e '
+      const fs = require("fs");
+      const [path] = process.argv.slice(1);
+      const lines = fs.readFileSync(path, "utf8").split("\n");
+      const jobKey = (l) => /^  [A-Za-z0-9_-]+: */.test(l) && l.trim().endsWith(":");
+      const start = lines.findIndex((l) => l.trim() === "architecture-review:");
+      if (start < 0) { console.error("architecture-review job not found"); process.exit(2); }
+      let end = lines.length;
+      for (let i = start + 1; i < lines.length; i++) {
+        if (jobKey(lines[i])) { end = i; break; }
+      }
+      for (let i = start + 1; i < end; i++) {
+        if (lines[i].trim() === "timeout-minutes: 45") {
+          lines[i] = lines[i].replace("45", "75");
+          fs.writeFileSync(path, lines.join("\n"));
+          process.exit(0);
+        }
+      }
+      process.exit(3);
+    ' "$ARCH" || rc=$?
+    case ${rc:-0} in
+      0) note "architecture-review: job budget 45m -> 75m (a review completed at 54.8m)" ;;
+      3) note "architecture-review: job budget already customised; left alone" ;;
+      *) echo "architecture-review.yml: could not locate the job timeout" >&2; exit 1 ;;
+    esac
+  elif grep -qE '^\s*timeout-minutes: [0-9]+\s*$' "$ARCH"; then
+    note "architecture-review: job budget is not the 1.3.0 value; left alone"
+  else
+    echo "architecture-review.yml: no job timeout found" >&2; exit 1
   fi
 fi
 

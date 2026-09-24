@@ -95,11 +95,19 @@ note() { printf '  %s\n' "$*"; }
 # hour field only identifies an occupied hour when the minute is fixed, since a
 # 20-68 minute review starting at `*/30 4` spills across the whole hour anyway.
 existing_cron_hour() {
+  # Scans LINE BY LINE for an uncommented `- cron:` entry. `String.match` finds
+  # the first occurrence anywhere, which for a workflow that keeps its old
+  # schedule commented out is the COMMENT — and the hour it names is not the one
+  # the project runs. A leading `-` is the test: `# - cron:` does not match.
   node -e '
     const fs = require("fs");
-    const source = fs.readFileSync(process.argv[1], "utf8");
-    const m = source.match(/- *cron: *"(\d{1,2}) +(\d{1,2}) +\* +\* +[^"]*"/);
-    process.stdout.write(m ? String(Number(m[2])) : "");
+    const lines = fs.readFileSync(process.argv[1], "utf8").split("\n");
+    for (const line of lines) {
+      if (!/^[ \t]*-[ \t]*cron:/.test(line)) continue;
+      const m = line.match(/"(\d{1,2}) +(\d{1,2}) +\* +\* +[^"]*"/);
+      if (m) { process.stdout.write(String(Number(m[2]))); process.exit(0); }
+    }
+    process.stdout.write("");
   ' "$ARCH"
 }
 
@@ -566,18 +574,46 @@ if [ "$to_minor" -ge 3 ]; then
     OLD_CRON='cron: "0 9 * * 1-5"'
     NEW_CRON='cron: "0 __AFK_CRON_HOUR__ * * 1-5"'
     HOUR="$(resolve_hour)"
-    if grep -qF -e "$NEW_CRON" "$ARCH"; then
+    # A commented-out `# - cron: ...` is not the schedule. A plain grep matches it
+    # too, and then the migration rewrites a comment (harmless) while recording
+    # the hour the COMMENT names — so the record describes a schedule the project
+    # does not run, and the next project reads the genuinely-occupied hour as
+    # free. Every test below is therefore "is this an ACTIVE cron line", which is
+    # a leading character test rather than a substring one.
+    active_cron() { grep -E '^[[:space:]]*-[[:space:]]*cron:' "$1" 2>/dev/null; }
+    if active_cron "$ARCH" | grep -qF -e "$NEW_CRON"; then
       [ -n "$HOUR" ] || { echo "$META: cron_hour is unset while the workflow already carries the placeholder; pass --cron-hour" >&2; exit 1; }
       # The workflow may carry the placeholder from a scaffold, which renders it
       # only at bootstrap. Leaving it here would ship `cron: "0 __AFK_CRON_HOUR__
       # * * 1-5"` — an invalid cron, which disables the schedule silently.
       subst "$ARCH" "__AFK_CRON_HOUR__" "$HOUR"
       note "architecture-review: placeholder rendered (hour $HOUR)"
-    elif grep -qF -e "$OLD_CRON" "$ARCH"; then
+    elif active_cron "$ARCH" | grep -qF -e "$OLD_CRON"; then
       if [ -z "$HOUR" ]; then
         refuse_hour
       fi
-      subst "$ARCH" "$OLD_CRON" "$NEW_CRON"
+      # Rewrite the ACTIVE line only. `subst` is a global string replace, so a
+      # commented copy of the same line would be rewritten too — turning a
+      # record of what the project used to run into a claim about what it runs.
+      active_cron "$ARCH" | grep -qF -e "$OLD_CRON" || {
+        echo "$ARCH: active cron line vanished mid-migration" >&2; exit 1; }
+      # shellcheck disable=SC2016  # the JS pattern wants a literal `$`; none is shell here.
+      node -e '
+        const fs = require("fs");
+        const [path, from, to] = process.argv.slice(1);
+        const lines = fs.readFileSync(path, "utf8").split("\n");
+        let done = false;
+        for (let i = 0; i < lines.length; i++) {
+          // Only an uncommented `- cron:` line is the schedule.
+          if (!/^[ \t]*-[ \t]*cron:/.test(lines[i])) continue;
+          if (!lines[i].includes(from)) continue;
+          lines[i] = lines[i].replace(from, to);
+          done = true;
+          break;
+        }
+        if (!done) { console.error("no active cron line matched"); process.exit(1); }
+        fs.writeFileSync(path, lines.join("\n"));
+      ' "$ARCH" "$OLD_CRON" "$NEW_CRON"
       subst "$ARCH" "__AFK_CRON_HOUR__" "$HOUR"
       note "architecture-review: schedule hour set to $HOUR UTC (was the shared 09:00)"
     else

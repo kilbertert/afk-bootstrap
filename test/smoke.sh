@@ -670,6 +670,39 @@ for f in Dockerfile main.ts profile.ts; do
     || { echo "migration discarded .sandcastle/$f" >&2; exit 1; }
 done
 
+# A commented-out `# - cron:` line is not the schedule. A whole-file search finds
+# the comment first and records the hour it names, so the record describes a
+# schedule the project does not run and the genuinely-occupied hour looks free to
+# the next project. Asserted with BOTH present: the comment says 9, the live line
+# says 16, and 16 is what must be recorded.
+COMMENTED_CRON="$TMP/commented-cron-$LANGUAGE"
+mkdir -p "$COMMENTED_CRON/.github/workflows"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$COMMENTED_CRON/"
+node -e '
+  const fs = require("fs"), f = process.argv[1] + "/.afk-bootstrap.json";
+  const m = JSON.parse(fs.readFileSync(f, "utf8")); m.afk_template_version = "1.2.0";
+  fs.writeFileSync(f, JSON.stringify(m, null, 2) + "\n");
+' "$COMMENTED_CRON"
+cp "$S/scaffold/.sandcastle/profile.ts" "$COMMENTED_CRON/.sandcastle/profile.ts"
+cp "$S/scaffold/.github/workflows/architecture-review.yml" "$COMMENTED_CRON/.github/workflows/"
+# shellcheck disable=SC2016  # JS regex wants literal `$1`; none is shell here.
+node -e '
+  const fs = require("fs"), p = process.argv[1] + "/.github/workflows/architecture-review.yml";
+  fs.writeFileSync(p, fs.readFileSync(p, "utf8")
+    .split("__AFK_CRON_HOUR__").join("9")
+    .replace(/^(    - cron: .*)$/m, "    # $1\n    - cron: \"0 16 * * 1-5\""));
+' "$COMMENTED_CRON"
+"$S/upgrade-afk.sh" "$COMMENTED_CRON" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a workflow carrying a commented cron" >&2; exit 1; }
+node -e '
+  const fs=require("fs"); const m=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+  if (m.cron_hour !== 16) { console.error("recorded the commented hour, not the live one: " + m.cron_hour); process.exit(1); }
+' "$COMMENTED_CRON/.afk-bootstrap.json" \
+  || { echo "a commented cron line was mistaken for the schedule" >&2; exit 1; }
+# The live schedule is the project's and must be left alone; the comment stays too.
+grep -qE '^[[:space:]]*- cron: "0 16 \* \* 1-5"' "$COMMENTED_CRON/.github/workflows/architecture-review.yml" \
+  || { echo "upgrade rewrote the live schedule" >&2; exit 1; }
+
 # A project that already hand-ported the runner keeps it: the migration follows
 # the scaffold's own --no-clobber rule. Overwriting would discard project work
 # while reporting success, which is the failure the scaffold copy avoids for

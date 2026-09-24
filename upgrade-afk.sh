@@ -701,6 +701,40 @@ if [ "$to_patch" -ge 1 ] && [ "$to_minor" -ge 3 ]; then
   else
     echo "architecture-review.yml: no job timeout found" >&2; exit 1
   fi
+
+  # Sync the schedule comment to the cron it describes.
+  #
+  # 1.3.0 rewrote `# 09:00 UTC` only on the branch that migrated the cron itself,
+  # so a project that had already moved its cron — or moved it by hand — kept a
+  # comment naming a different hour. A comment that disagrees with the line below
+  # it is worse than no comment: the next person schedules against the wrong hour.
+  # This reads the ACTIVE cron hour and rewrites any `HH:00 UTC` comment to match.
+  if [ -e "$ARCH" ]; then
+    ACTIVE_HOUR="$(existing_cron_hour)"
+    if [ -n "$ACTIVE_HOUR" ]; then
+      COMMENT_MISMATCH="$(node -e '
+        const fs = require("fs");
+        const lines = fs.readFileSync(process.argv[1], "utf8").split("\n");
+        const hour = process.argv[2];
+        for (const line of lines) {
+          const m = line.match(/^\s*#\s*(\d{1,2}):00 UTC/);
+          if (m && m[1] !== hour) { process.stdout.write(m[1]); process.exit(0); }
+        }
+        process.stdout.write("");
+      ' "$ARCH" "$ACTIVE_HOUR")"
+      if [ -n "$COMMENT_MISMATCH" ]; then
+        # Two-digit hours, so 9 becomes 09. The hour is read as a NUMBER
+        # (`Number(m[2])`), which drops the leading zero — writing that back
+        # produced `# 9:00 UTC` and made a correct sync look like a typo.
+        # `10#$h` forces base 10: bash reads a leading zero as octal, so a bare
+        # `09` is an invalid octal number rather than the number nine.
+        printf -v PADDED '%02d' "$((10#$ACTIVE_HOUR))"
+        printf -v PADDED_OLD '%02d' "$((10#$COMMENT_MISMATCH))"
+        subst "$ARCH" "# $PADDED_OLD:00 UTC" "# $PADDED:00 UTC"
+        note "architecture-review: schedule comment $PADDED_OLD:00 -> $PADDED:00 UTC (matched to the active cron)"
+      fi
+    fi
+  fi
 fi
 
 # A version pair no step handles must fail rather than publish a copy that only

@@ -201,13 +201,26 @@ fi
 
 # ---- package.json: merge or create ----------------------------------------
 if [ -f "$TARGET/package.json" ]; then
+  # shellcheck disable=SC2016  # the JS wants literal `$`; none is shell here.
   node -e '
     const fs = require("fs"); const p = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
     const scripts = { ...(p.scripts || {}) };
     delete scripts["prd:to-issues"];
-    p.scripts = { ...scripts, "afk": "tsx .sandcastle/main.ts", "ralph": "tsx .sandcastle/planner.ts", "afk:policy": "node .sandcastle/policy-check.mjs all" };
+    // The AFK-owned scripts are set unconditionally: they are this template own
+    // entry points, and a stale one would break the workflow.
+    const owned = { "afk": "tsx .sandcastle/main.ts", "ralph": "tsx .sandcastle/planner.ts", "afk:policy": "node .sandcastle/policy-check.mjs all" };
+    // `test` and `check` are only FILLED IN, never overwritten. The scaffold
+    // instruction tells the agent to run `npm run check`, so a project without
+    // one was given an instruction that fails immediately — but a project that
+    // already defines its own check (typecheck, lint, build) keeps it, because
+    // replacing it would silently drop that project own gates.
+    const defaults = { "test": "vitest run --passWithNoTests", "check": "npm test && npm run afk:policy" };
+    for (const [k, v] of Object.entries(defaults)) {
+      if (!scripts[k]) scripts[k] = v;
+    }
+    p.scripts = { ...scripts, ...owned };
     p.dependencies = { ...(p.dependencies || {}), "tsx": "^4.20.0", "zod": "^4.4.3" };
-    p.devDependencies = { ...(p.devDependencies || {}), "@ai-hero/sandcastle": "^0.12.0", "@types/node": "^24.0.0" };
+    p.devDependencies = { ...(p.devDependencies || {}), "@ai-hero/sandcastle": "^0.12.0", "@types/node": "^24.0.0", "vitest": "^3.0.0" };
     fs.writeFileSync(process.argv[1], JSON.stringify(p, null, 2) + "\n");
   ' "$TARGET/package.json"
   echo "== updating package-lock.json for \`npm ci\` in the workflows =="

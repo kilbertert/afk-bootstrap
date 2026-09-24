@@ -45,6 +45,15 @@ mkdir "$EXISTING_TARGET"
 git -C "$EXISTING_TARGET" init -q -b main
 printf '{"name":"existing","scripts":{"check":"echo check"}}\n' > "$EXISTING_TARGET/package.json"
 "$S/bootstrap-afk.sh" "$EXISTING_TARGET" --language "$LANGUAGE" --repo "$REPO" --no-build >/dev/null
+# A project with its own `check` keeps it. Overwriting would silently drop that
+# project's gates (typecheck, lint, build) — the scaffold fills in a missing
+# check, it does not replace one that exists.
+node -e '
+  const fs = require("fs");
+  const s = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).scripts || {};
+  if (s.check !== "echo check") { console.error("project check was overwritten: " + s.check); process.exit(1); }
+' "$EXISTING_TARGET/package.json" || { echo "scaffold replaced an existing check script" >&2; exit 1; }
+
 grep -q '"afk"' "$EXISTING_TARGET/package.json" \
   || { echo "installer could not merge an existing package manifest" >&2; exit 1; }
 [ -f "$EXISTING_TARGET/package-lock.json" ] \
@@ -104,6 +113,23 @@ if grep -qE 'claude-ark|agentrouter|psydo|aliyun-deepseek' "$TARGET/.sandcastle/
 fi
 grep -q 'vars.AFK_PROFILE || .claude-stepfun.' "$TARGET/.github/workflows/agent-implement.yml" \
   || { echo "workflow does not fall back to claude-stepfun" >&2; exit 1; }
+# The scaffold's own instruction says "Run `npm run check` before committing", so a
+# project must actually HAVE it — a fresh scaffold previously shipped neither
+# `check` nor a test runner, and every agent was handed an instruction that failed
+# on its first use. Asserted on the fresh target, which had no package.json.
+node -e '
+  const fs = require("fs");
+  const s = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).scripts || {};
+  if (!s.check) { console.error("fresh scaffold defines no check script"); process.exit(1); }
+  if (!s.test) { console.error("fresh scaffold defines no test script"); process.exit(1); }
+' "$TARGET/package.json" || { echo "fresh scaffold is missing check/test" >&2; exit 1; }
+# And the runner must actually be installed, not merely named.
+node -e '
+  const fs = require("fs");
+  const d = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).devDependencies || {};
+  if (!d.vitest) { console.error("no test runner in devDependencies"); process.exit(1); }
+' "$TARGET/package.json" || { echo "scaffold names a test script with no runner" >&2; exit 1; }
+
 grep -q '# Existing glossary' "$TARGET/CONTEXT.md" || { echo "existing glossary was overwritten" >&2; exit 1; }
 if grep -q '{{PROJECT_NAME}}' "$WORKTREE_TARGET/CONTEXT.md"; then
   echo "generated glossary contains an unrendered project name" >&2

@@ -205,7 +205,7 @@ fi
 node -e '
   const fs = require("fs");
   const metadata = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.3.1" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
+  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.3.2" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
   // The assigned schedule hour must be recorded, or the next project on this
   // host has nothing to consult and collides by default — the defect that
   // made every project architecture review run on the same minute.
@@ -360,7 +360,7 @@ fi
 # psydo fallback), so the migration is exercised against real previous output
 # rather than a reconstruction of it.
 #
-# The 1.3.1 step refuses to invent a schedule hour, because a default would put
+# The 1.3.2 step refuses to invent a schedule hour, because a default would put
 # every migrated project on one hour — the defect that step removes. A 1.1.x
 # project has no architecture-review workflow at all, so it has no schedule to
 # carry over and must be told one, which is the `--cron-hour` operator path.
@@ -394,11 +394,11 @@ grep -q 'claude-stepfun' "$UPGRADE_TARGET/.sandcastle/main.ts" \
 node -e '
   const fs = require("fs");
   const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-  if (m.afk_template_version !== "1.3.1") process.exit(1);
+  if (m.afk_template_version !== "1.3.2") process.exit(1);
   // Cumulative migration: a 1.1.x project must come out of ONE run with both
-  // the 1.2.0 provider migration and the 1.3.1 schedule migration applied, and
+  // the 1.2.0 provider migration and the 1.3.2 schedule migration applied, and
   // the assigned hour recorded. A step gated on from_minor alone would leave a
-  // 1.1.x project at 1.2.0 output while the metadata claimed 1.3.1.
+  // 1.1.x project at 1.2.0 output while the metadata claimed 1.3.2.
   if (typeof m.cron_hour !== "number" || m.cron_hour < 0 || m.cron_hour > 23) process.exit(1);
 ' "$UPGRADE_TARGET/.afk-bootstrap.json" || { echo "upgrade did not record the new version and hour" >&2; exit 1; }
 # The schedule must come out rendered, and the job budget raised: leaving either
@@ -718,6 +718,62 @@ if grep -qE '^\s*#.*\b13\b.*placeholder' "$UPGRADE_TARGET/.github/workflows/arch
   echo "the render rewrote prose because the token appeared more than once" >&2; exit 1
 fi
 
+# A single-digit hour must keep its leading zero. The hour is read as a NUMBER
+# and written back into prose, so a naive format produced `# 9:00 UTC` — a
+# correct sync that looks like a typo. Bash also reads a leading zero as octal,
+# so formatting `09` needs an explicit base.
+for pair in "9:09" "8:08"; do
+  want=${pair##*:}; cron_h=${pair%%:*}
+  PAD="$TMP/pad-$cron_h-$LANGUAGE"
+  mkdir -p "$PAD/.github/workflows"
+  cp -R "$S/test/fixtures/legacy-1.1.x/." "$PAD/"
+  node -e '
+    const fs = require("fs"), f = process.argv[1] + "/.afk-bootstrap.json";
+    const m = JSON.parse(fs.readFileSync(f, "utf8")); m.afk_template_version = "1.3.1";
+    fs.writeFileSync(f, JSON.stringify(m, null, 2) + "\n");
+  ' "$PAD"
+  cp "$S/scaffold/.sandcastle/profile.ts" "$PAD/.sandcastle/profile.ts"
+  printf '%s\n' \
+    'name: Architecture Review' 'on:' '  schedule:' \
+    '    # 12:00 UTC, Monday–Friday. GitHub may delay' \
+    "    - cron: \"0 $cron_h * * 1-5\"" '  workflow_dispatch:' 'jobs:' \
+    '  architecture-review:' '    runs-on: self-hosted' \
+    '    timeout-minutes: 75' '    steps:' '      - run: echo hi' \
+    > "$PAD/.github/workflows/architecture-review.yml"
+  "$S/upgrade-afk.sh" "$PAD" >/dev/null \
+    || { echo "upgrade failed for a single-digit hour ($cron_h)" >&2; exit 1; }
+  grep -q "# $want:00 UTC" "$PAD/.github/workflows/architecture-review.yml" \
+    || { echo "single-digit hour lost its leading zero (wanted $want:00)" >&2; exit 1; }
+done
+
+# A workflow whose cron and comment disagree is corrected to the cron. 1.3.0 only
+# rewrote the comment on the branch that moved the cron itself, so a project that
+# had already moved it (or moved it by hand) kept a comment naming a different
+# hour — worse than no comment, because the next reader schedules against it.
+DRIFTED="$TMP/comment-drift-$LANGUAGE"
+mkdir -p "$DRIFTED/.github/workflows"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$DRIFTED/"
+node -e '
+  const fs = require("fs"), f = process.argv[1] + "/.afk-bootstrap.json";
+  const m = JSON.parse(fs.readFileSync(f, "utf8")); m.afk_template_version = "1.3.1";
+  fs.writeFileSync(f, JSON.stringify(m, null, 2) + "\n");
+' "$DRIFTED"
+cp "$S/scaffold/.sandcastle/profile.ts" "$DRIFTED/.sandcastle/profile.ts"
+printf '%s\n' \
+  'name: Architecture Review' 'on:' '  schedule:' \
+  '    # 09:00 UTC, Monday–Friday. GitHub may delay scheduled runs under load.' \
+  '    - cron: "0 16 * * 1-5"' '  workflow_dispatch:' 'jobs:' \
+  '  architecture-review:' '    runs-on: self-hosted' \
+  '    timeout-minutes: 75' '    steps:' '      - run: echo hi' \
+  > "$DRIFTED/.github/workflows/architecture-review.yml"
+"$S/upgrade-afk.sh" "$DRIFTED" >/dev/null \
+  || { echo "upgrade refused a workflow with a drifted comment" >&2; exit 1; }
+grep -q '# 16:00 UTC' "$DRIFTED/.github/workflows/architecture-review.yml" \
+  || { echo "the schedule comment was not synced to the active cron" >&2; exit 1; }
+# The cron itself is the project's; it must not move.
+grep -qE '^\s*- cron: "0 16 \* \* 1-5"' "$DRIFTED/.github/workflows/architecture-review.yml" \
+  || { echo "comment sync moved the cron" >&2; exit 1; }
+
 # The 1.2.0 -> 1.3.x path moves a MIGRATED file whose comment hardcoded 09:00.
 # Moving the cron alone leaves the file describing a schedule it no longer runs.
 COMMENT_MOVE="$TMP/comment-move-$LANGUAGE"
@@ -729,7 +785,7 @@ node -e '
   fs.writeFileSync(f, JSON.stringify(m, null, 2) + "\n");
 ' "$COMMENT_MOVE"
 cp "$S/scaffold/.sandcastle/profile.ts" "$COMMENT_MOVE/.sandcastle/profile.ts"
-# A real-shaped workflow: the 1.3.1 step locates the job by name, so a fixture
+# A real-shaped workflow: the 1.3.2 step locates the job by name, so a fixture
 # without the job would fail for a reason unrelated to what this asserts.
 printf '%s\n' \
   'name: Architecture Review' 'on:' '  schedule:' \
@@ -743,7 +799,7 @@ printf '%s\n' \
 grep -q '# 13:00 UTC' "$COMMENT_MOVE/.github/workflows/architecture-review.yml" \
   || { echo "migration moved the cron but left the comment naming the old hour" >&2; exit 1; }
 
-# A project already at 1.3.0 takes the 1.3.1 budget step ONLY. The 1.3.0 step must
+# A project already at 1.3.0 takes the 1.3.2 budget step ONLY. The 1.3.0 step must
 # not re-run on it — re-running the schedule migration on an already-migrated
 # workflow is the over-broad gating that once made a 1.2.0 project redo the
 # provider migration.

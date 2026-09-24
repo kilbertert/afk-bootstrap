@@ -5,17 +5,17 @@ on:
     # Monday–Friday, at the hour this project is assigned. GitHub may delay
     # scheduled runs under load.
     #
-    # The hour is a `__AFK_CRON_HOUR__` placeholder rather than a literal, and
-    # bootstrap renders it per project. It was a hardcoded `9` for every
-    # project, which put every project's review on the same minute against a
-    # shared upstream key: a run lasts 20–68 minutes (measured), so minute-level
-    # offsets cannot separate them and the reviews took a `429 concurrency
-    # reached, current: 6, limit: 5` and failed.
+    # This project's hour is rendered by bootstrap into the cron line below; the
+    # surrounding text stays hour-neutral so a render cannot rewrite it. It was a
+    # hardcoded 9 for every project, which put every project's review on the same
+    # minute against a shared upstream key: a run lasts 20-68 minutes (measured),
+    # so minute-level offsets cannot separate them and the reviews took a
+    # `429 concurrency reached, current: 6, limit: 5` and failed.
     #
-    # The value is assigned by hand in `.afk-bootstrap.json` (`cron_hour`) and
-    # is deliberately NOT derived from the project slug: a hash collides (two
-    # of this fleet's five slugs collide in a six-hour window), and a silent
-    # collision is the same defect this placeholder exists to remove.
+    # The value is assigned by hand in `.afk-bootstrap.json` (`cron_hour`) and is
+    # deliberately NOT derived from the project slug: a hash collides (two of this
+    # fleet's five slugs collide in a six-hour window), and a silent collision is
+    # the same defect this placeholder exists to remove.
     - cron: "0 __AFK_CRON_HOUR__ * * 1-5"
   workflow_dispatch:
 
@@ -53,18 +53,17 @@ jobs:
     needs: check-backlog
     if: needs.check-backlog.outputs.proceed == 'true'
     runs-on: self-hosted
-    # Sized against observed runs, not guessed. A real review took 19m13s
-    # against the previous 20m budget, so the job was cancelled inside its own
-    # success path — after the PRD was published, while the post step uploaded
-    # the npm cache — and reported a `cancelled` that reads as failure. 45m
-    # gives ~2.3x the observed review time for a slower day, and sits below the
-    # 60m the other agent workflows budget rather than an order below them.
+    # Sized against the longest OBSERVED SUCCESSFUL review, not against the
+    # shortest. The fleet's completed runs now include one at 54.8 minutes
+    # (AI-Ops); a 45-minute budget would have killed it in its own success path,
+    # which is the same defect the 20-minute budget caused. 75m gives ~1.37x that
+    # observation. A longer run that is still cancelled is the next signal to
+    # raise this again — the number follows measurement, it does not lead it.
     #
-    # Measured across projects: three of them hit the old 20m wall repeatedly
-    # (durations of 20.7, 20.8, 22.0, 22.1, 23.2 minutes, all `cancelled`),
-    # which is the timeout firing, not the model failing. Raise this from
-    # evidence, never from optimism — the number above is a measurement.
-    timeout-minutes: 45
+    # Note the distinction the earlier sizing missed: a cancelled run's duration
+    # is the BUDGET, not the work, so it is not evidence of how long a review
+    # takes. Only completed runs are.
+    timeout-minutes: 75
     concurrency:
       group: architecture-review
       cancel-in-progress: false

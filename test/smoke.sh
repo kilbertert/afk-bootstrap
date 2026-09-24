@@ -45,6 +45,15 @@ mkdir "$EXISTING_TARGET"
 git -C "$EXISTING_TARGET" init -q -b main
 printf '{"name":"existing","scripts":{"check":"echo check"}}\n' > "$EXISTING_TARGET/package.json"
 "$S/bootstrap-afk.sh" "$EXISTING_TARGET" --language "$LANGUAGE" --repo "$REPO" --no-build >/dev/null
+# A project with its own `check` keeps it. Overwriting would silently drop that
+# project's gates (typecheck, lint, build) — the scaffold fills in a missing
+# check, it does not replace one that exists.
+node -e '
+  const fs = require("fs");
+  const s = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).scripts || {};
+  if (s.check !== "echo check") { console.error("project check was overwritten: " + s.check); process.exit(1); }
+' "$EXISTING_TARGET/package.json" || { echo "scaffold replaced an existing check script" >&2; exit 1; }
+
 grep -q '"afk"' "$EXISTING_TARGET/package.json" \
   || { echo "installer could not merge an existing package manifest" >&2; exit 1; }
 [ -f "$EXISTING_TARGET/package-lock.json" ] \
@@ -104,6 +113,23 @@ if grep -qE 'claude-ark|agentrouter|psydo|aliyun-deepseek' "$TARGET/.sandcastle/
 fi
 grep -q 'vars.AFK_PROFILE || .claude-stepfun.' "$TARGET/.github/workflows/agent-implement.yml" \
   || { echo "workflow does not fall back to claude-stepfun" >&2; exit 1; }
+# The scaffold's own instruction says "Run `npm run check` before committing", so a
+# project must actually HAVE it — a fresh scaffold previously shipped neither
+# `check` nor a test runner, and every agent was handed an instruction that failed
+# on its first use. Asserted on the fresh target, which had no package.json.
+node -e '
+  const fs = require("fs");
+  const s = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).scripts || {};
+  if (!s.check) { console.error("fresh scaffold defines no check script"); process.exit(1); }
+  if (!s.test) { console.error("fresh scaffold defines no test script"); process.exit(1); }
+' "$TARGET/package.json" || { echo "fresh scaffold is missing check/test" >&2; exit 1; }
+# And the runner must actually be installed, not merely named.
+node -e '
+  const fs = require("fs");
+  const d = JSON.parse(fs.readFileSync(process.argv[1], "utf8")).devDependencies || {};
+  if (!d.vitest) { console.error("no test runner in devDependencies"); process.exit(1); }
+' "$TARGET/package.json" || { echo "scaffold names a test script with no runner" >&2; exit 1; }
+
 grep -q '# Existing glossary' "$TARGET/CONTEXT.md" || { echo "existing glossary was overwritten" >&2; exit 1; }
 if grep -q '{{PROJECT_NAME}}' "$WORKTREE_TARGET/CONTEXT.md"; then
   echo "generated glossary contains an unrendered project name" >&2
@@ -177,9 +203,53 @@ if find "$TARGET" -path '*/skills/ponytail/SKILL.md' -print -quit | grep -q .; t
   exit 1
 fi
 node -e '
-  const metadata = require(process.argv[1]);
-  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.2.0" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
+  const fs = require("fs");
+  const metadata = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.3.0" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
+  // The assigned schedule hour must be recorded, or the next project on this
+  // host has nothing to consult and collides by default — the defect that
+  // made every project architecture review run on the same minute.
+  if (typeof metadata.cron_hour !== "number" || metadata.cron_hour < 0 || metadata.cron_hour > 23) process.exit(1);
 ' "$TARGET/.afk-bootstrap.json" "$LANGUAGE" "$REPO" || { echo "template metadata invalid" >&2; exit 1; }
+
+# The record and the workflow must agree. Bootstrap copies with --no-clobber, so
+# a project that already has architecture-review.yml keeps it — and in that case
+# --cron-hour cannot apply. Recording the hour anyway would make the next project
+# read a free hour as taken, and rendering it would edit a file this run does not
+# own. Asserted on the existing-target fixture below, which pre-dates this run.
+
+# A fresh bootstrap that already carries the workflow: the hour must NOT be
+# recorded, because the workflow's own schedule was not set by this run.
+SKIP_HOUR="$TMP/skip-hour-$LANGUAGE"
+mkdir -p "$SKIP_HOUR/.github/workflows"
+git -C "$SKIP_HOUR" init -q -b main
+printf '# existing\n' > "$SKIP_HOUR/README.md"
+cp "$S/scaffold/.github/workflows/architecture-review.yml" "$SKIP_HOUR/.github/workflows/"
+node -e '
+  const fs=require("fs"); const p=process.argv[1];
+  fs.writeFileSync(p, fs.readFileSync(p,"utf8").split("__AFK_CRON_HOUR__").join("9"));
+' "$SKIP_HOUR/.github/workflows/architecture-review.yml"
+cp "$SKIP_HOUR/.github/workflows/architecture-review.yml" "$TMP/skip-hour-before.yml"
+"$S/bootstrap-afk.sh" "$SKIP_HOUR" --language "$LANGUAGE" --repo "$REPO" --no-build --cron-hour 17 >/dev/null 2>&1 || true
+cmp -s "$TMP/skip-hour-before.yml" "$SKIP_HOUR/.github/workflows/architecture-review.yml" \
+  || { echo "bootstrap rewrote a workflow it did not create" >&2; exit 1; }
+if node -e '
+  const fs=require("fs"); const m=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+  process.exit(m.cron_hour === undefined ? 0 : 1);
+' "$SKIP_HOUR/.afk-bootstrap.json"; then :; else
+  echo "bootstrap recorded an hour for a workflow it did not set" >&2; exit 1
+fi
+
+# The scaffolded workflow must carry a rendered hour, never the placeholder:
+# an unrendered placeholder is an invalid cron, which silently disables the
+# workflow entirely rather than failing loudly.
+if grep -q '__AFK_CRON_HOUR__' "$TARGET/.github/workflows/architecture-review.yml"; then
+  echo "architecture-review cron placeholder was not rendered" >&2
+  exit 1
+fi
+grep -qE 'cron: "0 ([0-9]|1[0-9]|2[0-3]) \* \* 1-5"' \
+  "$TARGET/.github/workflows/architecture-review.yml" \
+  || { echo "architecture-review cron is not a rendered hour" >&2; exit 1; }
 
 AFK_ROOT="$TARGET" AFK_DEFAULT_BRANCH=main node "$TARGET/.sandcastle/policy-check.mjs" version
 if AFK_ROOT="$TARGET" AFK_DEFAULT_BRANCH=main node "$TARGET/.sandcastle/policy-check.mjs" commit >/dev/null 2>&1; then
@@ -289,11 +359,28 @@ fi
 # The fixture is a verbatim 1.1.x project (five-profile map, old dispatch arm,
 # psydo fallback), so the migration is exercised against real previous output
 # rather than a reconstruction of it.
+#
+# The 1.3.0 step refuses to invent a schedule hour, because a default would put
+# every migrated project on one hour — the defect that step removes. A 1.1.x
+# project has no architecture-review workflow at all, so it has no schedule to
+# carry over and must be told one, which is the `--cron-hour` operator path.
 UPGRADE_TARGET="$TMP/upgrade-$LANGUAGE"
 mkdir -p "$UPGRADE_TARGET/.github" "$UPGRADE_TARGET/docs"
 cp -R "$S/test/fixtures/legacy-1.1.x/." "$UPGRADE_TARGET/"
 
-UPGRADE_OUT="$("$S/upgrade-afk.sh" "$UPGRADE_TARGET")"
+# A project with no schedule to carry over and no --cron-hour must be refused,
+# not silently defaulted: a default is what put every project on one hour.
+NO_HOUR="$TMP/upgrade-no-hour-$LANGUAGE"
+mkdir -p "$NO_HOUR/.github" "$NO_HOUR/docs"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$NO_HOUR/"
+if "$S/upgrade-afk.sh" "$NO_HOUR" >/dev/null 2>&1; then
+  echo "upgrade assigned a schedule hour instead of refusing to guess" >&2; exit 1
+fi
+grep -q -- '--cron-hour' <<<"$("$S/upgrade-afk.sh" "$NO_HOUR" 2>&1)" \
+  || { echo "refusal did not name the --cron-hour fix" >&2; exit 1; }
+rm -rf "$NO_HOUR"
+
+UPGRADE_OUT="$("$S/upgrade-afk.sh" "$UPGRADE_TARGET" --cron-hour 13)"
 printf '%s\n' "$UPGRADE_OUT"
 grep -q 'claude-stepfun)' "$UPGRADE_TARGET/.sandcastle/Dockerfile" \
   || { echo "upgrade did not install the stepfun dispatch arm" >&2; exit 1; }
@@ -305,9 +392,27 @@ grep -q 'vars.AFK_PROFILE || .claude-stepfun.' "$UPGRADE_TARGET/.github/workflow
 grep -q 'claude-stepfun' "$UPGRADE_TARGET/.sandcastle/main.ts" \
   || { echo "upgrade did not update the CLI usage string" >&2; exit 1; }
 node -e '
-  const m = require(process.argv[1]);
-  if (m.afk_template_version !== "1.2.0") process.exit(1);
-' "$UPGRADE_TARGET/.afk-bootstrap.json" || { echo "upgrade did not record the new version" >&2; exit 1; }
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  if (m.afk_template_version !== "1.3.0") process.exit(1);
+  // Cumulative migration: a 1.1.x project must come out of ONE run with both
+  // the 1.2.0 provider migration and the 1.3.0 schedule migration applied, and
+  // the assigned hour recorded. A step gated on from_minor alone would leave a
+  // 1.1.x project at 1.2.0 output while the metadata claimed 1.3.0.
+  if (typeof m.cron_hour !== "number" || m.cron_hour < 0 || m.cron_hour > 23) process.exit(1);
+' "$UPGRADE_TARGET/.afk-bootstrap.json" || { echo "upgrade did not record the new version and hour" >&2; exit 1; }
+# The schedule must come out rendered, and the job budget raised: leaving either
+# behind reproduces the two defects this step exists to remove — an invalid cron
+# that silently disables the workflow, or a 20m budget that cancels a 19m review
+# inside its own success path.
+if grep -q '__AFK_CRON_HOUR__' "$UPGRADE_TARGET/.github/workflows/architecture-review.yml"; then
+  echo "upgrade left the cron placeholder unrendered" >&2; exit 1
+fi
+grep -qE 'cron: "0 ([0-9]|1[0-9]|2[0-3]) \* \* 1-5"' \
+  "$UPGRADE_TARGET/.github/workflows/architecture-review.yml" \
+  || { echo "upgrade did not render a valid cron hour" >&2; exit 1; }
+grep -qE '^\s*timeout-minutes: 45\s*$' "$UPGRADE_TARGET/.github/workflows/architecture-review.yml" \
+  || { echo "upgrade did not raise the architecture-review job budget" >&2; exit 1; }
 # A project document is its own source of truth: the migration reports it, never rewrites it.
 grep -q 'afk-workflow.md' <<<"$UPGRADE_OUT" \
   || { echo "upgrade silently ignored project prose naming a retired profile" >&2; exit 1; }
@@ -329,7 +434,7 @@ fi
 HANDPORT="$TMP/handport-$LANGUAGE"
 mkdir -p "$HANDPORT/.github/workflows"
 cp -R "$S/test/fixtures/handport-1.1.x/." "$HANDPORT/"
-"$S/upgrade-afk.sh" "$HANDPORT" >/dev/null \
+"$S/upgrade-afk.sh" "$HANDPORT" --cron-hour 11 >/dev/null \
   || { echo "upgrade refused the hand-port shape" >&2; exit 1; }
 [ "$(grep -c 'claude-stepfun)' "$HANDPORT/.sandcastle/Dockerfile")" = 1 ] \
   || { echo "hand-port did not converge to a single dispatch arm" >&2; exit 1; }
@@ -398,14 +503,14 @@ for retired in psydo claude-ark agentrouter aliyun-deepseek; do
   mkdir -p "$FB/.github/workflows"
   cp -R "$S/test/fixtures/legacy-1.1.x/.sandcastle" "$FB/"
   cp "$S/test/fixtures/legacy-1.1.x/.afk-bootstrap.json" "$FB/"
-  node -e '
+    node -e '
     const fs = require("fs"), dir = process.argv[1], provider = process.argv[2];
     const src = process.argv[3];
     const moved = fs.readFileSync(src, "utf8")
       .split("vars.AFK_PROFILE || '"'"'psydo'"'"'").join("vars.AFK_PROFILE || '"'"'" + provider + "'"'"'");
     fs.writeFileSync(dir + "/.github/workflows/agent-implement.yml", moved);
   ' "$FB" "$retired" "$S/test/fixtures/legacy-1.1.x/.github/workflows/agent-implement.yml"
-  "$S/upgrade-afk.sh" "$FB" >/dev/null \
+  "$S/upgrade-afk.sh" "$FB" --cron-hour 13 >/dev/null \
     || { echo "upgrade refused the retired fallback $retired" >&2; exit 1; }
   if grep -qF -e "$retired" "$FB/.github/workflows/agent-implement.yml"; then
     echo "upgrade left the retired fallback $retired in place" >&2; exit 1
@@ -423,7 +528,7 @@ cp -R "$S/test/fixtures/legacy-1.1.x/.sandcastle" "$YAML_FB/"
 cp "$S/test/fixtures/legacy-1.1.x/.afk-bootstrap.json" "$YAML_FB/"
 cp "$S/test/fixtures/legacy-1.1.x/.github/workflows/agent-implement.yml" \
    "$YAML_FB/.github/workflows/custom-agent.yaml"
-"$S/upgrade-afk.sh" "$YAML_FB" >/dev/null \
+"$S/upgrade-afk.sh" "$YAML_FB" --cron-hour 13 >/dev/null \
   || { echo "upgrade refused a .yaml workflow" >&2; exit 1; }
 if grep -qF -e "vars.AFK_PROFILE || 'psydo'" "$YAML_FB/.github/workflows/custom-agent.yaml"; then
   echo "upgrade left a retired fallback in a .yaml workflow" >&2; exit 1
@@ -441,7 +546,7 @@ cp "$S/TEMPLATE_VERSION" "$SPACED_TOOL/"
 SPACED_PROJECT="$TMP/spaced project"
 mkdir -p "$SPACED_PROJECT/.github/workflows"
 cp -R "$S/test/fixtures/legacy-1.1.x/." "$SPACED_PROJECT/"
-"$SPACED_TOOL/upgrade-afk.sh" "$SPACED_PROJECT" >/dev/null \
+"$SPACED_TOOL/upgrade-afk.sh" "$SPACED_PROJECT" --cron-hour 13 >/dev/null \
   || { echo "upgrade failed when its own path contains a space" >&2; exit 1; }
 
 UNKNOWN_FB="$TMP/fallback-unknown-$LANGUAGE"
@@ -513,6 +618,212 @@ if "$S/upgrade-afk.sh" "$NO_PROVENANCE" >/dev/null 2>&1; then
   echo "upgrade accepted a project with no .afk-bootstrap.json" >&2; exit 1
 fi
 
+# A project already at 1.2.0 takes the schedule-only path: the provider step
+# must NOT re-run (it would refuse a legitimately customised profile.ts and
+# block an unrelated upgrade), and the run must reach publication rather than
+# dying on an unset variable after printing its change report. Both were real
+# defects on this path, and neither is reachable from the 1.1.x fixture above.
+MID="$TMP/mid-$LANGUAGE"
+mkdir -p "$MID/.github/workflows"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$MID/"
+# Make it a 1.2.0 project: provider migration already applied.
+node -e '
+  const fs = require("fs"), p = process.argv[1];
+  const f = p + "/.afk-bootstrap.json";
+  const m = JSON.parse(fs.readFileSync(f, "utf8"));
+  m.afk_template_version = "1.2.0";
+  fs.writeFileSync(f, JSON.stringify(m, null, 2) + "\n");
+' "$MID"
+cp "$S/scaffold/.sandcastle/profile.ts" "$MID/.sandcastle/profile.ts"
+cp "$S/scaffold/.github/workflows/architecture-review.yml" "$MID/.github/workflows/"
+MID_BEFORE="$(cd "$MID" && find . -type f | sort | xargs md5sum)"
+"$S/upgrade-afk.sh" "$MID" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a 1.2.0 project taking the schedule-only path" >&2; exit 1; }
+# The change must actually LAND: a run that prints its report and then aborts
+# leaves the rollback trap to restore the original, which is how an unset
+# variable silently made this path a no-op.
+grep -qE '^\s*timeout-minutes: 45\s*$' "$MID/.github/workflows/architecture-review.yml" \
+  || { echo "1.2.0 path did not land the job budget change" >&2; exit 1; }
+if grep -q '__AFK_CRON_HOUR__' "$MID/.github/workflows/architecture-review.yml"; then
+  echo "1.2.0 path left the cron placeholder unrendered" >&2; exit 1
+fi
+grep -qE 'cron: "0 13 \* \* 1-5"' "$MID/.github/workflows/architecture-review.yml" \
+  || { echo "1.2.0 path did not render the assigned hour" >&2; exit 1; }
+[ "$MID_BEFORE" != "$(cd "$MID" && find . -type f | sort | xargs md5sum)" ] \
+  || { echo "1.2.0 path reported changes but wrote nothing" >&2; exit 1; }
+
+# A 1.1.x project has no architecture-review workflow AND no runner for it. The
+# migration must add both: adding the workflow alone leaves it invoking
+# `.sandcastle/architecture-review/architecture-review.ts`, which does not exist
+# there — it would fail on its first run, replacing a missing feature with a
+# broken one. Asserted on the runner, not just the workflow file.
+grep -q '.sandcastle/architecture-review/architecture-review.ts' \
+  "$UPGRADE_TARGET/.github/workflows/architecture-review.yml" \
+  || { echo "migrated workflow does not reference the runner" >&2; exit 1; }
+for f in architecture-review.ts extraction.md prompt.md; do
+  [ -f "$UPGRADE_TARGET/.sandcastle/architecture-review/$f" ] \
+    || { echo "migration did not add .sandcastle/architecture-review/$f" >&2; exit 1; }
+done
+# The surrounding .sandcastle files are project-owned and must survive.
+for f in Dockerfile main.ts profile.ts; do
+  [ -f "$UPGRADE_TARGET/.sandcastle/$f" ] \
+    || { echo "migration discarded .sandcastle/$f" >&2; exit 1; }
+done
+
+# A commented-out `# - cron:` line is not the schedule. A whole-file search finds
+# the comment first and records the hour it names, so the record describes a
+# schedule the project does not run and the genuinely-occupied hour looks free to
+# the next project. Asserted with BOTH present: the comment says 9, the live line
+# says 16, and 16 is what must be recorded.
+COMMENTED_CRON="$TMP/commented-cron-$LANGUAGE"
+mkdir -p "$COMMENTED_CRON/.github/workflows"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$COMMENTED_CRON/"
+node -e '
+  const fs = require("fs"), f = process.argv[1] + "/.afk-bootstrap.json";
+  const m = JSON.parse(fs.readFileSync(f, "utf8")); m.afk_template_version = "1.2.0";
+  fs.writeFileSync(f, JSON.stringify(m, null, 2) + "\n");
+' "$COMMENTED_CRON"
+cp "$S/scaffold/.sandcastle/profile.ts" "$COMMENTED_CRON/.sandcastle/profile.ts"
+cp "$S/scaffold/.github/workflows/architecture-review.yml" "$COMMENTED_CRON/.github/workflows/"
+# shellcheck disable=SC2016  # JS regex wants literal `$1`; none is shell here.
+node -e '
+  const fs = require("fs"), p = process.argv[1] + "/.github/workflows/architecture-review.yml";
+  fs.writeFileSync(p, fs.readFileSync(p, "utf8")
+    .split("__AFK_CRON_HOUR__").join("9")
+    .replace(/^(    - cron: .*)$/m, "    # $1\n    - cron: \"0 16 * * 1-5\""));
+' "$COMMENTED_CRON"
+"$S/upgrade-afk.sh" "$COMMENTED_CRON" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a workflow carrying a commented cron" >&2; exit 1; }
+node -e '
+  const fs=require("fs"); const m=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+  if (m.cron_hour !== 16) { console.error("recorded the commented hour, not the live one: " + m.cron_hour); process.exit(1); }
+' "$COMMENTED_CRON/.afk-bootstrap.json" \
+  || { echo "a commented cron line was mistaken for the schedule" >&2; exit 1; }
+# The live schedule is the project's and must be left alone; the comment stays too.
+grep -qE '^[[:space:]]*- cron: "0 16 \* \* 1-5"' "$COMMENTED_CRON/.github/workflows/architecture-review.yml" \
+  || { echo "upgrade rewrote the live schedule" >&2; exit 1; }
+
+# A project that already hand-ported the runner keeps it: the migration follows
+# the scaffold's own --no-clobber rule. Overwriting would discard project work
+# while reporting success, which is the failure the scaffold copy avoids for
+# every other file. Missing files are still added.
+HAND_PORTED="$TMP/hand-ported-$LANGUAGE"
+mkdir -p "$HAND_PORTED/.github" "$HAND_PORTED/docs" \
+         "$HAND_PORTED/.sandcastle/architecture-review"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$HAND_PORTED/"
+printf '// hand-ported by the project\n' \
+  > "$HAND_PORTED/.sandcastle/architecture-review/architecture-review.ts"
+"$S/upgrade-afk.sh" "$HAND_PORTED" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project with a hand-ported runner" >&2; exit 1; }
+grep -q 'hand-ported by the project' \
+  "$HAND_PORTED/.sandcastle/architecture-review/architecture-review.ts" \
+  || { echo "migration overwrote a hand-ported runner file" >&2; exit 1; }
+for f in extraction.md prompt.md; do
+  [ -f "$HAND_PORTED/.sandcastle/architecture-review/$f" ] \
+    || { echo "migration did not add the missing $f alongside a hand-ported one" >&2; exit 1; }
+done
+
+# A project whose cron this template did NOT write keeps its own schedule, but
+# the hour it already occupies must still be recorded. Without that the record
+# says the project holds no hour, and the next project on this host reads that
+# hour as free and collides with it — provenance is the record's whole purpose.
+CUSTOM_CRON="$TMP/custom-cron-$LANGUAGE"
+mkdir -p "$CUSTOM_CRON/.github/workflows"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$CUSTOM_CRON/"
+node -e '
+  const fs = require("fs"), f = process.argv[1] + "/.afk-bootstrap.json";
+  const m = JSON.parse(fs.readFileSync(f, "utf8")); m.afk_template_version = "1.2.0";
+  fs.writeFileSync(f, JSON.stringify(m, null, 2) + "\n");
+' "$CUSTOM_CRON"
+cp "$S/scaffold/.sandcastle/profile.ts" "$CUSTOM_CRON/.sandcastle/profile.ts"
+cp "$S/scaffold/.github/workflows/architecture-review.yml" "$CUSTOM_CRON/.github/workflows/"
+node -e '
+  const fs = require("fs"), p = process.argv[1] + "/.github/workflows/architecture-review.yml";
+  fs.writeFileSync(p, fs.readFileSync(p, "utf8")
+    .split("__AFK_CRON_HOUR__").join("4")            // a readable custom hour
+    .replace(/cron: "0 4 /, "cron: \"30 4 "));
+' "$CUSTOM_CRON"
+"$S/upgrade-afk.sh" "$CUSTOM_CRON" >/dev/null \
+  || { echo "upgrade refused a project with its own schedule" >&2; exit 1; }
+node -e '
+  const fs=require("fs"); const m=JSON.parse(fs.readFileSync(process.argv[1],"utf8"));
+  if (m.cron_hour !== 4) { console.error("occupied hour was not recorded: " + m.cron_hour); process.exit(1); }
+' "$CUSTOM_CRON/.afk-bootstrap.json" \
+  || { echo "custom-schedule project did not record its occupied hour" >&2; exit 1; }
+grep -qF 'cron: "30 4 ' "$CUSTOM_CRON/.github/workflows/architecture-review.yml" \
+  || { echo "upgrade rewrote a schedule the project set" >&2; exit 1; }
+
+# An unreadable schedule shape must be reported, not silently recorded as absent.
+UNREADABLE="$TMP/unreadable-cron-$LANGUAGE"
+mkdir -p "$UNREADABLE/.github/workflows"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$UNREADABLE/"
+node -e '
+  const fs = require("fs"), f = process.argv[1] + "/.afk-bootstrap.json";
+  const m = JSON.parse(fs.readFileSync(f, "utf8")); m.afk_template_version = "1.2.0";
+  fs.writeFileSync(f, JSON.stringify(m, null, 2) + "\n");
+' "$UNREADABLE"
+cp "$S/scaffold/.sandcastle/profile.ts" "$UNREADABLE/.sandcastle/profile.ts"
+cp "$S/scaffold/.github/workflows/architecture-review.yml" "$UNREADABLE/.github/workflows/"
+node -e '
+  const fs = require("fs"), p = process.argv[1] + "/.github/workflows/architecture-review.yml";
+  fs.writeFileSync(p, fs.readFileSync(p, "utf8").split("__AFK_CRON_HOUR__").join("4")
+    .replace(/cron: "0 4 /, "cron: \"*/30 4 "));
+' "$UNREADABLE"
+grep -q 'cannot read an hour from' <<<"$("$S/upgrade-afk.sh" "$UNREADABLE" 2>&1)" \
+  || { echo "an unreadable schedule was not reported" >&2; exit 1; }
+rm -rf "$UNREADABLE"
+
+# A 1.2.0 project whose profile.ts carries a legitimate project edit must still
+# be able to take the schedule upgrade. Re-running the provider step on it would
+# refuse the unrecognised shape and block an unrelated change — so the provider
+# step must be gated on the project being BELOW 1.2, not merely at-or-below.
+CUSTOM="$TMP/custom-profile-$LANGUAGE"
+mkdir -p "$CUSTOM/.github/workflows"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$CUSTOM/"
+node -e '
+  const fs = require("fs"), f = process.argv[1] + "/.afk-bootstrap.json";
+  const m = JSON.parse(fs.readFileSync(f, "utf8")); m.afk_template_version = "1.2.0";
+  fs.writeFileSync(f, JSON.stringify(m, null, 2) + "\n");
+' "$CUSTOM"
+cp "$S/scaffold/.sandcastle/profile.ts" "$CUSTOM/.sandcastle/profile.ts"
+cp "$S/scaffold/.github/workflows/architecture-review.yml" "$CUSTOM/.github/workflows/"
+# A project edit the provider migration does not recognise.
+node -e '
+  const fs = require("fs"), p = process.argv[1];
+  fs.writeFileSync(p, fs.readFileSync(p, "utf8").replace("imageName:", "projectExtra: 1,\n      imageName:"));
+' "$CUSTOM/.sandcastle/profile.ts"
+"$S/upgrade-afk.sh" "$CUSTOM" --cron-hour 13 >/dev/null \
+  || { echo "a customised 1.2.0 profile blocked an unrelated schedule upgrade" >&2; exit 1; }
+grep -qE '^\s*timeout-minutes: 45\s*$' "$CUSTOM/.github/workflows/architecture-review.yml" \
+  || { echo "customised 1.2.0 project did not receive the budget change" >&2; exit 1; }
+
+# An invalid recorded hour must be refused, not interpolated into the cron: a
+# non-integer or out-of-range value would produce an invalid schedule, which
+# disables the workflow silently instead of failing.
+BAD_HOUR="$TMP/bad-hour-$LANGUAGE"
+mkdir -p "$BAD_HOUR/.github/workflows"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$BAD_HOUR/"
+node -e '
+  const fs = require("fs"), f = process.argv[1] + "/.afk-bootstrap.json";
+  const m = JSON.parse(fs.readFileSync(f, "utf8"));
+  m.afk_template_version = "1.2.0";   // so the schedule step is the one that runs
+  m.cron_hour = 99;
+  fs.writeFileSync(f, JSON.stringify(m, null, 2) + "\n");
+' "$BAD_HOUR"
+cp "$S/scaffold/.sandcastle/profile.ts" "$BAD_HOUR/.sandcastle/profile.ts"
+cp "$S/scaffold/.github/workflows/architecture-review.yml" "$BAD_HOUR/.github/workflows/"
+# The fixture carries the placeholder; a bad recorded hour must be refused
+# before it is interpolated into the cron.
+subst_hour() { node -e '
+  const fs=require("fs"); const p=process.argv[1]; const h=process.argv[2];
+  fs.writeFileSync(p, fs.readFileSync(p,"utf8").split("__AFK_CRON_HOUR__").join(h));
+' "$1" "$2"; }
+subst_hour "$BAD_HOUR/.github/workflows/architecture-review.yml" 9
+if "$S/upgrade-afk.sh" "$BAD_HOUR" >/dev/null 2>&1; then
+  echo "upgrade accepted an out-of-range cron_hour" >&2; exit 1
+fi
+rm -rf "$BAD_HOUR"
+
 # A 1.1.1 project predates the range's lower bound only by coincidence of
 # fixtures; the step applies unchanged, so it must be accepted rather than
 # refused for being outside an enumerated list.
@@ -524,7 +835,7 @@ node -e '
   m.afk_template_version = "1.1.1";
   fs.writeFileSync(p, JSON.stringify(m, null, 2) + "\n");
 ' "$OLDEST/.afk-bootstrap.json"
-"$S/upgrade-afk.sh" "$OLDEST" >/dev/null \
+"$S/upgrade-afk.sh" "$OLDEST" --cron-hour 13 >/dev/null \
   || { echo "upgrade refused a 1.1.1 project" >&2; exit 1; }
 grep -q 'claude-stepfun)' "$OLDEST/.sandcastle/Dockerfile" \
   || { echo "1.1.1 upgrade did not install the stepfun dispatch arm" >&2; exit 1; }
@@ -560,12 +871,25 @@ esac
 exec /usr/bin/cp "$@"
 SHIM
 chmod 755 "$PUBLISH_SHIM/bin/cp"
+
+# A rollback must REMOVE a file the migration added, not try to restore a backup
+# that never existed — an added file has none.
+ADDED_ROLLBACK="$TMP/added-rollback-$LANGUAGE"
+mkdir -p "$ADDED_ROLLBACK/.github" "$ADDED_ROLLBACK/docs"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$ADDED_ROLLBACK/"
+if PATH="$PUBLISH_SHIM/bin:$PATH" "$S/upgrade-afk.sh" "$ADDED_ROLLBACK" --cron-hour 13 >/dev/null 2>&1; then
+  echo "a failing publish was not reported" >&2; exit 1
+fi
+[ ! -e "$ADDED_ROLLBACK/.sandcastle/architecture-review" ] \
+  || { echo "rollback left a file the migration had added" >&2; exit 1; }
 ROLLBACK="$TMP/rollback-$LANGUAGE"
 mkdir -p "$ROLLBACK/.github/workflows"
 cp -R "$S/test/fixtures/legacy-1.1.x/." "$ROLLBACK/"
 printf 'name: extra\non: push\n' > "$ROLLBACK/.github/workflows/extra.yml"
 ROLLBACK_TREE="$(cd "$ROLLBACK" && find . -type f | sort | xargs md5sum)"
-if PATH="$PUBLISH_SHIM/bin:$PATH" "$S/upgrade-afk.sh" "$ROLLBACK" >/dev/null 2>&1; then
+# --cron-hour so the run reaches the publish step: without it the hour refusal
+# would fail the run first, and this test would pass for the wrong reason.
+if PATH="$PUBLISH_SHIM/bin:$PATH" "$S/upgrade-afk.sh" "$ROLLBACK" --cron-hour 13 >/dev/null 2>&1; then
   echo "publish failure was not reported" >&2; exit 1
 fi
 [ "$ROLLBACK_TREE" = "$(cd "$ROLLBACK" && find . -type f | sort | xargs md5sum)" ] \

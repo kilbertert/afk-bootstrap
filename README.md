@@ -37,9 +37,32 @@ Auto-Test 是首个验证项目和普通消费者，不再承担模板发布职�
 | `<target>` | 必填 | 目标项目路径（git 仓库，处于默认分支） |
 | `--language` | `node` | 工具链：`node` / `python`，决定 implement.md、PRD prompt、Dockerfile |
 | `--repo` | 从 origin 推断 | 记录目标 GitHub 仓库名 |
+| `--cron-hour` | `9` | architecture-review 的 UTC 小时。**同一台宿主机上的每个项目要给不同的小时**，理由见下 |
 | `--no-build` | 构建 | 跳过 `docker build`（改文件时用，先看 diff） |
 
 **它只生成文件，绝不提交、不推送。** 交付由宿主 runner 负责（branch → PR → CI → merge）。
+
+### 为什么 `--cron-hour` 要逐项目分配
+
+同一台宿主机上的所有项目解析到**同一个上游凭据文件**
+（`~/cliproxyapi/settings.<x>.json`），因此共享同一个并发上限。一次
+architecture-review 实测跑 **20–68 分钟**（不是几分钟），所以：
+
+- 分钟级错开（例如 7 分钟偏移）**不能**把它们分开——重叠仍有 20–60 分钟；
+  必须按小时错开。
+- 若两个项目共用同一小时，它们会争同一个并发额度，然后以
+  `429 concurrency reached, current: 6, limit: 5` 失败。
+
+**升级已有项目时 `--cron-hour` 是必需的**（`upgrade-afk.sh --cron-hour`），
+只有记录里已经有时才可省略。这不是形式：**把旧值照搬是不行的**——本机五个项目
+原本都在 09:00，「保留」等于把碰撞原样复制一遍。哪些小时空闲是 **fleet 级信息**
+（取决于谁和谁共用同一个凭据文件），而脚本只看得到单个项目，所以它**问**而不是猜。
+
+
+分配的小时记录在 `.afk-bootstrap.json` 的 `cron_hour`，**下一个项目据此挑空闲的**。
+它**故意不从项目名 hash 推导**：hash 会碰撞——本 fleet 五个 slug 里有两个落进同一
+小时——而**静默碰撞正是这个字段要消除的缺陷**。默认值 `9` 只保证孤立项目能跑，不是
+给同一凭据上第二个项目用的。
 
 ### 升级已装配的项目
 

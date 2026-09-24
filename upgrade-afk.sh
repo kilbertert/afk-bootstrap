@@ -4,10 +4,17 @@
 # afk-bootstrap template version.
 #
 # USAGE:
-#   upgrade-afk <target-repo> [--dry-run]
+#   upgrade-afk <target-repo> [--dry-run] [--cron-hour 0-23]
 #
 #   <target-repo>  path to an AFK-scaffolded project (has .sandcastle/).
 #   --dry-run      print what would change; write nothing.
+#   --cron-hour    schedule hour for architecture-review, recorded in
+#                  .afk-bootstrap.json. Required only when the project has no
+#                  hour recorded yet and still runs at the shared 09:00: every
+#                  project on a host shares one upstream credential and one
+#                  concurrency limit, and a review runs 20-68 minutes, so two
+#                  projects on one hour fail with 429. There is no safe
+#                  default, so this is refused rather than guessed.
 #
 # Why this exists: `bootstrap-afk.sh` refuses a target that already has
 # `.sandcastle/`, so it can only create. This script performs the *upgrade*
@@ -35,20 +42,24 @@ set -euo pipefail
 umask 027
 
 usage() {
-  sed -n '2,32p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,41p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 TARGET="${1:-}"; shift || true
 [ -n "$TARGET" ] || { usage; exit 1; }
 
-DRY_RUN=0
+DRY_RUN=0; CRON_HOUR=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --dry-run) DRY_RUN=1; shift;;
-    -h|--help) usage; exit 0;;
+    --dry-run)   DRY_RUN=1; shift;;
+    --cron-hour) CRON_HOUR="${2:?}"; shift 2;;
+    -h|--help)   usage; exit 0;;
     *) echo "unknown arg: $1" >&2; usage; exit 1;;
   esac
 done
+if [ -n "$CRON_HOUR" ] && ! [[ "$CRON_HOUR" =~ ^([0-9]|1[0-9]|2[0-3])$ ]]; then
+  echo "--cron-hour must be 0-23, got: $CRON_HOUR" >&2; exit 1
+fi
 
 S="$(cd "$(dirname "$0")" && pwd)"
 [ -d "$TARGET/.sandcastle" ] || { echo "not an AFK-scaffolded project (no .sandcastle): $TARGET" >&2; exit 1; }
@@ -61,6 +72,81 @@ FROM="$(node -e 'process.stdout.write(String(require(process.argv[1]).afk_templa
 
 say()  { printf '%s\n' "$*"; }
 note() { printf '  %s\n' "$*"; }
+
+# The schedule hour for this project.
+#
+# An explicitly recorded hour wins; otherwise `--cron-hour` is REQUIRED. Carrying
+# the old value over looks tempting — a project at `0 9 * * 1-5` is already on
+# hour 9 — but it is wrong for the case this exists for: five projects on this
+# host all run at hour 9, so "preserve" reproduces the collision exactly. Which
+# hours are free is fleet-level information (it depends on which projects share
+# one upstream credential), and this script sees one project, so it cannot
+# derive it. An operator can.
+#
+
+# The hour a project's own cron line already occupies.
+#
+# This is not a default and not a choice: the hour is already in use by this
+# project, so recording it asserts a fact rather than inventing one. Empty when
+# the shape is something else — a schedule this script cannot read an hour from
+# is reported, never guessed at.
+#
+# A constant minute is required (`30 4 ...` or `0 4 ...`, not `*/30 4 ...`): an
+# hour field only identifies an occupied hour when the minute is fixed, since a
+# 20-68 minute review starting at `*/30 4` spills across the whole hour anyway.
+existing_cron_hour() {
+  # Scans LINE BY LINE for an uncommented `- cron:` entry. `String.match` finds
+  # the first occurrence anywhere, which for a workflow that keeps its old
+  # schedule commented out is the COMMENT — and the hour it names is not the one
+  # the project runs. A leading `-` is the test: `# - cron:` does not match.
+  node -e '
+    const fs = require("fs");
+    const lines = fs.readFileSync(process.argv[1], "utf8").split("\n");
+    for (const line of lines) {
+      if (!/^[ \t]*-[ \t]*cron:/.test(line)) continue;
+      const m = line.match(/"(\d{1,2}) +(\d{1,2}) +\* +\* +[^"]*"/);
+      if (m) { process.stdout.write(String(Number(m[2]))); process.exit(0); }
+    }
+    process.stdout.write("");
+  ' "$ARCH"
+}
+
+# Empty means the caller must be told; the caller refuses rather than default.
+#
+# A recorded value is validated here, not trusted: it lands directly in the cron
+# expression, so a hand-edited or corrupted `cron_hour` would otherwise produce
+# an invalid schedule — which disables the workflow silently rather than failing.
+resolve_hour() {
+  local hour
+  if [ -n "$CRON_HOUR" ]; then hour="$CRON_HOUR"; else
+    hour="$(node -e '
+      const fs = require("fs");
+      const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+      process.stdout.write(m.cron_hour == null ? "" : String(m.cron_hour));
+    ' "$TARGET/.afk-bootstrap.json")"
+  fi
+  [ -z "$hour" ] && return 0
+  case "$hour" in
+    ''|*[!0-9]*) echo "cron_hour is not an integer: $hour" >&2; exit 1;;
+  esac
+  if [ "$hour" -gt 23 ]; then
+    echo "cron_hour is outside 0-23: $hour" >&2; exit 1
+  fi
+  printf '%s' "$hour"
+}
+
+# Every project on a host shares one upstream credential and one concurrency
+# limit, and a review runs 20-68 minutes, so two projects on one hour fail with
+# 429. This script cannot see the fleet, so it asks rather than guesses.
+refuse_hour() {
+  echo "architecture-review: this project needs a schedule hour and none was given." >&2
+  echo "   Every project on this host shares one upstream credential and one concurrency limit," >&2
+  echo "   and a review runs 20-68 minutes — so give it an hour no sibling project uses." >&2
+  echo "   (Carrying the current value over is not enough: a project already at 09:00" >&2
+  echo "   keeps colliding with every sibling that is also at 09:00.)" >&2
+  echo "     $S/upgrade-afk.sh $TARGET --cron-hour <0-23>" >&2
+  exit 1
+}
 
 # Literal string replacement. The anchors below contain `|`, `(`, `)` and `.`
 # — both sed delimiters and regex metacharacters — so `sed s///` either breaks
@@ -203,7 +289,25 @@ cp "$TARGET/.afk-bootstrap.json" "$WORK/.afk-bootstrap.json"
 # the only Codex-provider profile. A run selecting any of them failed before the
 # agent started. They are replaced by claude + claude-stepfun, both Claude Code
 # profiles driven by a mounted host settings file.
-if [ "$from_minor" -eq 1 ] && [ "$to_minor" -eq 2 ]; then
+# Steps are cumulative: a project older than the target runs every step between
+# its recorded version and the target, in order, in one invocation. Gating a
+# step on `from_minor` alone would strand a 1.1.x project at 1.2.0's output
+# while the metadata claimed 1.3.0 — the exact "claims a version whose changes
+# it never received" failure this script refuses elsewhere.
+# Declared before the steps, not inside one: the report below reads it for every
+# path, and `set -u` aborts on an unset variable — which would kill the run
+# AFTER the change report printed but BEFORE the publish, so the rollback trap
+# would silently restore the original files. Each step that finds prose appends.
+PROSE=""
+
+STEP_RAN=0
+# `-lt 2`: a project already at 1.2.0 has had the provider migration. Re-running
+# it is not merely wasted — the step refuses a profile.ts it cannot recognise as
+# generated, so a project that legitimately customised its profile would be
+# blocked from an unrelated schedule upgrade. Only a project still BELOW 1.2.0
+# needs this step.
+if [ "$from_minor" -lt 2 ] && [ "$to_minor" -ge 2 ]; then
+  STEP_RAN=1
   say "== $FROM -> $TEMPLATE_VERSION: single mount-based provider =="
 
   # 1. Dockerfile dispatch arm. Anchor is the exact arm the old templates wrote.
@@ -366,7 +470,187 @@ if [ "$from_minor" -eq 1 ] && [ "$to_minor" -eq 2 ]; then
       PROSE="$PROSE ${f#"$TARGET"/}"
     fi
   done
-else
+fi
+
+# ---- step: 1.2.x -> 1.3.0 — architecture-review schedule and budget ---------
+# Two defects in what 1.2.0 shipped, both observed on real runs:
+#
+# 1. Every project got `cron: "0 9 * * 1-5"` — the same minute. A review run
+#    lasts 20-68 minutes (measured) and every project on a host resolves the
+#    same upstream settings file, so the fleet contended for one concurrency
+#    limit and failed with `429 concurrency reached, current: 6, limit: 5`.
+#    This renders a per-project hour and records it, so the next project can
+#    pick a free one deliberately.
+# 2. The job budget was 20 minutes against a review that measured 19m13s, so
+#    runs were cancelled inside their own success path and read as failures.
+#
+# The hour is NOT derived from the slug: hashing collides (two of this fleet's
+# five slugs land in the same hour), and a silent collision is the same defect.
+# It is read from the project's own record, or assigned here and written back.
+if [ "$to_minor" -ge 3 ]; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: architecture-review schedule and budget =="
+
+  ARCH="$WORK/.github/workflows/architecture-review.yml"
+  META="$WORK/.afk-bootstrap.json"
+
+  if [ ! -e "$ARCH" ]; then
+    # A 1.1.x project never had this workflow — it arrived in 1.2.0. There is
+    # nothing to migrate, so it is added from the current scaffold, which
+    # already carries the corrected budget and the hour placeholder.
+    #
+    # Adding the WORKFLOW ALONE IS NOT ENOUGH. It invokes
+    # `.sandcastle/architecture-review/architecture-review.ts`, which a 1.1.x
+    # project does not have — the workflow would fail on its first run, and the
+    # migration would have swapped a missing feature for a broken one. The whole
+    # runner ships with it, from the same scaffold, so the two cannot diverge.
+    if [ ! -e "$S/scaffold/.sandcastle/architecture-review/architecture-review.ts" ]; then
+      echo "scaffold is missing the architecture-review runner; cannot add the workflow safely" >&2
+      exit 1
+    fi
+    mkdir -p "$WORK/.github/workflows" "$WORK/.sandcastle/architecture-review"
+    cp "$S/scaffold/.github/workflows/architecture-review.yml" "$ARCH"
+    # --no-clobber, matching the scaffold's own rule: a project that already
+    # hand-ported the runner keeps it. Overwriting would discard project work
+    # and the migration would report success — the same failure the scaffold
+    # copy avoids for every other file. A file the template ADDS (the usual
+    # case here) is written normally.
+    cp -R --no-clobber "$S/scaffold/.sandcastle/architecture-review/." \
+          "$WORK/.sandcastle/architecture-review/"
+    note "architecture-review added (workflow + runner; new in 1.2.0)"
+    HOUR="$(resolve_hour)"
+    if [ -z "$HOUR" ]; then
+      refuse_hour
+    fi
+    subst "$ARCH" "__AFK_CRON_HOUR__" "$HOUR"
+    note "architecture-review: schedule hour set to $HOUR UTC (assigned)"
+  else
+    # 1. Timeout, scoped to the architecture-review job. A bare search-and-
+    #    replace on `timeout-minutes: 20` would raise EVERY job carrying that
+    #    budget — the file has a second job, and a project may have added more —
+    #    silently granting unrelated jobs a 45-minute budget. So the edit is
+    #    located by the job it belongs to, and only its own line is rewritten.
+    rc=0
+    # shellcheck disable=SC2016  # the JS wants a literal `$`; the trailing `$?`
+    #                             # is shell, and is not inside the quotes.
+    node -e '
+      const fs = require("fs");
+      const [path, from, to] = process.argv.slice(1);
+      const source = fs.readFileSync(path, "utf8");
+      const lines = source.split("\n");
+      const jobKey = (l) => /^  [A-Za-z0-9_-]+: */.test(l) && l.trim().endsWith(":");
+      // Find the job whose key is `architecture-review:`, then the first
+      // `timeout-minutes:` inside it (before the next top-level job key).
+      const start = lines.findIndex((l) => l.trim() === "architecture-review:");
+      if (start < 0) { console.error("architecture-review job not found"); process.exit(2); }
+      let end = lines.length;
+      for (let i = start + 1; i < lines.length; i++) {
+        if (jobKey(lines[i])) { end = i; break; }
+      }
+      for (let i = start + 1; i < end; i++) {
+        if (lines[i].trim() === "timeout-minutes: " + from) {
+          lines[i] = lines[i].replace(from, to);
+          fs.writeFileSync(path, lines.join("\n"));
+          process.exit(0);
+        }
+      }
+      process.exit(3);   // present but already customised
+    ' "$ARCH" 20 45 || rc=$?
+    case $rc in
+      0) note "architecture-review: job budget 20m -> 45m (a review measured 19m13s)";;
+      3) note "architecture-review: job budget already customised; left alone";;
+      *) echo "architecture-review.yml: could not locate the job timeout" >&2; exit 1;;
+    esac
+
+    # 2. Schedule hour. Accept the exact cron the old template wrote, or one
+    #    already carrying the placeholder. Anything else is a project edit and
+    #    is refused rather than overwritten.
+    #
+    #    The hour is NOT defaulted when absent. Defaulting it to 9 would
+    #    reproduce, in the migration itself, the exact defect the migration
+    #    exists to remove: every project landing on the same hour. This script
+    #    has no fleet view — it cannot know which hours its siblings hold — so
+    #    it refuses and names the one-line fix rather than guessing silently.
+    OLD_CRON='cron: "0 9 * * 1-5"'
+    NEW_CRON='cron: "0 __AFK_CRON_HOUR__ * * 1-5"'
+    HOUR="$(resolve_hour)"
+    # A commented-out `# - cron: ...` is not the schedule. A plain grep matches it
+    # too, and then the migration rewrites a comment (harmless) while recording
+    # the hour the COMMENT names — so the record describes a schedule the project
+    # does not run, and the next project reads the genuinely-occupied hour as
+    # free. Every test below is therefore "is this an ACTIVE cron line", which is
+    # a leading character test rather than a substring one.
+    active_cron() { grep -E '^[[:space:]]*-[[:space:]]*cron:' "$1" 2>/dev/null; }
+    if active_cron "$ARCH" | grep -qF -e "$NEW_CRON"; then
+      [ -n "$HOUR" ] || { echo "$META: cron_hour is unset while the workflow already carries the placeholder; pass --cron-hour" >&2; exit 1; }
+      # The workflow may carry the placeholder from a scaffold, which renders it
+      # only at bootstrap. Leaving it here would ship `cron: "0 __AFK_CRON_HOUR__
+      # * * 1-5"` — an invalid cron, which disables the schedule silently.
+      subst "$ARCH" "__AFK_CRON_HOUR__" "$HOUR"
+      note "architecture-review: placeholder rendered (hour $HOUR)"
+    elif active_cron "$ARCH" | grep -qF -e "$OLD_CRON"; then
+      if [ -z "$HOUR" ]; then
+        refuse_hour
+      fi
+      # Rewrite the ACTIVE line only. `subst` is a global string replace, so a
+      # commented copy of the same line would be rewritten too — turning a
+      # record of what the project used to run into a claim about what it runs.
+      active_cron "$ARCH" | grep -qF -e "$OLD_CRON" || {
+        echo "$ARCH: active cron line vanished mid-migration" >&2; exit 1; }
+      # shellcheck disable=SC2016  # the JS pattern wants a literal `$`; none is shell here.
+      node -e '
+        const fs = require("fs");
+        const [path, from, to] = process.argv.slice(1);
+        const lines = fs.readFileSync(path, "utf8").split("\n");
+        let done = false;
+        for (let i = 0; i < lines.length; i++) {
+          // Only an uncommented `- cron:` line is the schedule.
+          if (!/^[ \t]*-[ \t]*cron:/.test(lines[i])) continue;
+          if (!lines[i].includes(from)) continue;
+          lines[i] = lines[i].replace(from, to);
+          done = true;
+          break;
+        }
+        if (!done) { console.error("no active cron line matched"); process.exit(1); }
+        fs.writeFileSync(path, lines.join("\n"));
+      ' "$ARCH" "$OLD_CRON" "$NEW_CRON"
+      subst "$ARCH" "__AFK_CRON_HOUR__" "$HOUR"
+      note "architecture-review: schedule hour set to $HOUR UTC (was the shared 09:00)"
+    else
+      # A schedule neither this template nor the placeholder wrote: the project
+      # set it. The schedule is left alone — it is the project's — but the hour
+      # it already occupies MUST be recorded. Without that, the record says the
+      # project holds no hour, and the next project on this host reads this
+      # hour as free and collides with it. Provenance is what the record is for.
+      HOUR="$(existing_cron_hour)"
+      if [ -n "$HOUR" ]; then
+        note "architecture-review: schedule left as the project set it; hour $HOUR recorded so siblings do not reuse it"
+      else
+        # A schedule shape this script cannot read an hour out of. Recording
+        # nothing is the honest outcome, but it must be said out loud: this
+        # project occupies an hour and the fleet cannot tell which.
+        say "WARNING: architecture-review schedule is in a shape this script cannot read an hour from:" >&2
+        say "         $(grep -m1 'cron:' "$ARCH" || echo '(no cron line)')" >&2
+        say "         No hour is recorded, so a sibling project may be assigned the same one." >&2
+      fi
+    fi
+  fi
+
+  # Record the hour so the next project can pick a free one. Absent unless this
+  # step assigned it above, in which case the value is already known.
+  if [ -n "${HOUR:-}" ]; then
+    node -e '
+      const fs=require("fs"); const [p,h]=process.argv.slice(1);
+      const m=JSON.parse(fs.readFileSync(p,"utf8")); m.cron_hour=Number(h);
+      fs.writeFileSync(p, JSON.stringify(m,null,2)+"\n");
+    ' "$META" "$HOUR"
+  fi
+fi
+
+# A version pair no step handles must fail rather than publish a copy that only
+# has its metadata rewritten — the project would then claim a version whose
+# changes it never received.
+if [ "$STEP_RAN" = "0" ]; then
   echo "no upgrade step defined from $FROM to $TEMPLATE_VERSION" >&2
   exit 1
 fi
@@ -436,6 +720,16 @@ restore_published() {
       cp -R "$STAGE/backup/$rel" "${TARGET:?}/$rel" || say "could not restore $rel" >&2
     done
     for rel in $PUBLISHED_FILES; do
+      if [ -e "$STAGE/backup/$rel.absent" ]; then
+        # The migration added this file; rolling back means removing it, not
+        # restoring a backup that never existed. Its parent directory may also
+        # have been created by the migration, so remove it when it is left
+        # empty — an empty `.sandcastle/architecture-review/` is residue the
+        # project never asked for.
+        rm -f "$TARGET/$rel"
+        rmdir "$(dirname "$TARGET/$rel")" 2>/dev/null || true
+        continue
+      fi
       cp "$STAGE/backup/$rel" "$TARGET/$rel" || say "could not restore $rel" >&2
     done
   fi
@@ -448,7 +742,14 @@ trap restore_published EXIT
 publish_file() {
   local rel="$1"
   mkdir -p "$(dirname "$TARGET/$rel")" "$(dirname "$STAGE/backup/$rel")"
-  cp "$TARGET/$rel" "$STAGE/backup/$rel" || return 1
+  # A file this migration ADDS has nothing to back up. The restore path skips a
+  # backup that is absent, so not creating one is correct — failing here instead
+  # would mean the migration could never add a file, only edit one.
+  if [ -e "$TARGET/$rel" ]; then
+    cp "$TARGET/$rel" "$STAGE/backup/$rel" || return 1
+  else
+    : >"$STAGE/backup/$rel.absent"
+  fi
   PUBLISHED_FILES="$rel $PUBLISHED_FILES"
   cp "$WORK/$rel" "$TARGET/$rel" || return 1
   return 0
@@ -471,6 +772,17 @@ for rel in .sandcastle/Dockerfile .sandcastle/profile.ts .sandcastle/main.ts; do
 done
 if ! diff -rq "$TARGET/.github/workflows" "$WORK/.github/workflows" >/dev/null 2>&1; then
   publish_dir ".github/workflows" || { say "could not publish .github/workflows" >&2; exit 1; }
+fi
+# The architecture-review runner. Published per file, not as a directory: it
+# sits inside `.sandcastle/`, which is project-owned — replacing that directory
+# wholesale would discard every project edit to the other modules.
+if [ -d "$WORK/.sandcastle/architecture-review" ]; then
+  for f in "$WORK/.sandcastle/architecture-review"/*; do
+    [ -f "$f" ] || continue
+    rel=".sandcastle/architecture-review/${f##*/}"
+    cmp -s "$TARGET/$rel" "$f" 2>/dev/null && continue
+    publish_file "$rel" || { say "could not publish $rel" >&2; exit 1; }
+  done
 fi
 publish_file ".afk-bootstrap.json" || { say "could not publish .afk-bootstrap.json" >&2; exit 1; }
 

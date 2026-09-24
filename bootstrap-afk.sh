@@ -6,12 +6,19 @@
 #
 # USAGE:
 #   bootstrap-afk <target-repo> [--language node|python] [--repo owner/name]
-#                 [--no-build]
+#                 [--cron-hour 0-23] [--no-build]
 #
 #   <target-repo>  path to the project (a git repo on its default branch).
 #   --language     project toolchain: node | python  (default: node).
 #   --repo         GitHub slug used by the generated issue-tracker docs
 #                  (default: derived from `git remote get-url origin`).
+#   --cron-hour    UTC hour for the architecture-review schedule (default: 9).
+#                  Give each project on this host a distinct hour. Every
+#                  project resolves the same upstream credential, and a review
+#                  runs 20-68 minutes, so two projects sharing an hour
+#                  contend for one concurrency limit and fail with 429. The
+#                  default is kept only so an isolated project still runs;
+#                  it is not safe for a second project on the same key.
 #   --no-build     skip building the sandcastle: docker image.
 #
 # It only creates files; it never commits or pushes. The host runner owns
@@ -20,24 +27,28 @@ set -euo pipefail
 umask 027
 
 usage() {
-  sed -n '2,20p' "$0" | sed 's/^# \{0,1\}//'
+  sed -n '2,25p' "$0" | sed 's/^# \{0,1\}//'
 }
 
 TARGET="${1:-}"; shift || true
 [ -n "$TARGET" ] || { usage; exit 1; }
 
-LANGUAGE="node"; REPO=""; DO_BUILD=1
+LANGUAGE="node"; REPO=""; DO_BUILD=1; CRON_HOUR=""
 while [ $# -gt 0 ]; do
   case "$1" in
-    --language) LANGUAGE="${2:?}"; shift 2;;
-    --repo)     REPO="${2:?}"; shift 2;;
-    --no-build) DO_BUILD=0; shift;;
-    -h|--help)  usage; exit 0;;
+    --language)  LANGUAGE="${2:?}"; shift 2;;
+    --repo)      REPO="${2:?}"; shift 2;;
+    --cron-hour) CRON_HOUR="${2:?}"; shift 2;;
+    --no-build)  DO_BUILD=0; shift;;
+    -h|--help)   usage; exit 0;;
     *) echo "unknown arg: $1" >&2; usage; exit 1;;
   esac
 done
 
 case "$LANGUAGE" in node|python) ;; *) echo "unsupported --language: $LANGUAGE" >&2; exit 1;; esac
+if [ -n "$CRON_HOUR" ] && ! [[ "$CRON_HOUR" =~ ^([0-9]|1[0-9]|2[0-3])$ ]]; then
+  echo "--cron-hour must be 0-23, got: $CRON_HOUR" >&2; exit 1
+fi
 
 # ---- validations -----------------------------------------------------------
 S="$(cd "$(dirname "$0")" && pwd)"
@@ -68,6 +79,33 @@ cp -R --no-clobber "$S/scaffold/." "$TARGET/"
 # ---- point the copied profile.ts at THIS project's image -------------------
 # Render the AFK_IMAGE default with the image built below.
 sed -i "s#__AFK_IMAGE__#sandcastle:$SLUG#g" "$TARGET/.sandcastle/profile.ts"
+
+# ---- render this project's architecture-review hour -------------------------
+# Every project on this host resolves the same upstream credential, so the
+# schedule hour is the only thing keeping two reviews from contending for one
+# concurrency limit. Left unrendered, the placeholder would ship as a literal
+# and the cron would be invalid, silently disabling the workflow — so it always
+# renders... unless this run did not create the file.
+#
+# One value, used for both the render and the record, so the two cannot
+# disagree. The copy above is `--no-clobber`, so a workflow that already existed
+# is NOT replaced: rendering it would edit a file this run does not own, and
+# recording an hour for it would make the next project read a free hour as
+# taken. That case is reported and left entirely alone.
+ARCH_WF="$TARGET/.github/workflows/architecture-review.yml"
+RESOLVED_HOUR="${CRON_HOUR:-9}"
+if [ -e "$ARCH_WF" ] && ! grep -q '__AFK_CRON_HOUR__' "$ARCH_WF"; then
+  cat >&2 <<'EOF'
+warning: .github/workflows/architecture-review.yml already existed and was left
+  as it is (the scaffold does not clobber project files). --cron-hour does not
+  apply to it, and no cron_hour is recorded — the record must not name an hour
+  the schedule does not use. To migrate it and record the hour:
+    ./upgrade-afk.sh <target> --cron-hour N
+EOF
+  RESOLVED_HOUR=""
+else
+  sed -i "s#__AFK_CRON_HOUR__#$RESOLVED_HOUR#g" "$ARCH_WF"
+fi
 
 # ---- per-language generated files -----------------------------------------
 cp "$S/templates/implement.$LANGUAGE.md"      "$TARGET/.sandcastle/implement.md"
@@ -135,7 +173,7 @@ fi
 # ---- record scaffold provenance -------------------------------------------
 node -e '
   const fs = require("fs");
-  const [path, version, language, repository, contractPath] = process.argv.slice(1);
+  const [path, version, language, repository, contractPath, cronHour] = process.argv.slice(1);
   const contract = JSON.parse(fs.readFileSync(contractPath, "utf8"));
   fs.writeFileSync(path, JSON.stringify({
     templateVersion: Number(version.split(".")[0]),
@@ -144,8 +182,17 @@ node -e '
     consensus_compatibility: contract.afk_template_compatibility,
     language,
     repository,
+    // The assigned architecture-review hour, recorded so the next project on
+    // this host can pick a free one instead of colliding by default. Kept in
+    // the provenance file rather than inferred from the slug: a hash collides.
+    //
+    // Omitted, not defaulted, when this run did not render the workflow (it
+    // already existed). Recording 9 there would name an hour the schedule does
+    // not use, and the next project would then read a free hour as taken.
+    ...(cronHour === "" ? {} : { cron_hour: Number(cronHour) }),
   }, null, 2) + "\n");
-' "$TARGET/.afk-bootstrap.json" "$TEMPLATE_VERSION" "$LANGUAGE" "$REPO" "$TARGET/.sandcastle/consensus-contract.json"
+' "$TARGET/.afk-bootstrap.json" "$TEMPLATE_VERSION" "$LANGUAGE" "$REPO" \
+  "$TARGET/.sandcastle/consensus-contract.json" "${RESOLVED_HOUR}"
 
 # ---- node_modules: the scaffold adds Node deps; keep them out of git ------
 if [ -f "$TARGET/.gitignore" ] && ! grep -qx 'node_modules' "$TARGET/.gitignore"; then
@@ -154,13 +201,26 @@ fi
 
 # ---- package.json: merge or create ----------------------------------------
 if [ -f "$TARGET/package.json" ]; then
+  # shellcheck disable=SC2016  # the JS wants literal `$`; none is shell here.
   node -e '
     const fs = require("fs"); const p = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
     const scripts = { ...(p.scripts || {}) };
     delete scripts["prd:to-issues"];
-    p.scripts = { ...scripts, "afk": "tsx .sandcastle/main.ts", "ralph": "tsx .sandcastle/planner.ts", "afk:policy": "node .sandcastle/policy-check.mjs all" };
+    // The AFK-owned scripts are set unconditionally: they are this template own
+    // entry points, and a stale one would break the workflow.
+    const owned = { "afk": "tsx .sandcastle/main.ts", "ralph": "tsx .sandcastle/planner.ts", "afk:policy": "node .sandcastle/policy-check.mjs all" };
+    // `test` and `check` are only FILLED IN, never overwritten. The scaffold
+    // instruction tells the agent to run `npm run check`, so a project without
+    // one was given an instruction that fails immediately — but a project that
+    // already defines its own check (typecheck, lint, build) keeps it, because
+    // replacing it would silently drop that project own gates.
+    const defaults = { "test": "vitest run --passWithNoTests", "check": "npm test && npm run afk:policy" };
+    for (const [k, v] of Object.entries(defaults)) {
+      if (!scripts[k]) scripts[k] = v;
+    }
+    p.scripts = { ...scripts, ...owned };
     p.dependencies = { ...(p.dependencies || {}), "tsx": "^4.20.0", "zod": "^4.4.3" };
-    p.devDependencies = { ...(p.devDependencies || {}), "@ai-hero/sandcastle": "^0.12.0", "@types/node": "^24.0.0" };
+    p.devDependencies = { ...(p.devDependencies || {}), "@ai-hero/sandcastle": "^0.12.0", "@types/node": "^24.0.0", "vitest": "^3.0.0" };
     fs.writeFileSync(process.argv[1], JSON.stringify(p, null, 2) + "\n");
   ' "$TARGET/package.json"
   echo "== updating package-lock.json for \`npm ci\` in the workflows =="

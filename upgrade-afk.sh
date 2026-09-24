@@ -502,7 +502,12 @@ if [ "$to_minor" -ge 3 ]; then
     fi
     mkdir -p "$WORK/.github/workflows" "$WORK/.sandcastle/architecture-review"
     cp "$S/scaffold/.github/workflows/architecture-review.yml" "$ARCH"
-    cp -R "$S/scaffold/.sandcastle/architecture-review/." \
+    # --no-clobber, matching the scaffold's own rule: a project that already
+    # hand-ported the runner keeps it. Overwriting would discard project work
+    # and the migration would report success — the same failure the scaffold
+    # copy avoids for every other file. A file the template ADDS (the usual
+    # case here) is written normally.
+    cp -R --no-clobber "$S/scaffold/.sandcastle/architecture-review/." \
           "$WORK/.sandcastle/architecture-review/"
     note "architecture-review added (workflow + runner; new in 1.2.0)"
     HOUR="$(resolve_hour)"

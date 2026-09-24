@@ -670,6 +670,26 @@ for f in Dockerfile main.ts profile.ts; do
     || { echo "migration discarded .sandcastle/$f" >&2; exit 1; }
 done
 
+# A project that already hand-ported the runner keeps it: the migration follows
+# the scaffold's own --no-clobber rule. Overwriting would discard project work
+# while reporting success, which is the failure the scaffold copy avoids for
+# every other file. Missing files are still added.
+HAND_PORTED="$TMP/hand-ported-$LANGUAGE"
+mkdir -p "$HAND_PORTED/.github" "$HAND_PORTED/docs" \
+         "$HAND_PORTED/.sandcastle/architecture-review"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$HAND_PORTED/"
+printf '// hand-ported by the project\n' \
+  > "$HAND_PORTED/.sandcastle/architecture-review/architecture-review.ts"
+"$S/upgrade-afk.sh" "$HAND_PORTED" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project with a hand-ported runner" >&2; exit 1; }
+grep -q 'hand-ported by the project' \
+  "$HAND_PORTED/.sandcastle/architecture-review/architecture-review.ts" \
+  || { echo "migration overwrote a hand-ported runner file" >&2; exit 1; }
+for f in extraction.md prompt.md; do
+  [ -f "$HAND_PORTED/.sandcastle/architecture-review/$f" ] \
+    || { echo "migration did not add the missing $f alongside a hand-ported one" >&2; exit 1; }
+done
+
 # A project whose cron this template did NOT write keeps its own schedule, but
 # the hour it already occupies must still be recorded. Without that the record
 # says the project holds no hour, and the next project on this host reads that

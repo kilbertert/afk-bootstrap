@@ -1030,7 +1030,7 @@ GLOSSARY_TARGET="$TMP/glossary-rename-$LANGUAGE"
 mkdir -p "$GLOSSARY_TARGET/.github" "$GLOSSARY_TARGET/docs" "$GLOSSARY_TARGET/.sandcastle"
 cp -R "$S/test/fixtures/legacy-1.1.x/." "$GLOSSARY_TARGET/"
 printf '# Project glossary\n\n- **Order**: a request to buy.\n' > "$GLOSSARY_TARGET/CONTEXT.md"
-printf '# CONTEXT\n\nRead `CONTEXT.md` for glossary terms.\n' \
+printf '# CONTEXT\n\nRead CONTEXT.md for glossary terms.\n' \
   > "$GLOSSARY_TARGET/.sandcastle/implement-prompt.md"
 "$S/upgrade-afk.sh" "$GLOSSARY_TARGET" --cron-hour 13 >/dev/null
 [ -e "$GLOSSARY_TARGET/GLOSSARY.md" ] \
@@ -1057,9 +1057,12 @@ cp -R "$S/test/fixtures/legacy-1.1.x/." "$BOTH/"
 printf '# old\n' > "$BOTH/CONTEXT.md"
 printf '# new\n' > "$BOTH/GLOSSARY.md"
 "$S/upgrade-afk.sh" "$BOTH" --cron-hour 13 >/dev/null
-[ -e "$BOTH/CONTEXT.md" ] && [ -e "$BOTH/GLOSSARY.md" ] \
-  || { echo "upgrade destroyed one of two competing domain docs" >&2; exit 1; }
-grep -q '# old' "$BOTH/CONTEXT.md" && grep -q '# new' "$BOTH/GLOSSARY.md" \
-  || { echo "upgrade overwrote a competing domain doc" >&2; exit 1; }
+if [ ! -e "$BOTH/CONTEXT.md" ] || [ ! -e "$BOTH/GLOSSARY.md" ]; then
+  echo "upgrade destroyed one of two competing domain docs" >&2; exit 1
+fi
+grep -q '# old' "$BOTH/CONTEXT.md" \
+  || { echo "upgrade overwrote the original CONTEXT.md" >&2; exit 1; }
+grep -q '# new' "$BOTH/GLOSSARY.md" \
+  || { echo "upgrade overwrote the existing GLOSSARY.md" >&2; exit 1; }
 
 echo "$LANGUAGE smoke test passed"

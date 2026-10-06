@@ -780,10 +780,17 @@ if [ "$to_minor" -ge 4 ]; then
     .sandcastle/write-prd-pr/prompt.md \
     docs/agents/domain.md ; do
     [ -e "$WORK/$rel" ] || continue
-    grep -q 'CONTEXT\.md' "$WORK/$rel" 2>/dev/null || continue
-    # Anchored on the exact filename the previous template emitted, so a project
-    # that already migrated by hand simply has nothing to match.
-    perl -pi -e 's/\bCONTEXT\.md\b/GLOSSARY.md/g' "$WORK/$rel"
+    # A bare word boundary is the WRONG anchor: `\b` also matches after a hyphen,
+    # so `DEPLOYMENT-CONTEXT.md` would be rewritten to `DEPLOYMENT-GLOSSARY.md`
+    # while that file keeps its own name — a pointer to nothing. Require that the
+    # match is not preceded or followed by a word character or a hyphen, which is
+    # exactly the standalone filename the previous templates emitted.
+    mkdir -p "$STAGE/before/$(dirname "$rel")"
+    cp "$WORK/$rel" "$STAGE/before/$rel"
+    perl -pi -e 's/(?<![\w-])CONTEXT\.md(?![\w-])/GLOSSARY.md/g' "$WORK/$rel"
+    # Derive "did this change" from the file itself rather than a separate grep,
+    # so the pattern above is the single source of truth for the anchor.
+    cmp -s "$STAGE/before/$rel" "$WORK/$rel" || GLOSSARY_FILES="$GLOSSARY_FILES $rel"
     GLOSSARY_FILES="$GLOSSARY_FILES $rel"
   done
 
@@ -805,13 +812,22 @@ if [ "$to_minor" -ge 4 ]; then
   fi
 
   # Project-owned prose is reported, never rewritten — the same policy the
-  # retired-profile step applies to the same file. `docs/afk-workflow.md` is
-  # copied from the template only when absent, so after first scaffold it belongs
-  # to the project and may have been edited.
-  if [ -e "$TARGET/docs/afk-workflow.md" ] \
-     && grep -q 'CONTEXT\.md' "$TARGET/docs/afk-workflow.md" 2>/dev/null; then
-    PROSE="$PROSE docs/afk-workflow.md"
-  fi
+  # retired-profile step applies. The file list is discovered rather than fixed:
+  # every root document and anything under docs/ can carry the old name, and a
+  # hardcoded list silently under-reports. `.sandcastle/` is excluded because
+  # those files were rewritten above; `.git`/`node_modules` are noise.
+  PROSE_HITS="$(grep -rl --exclude-dir=.git --exclude-dir=node_modules \
+      -e 'CONTEXT\.md' "$TARGET/docs" "$TARGET"/*.md 2>/dev/null || true)"
+  for f in $PROSE_HITS; do
+    rel="${f#"$TARGET"/}"
+    # Skip the files this step already rewrote in $WORK. They still hold the old
+    # name in $TARGET — that is the input, not a leftover — so reporting them
+    # would tell the operator to fix something that is already fixed.
+    case " $GLOSSARY_FILES " in
+      *" $rel "*) continue ;;
+    esac
+    PROSE="$PROSE $rel"
+  done
 fi
 
 if [ "$STEP_RAN" = "0" ]; then

@@ -1030,9 +1030,18 @@ GLOSSARY_TARGET="$TMP/glossary-rename-$LANGUAGE"
 mkdir -p "$GLOSSARY_TARGET/.github" "$GLOSSARY_TARGET/docs" "$GLOSSARY_TARGET/.sandcastle"
 cp -R "$S/test/fixtures/legacy-1.1.x/." "$GLOSSARY_TARGET/"
 printf '# Project glossary\n\n- **Order**: a request to buy.\n' > "$GLOSSARY_TARGET/CONTEXT.md"
-printf '# CONTEXT\n\nRead CONTEXT.md for glossary terms.\n' \
+# A lookalike name must survive untouched: `\bCONTEXT\.md\b` also matches after a
+# hyphen, which would rewrite this reference while the file keeps its own name,
+# leaving a pointer to a file that does not exist.
+printf 'Read DEPLOYMENT-CONTEXT.md for release terminology.\n' \
+  > "$GLOSSARY_TARGET/docs/deploy-notes.md"
+# Backticks as the real templates emit them. Built from an octal escape rather
+# than written literally, so shellcheck does not read them as command
+# substitution. A fixture without them would pass without exercising the anchor.
+BT="$(printf '\140')"
+printf '# CONTEXT\n\nRead %sCONTEXT.md%s for glossary terms.\n' "$BT" "$BT" \
   > "$GLOSSARY_TARGET/.sandcastle/implement-prompt.md"
-"$S/upgrade-afk.sh" "$GLOSSARY_TARGET" --cron-hour 13 >/dev/null
+GLOSSARY_OUT="$("$S/upgrade-afk.sh" "$GLOSSARY_TARGET" --cron-hour 13)"
 [ -e "$GLOSSARY_TARGET/GLOSSARY.md" ] \
   || { echo "upgrade did not rename the domain doc to GLOSSARY.md" >&2; exit 1; }
 [ ! -e "$GLOSSARY_TARGET/CONTEXT.md" ] \
@@ -1045,6 +1054,13 @@ grep -q 'GLOSSARY\.md' "$GLOSSARY_TARGET/.sandcastle/implement-prompt.md" \
 if grep -q 'CONTEXT\.md' "$GLOSSARY_TARGET/.sandcastle/implement-prompt.md"; then
   echo "a generated prompt still names CONTEXT.md" >&2; exit 1
 fi
+# The lookalike must be left exactly as written.
+grep -q 'DEPLOYMENT-CONTEXT\.md' "$GLOSSARY_TARGET/docs/deploy-notes.md" \
+  || { echo "migration rewrote a lookalike filename (DEPLOYMENT-CONTEXT.md)" >&2; exit 1; }
+# And the file that still references the old name must be REPORTED, not silently
+# left for an agent to trip over. It is project prose, so it is never rewritten.
+grep -q 'deploy-notes.md' <<<"$GLOSSARY_OUT" \
+  || { echo "migration did not report a project doc still naming CONTEXT.md" >&2; exit 1; }
 # Idempotent: a second run has nothing left to rename.
 "$S/upgrade-afk.sh" "$GLOSSARY_TARGET" | grep -q 'already at' \
   || { echo "glossary rename broke idempotence" >&2; exit 1; }
@@ -1064,5 +1080,24 @@ grep -q '# old' "$BOTH/CONTEXT.md" \
   || { echo "upgrade overwrote the original CONTEXT.md" >&2; exit 1; }
 grep -q '# new' "$BOTH/GLOSSARY.md" \
   || { echo "upgrade overwrote the existing GLOSSARY.md" >&2; exit 1; }
+
+# A project that predates the rename carries its terms in CONTEXT.md. Bootstrap
+# must MOVE that file, not generate a blank template beside it: the generated
+# prompts name GLOSSARY.md, so a fresh template would leave every agent reading an
+# empty glossary while the real terms sat unused under the old name.
+OLD_GLOSSARY_TARGET="$TMP/old-glossary-bootstrap-$LANGUAGE"
+mkdir "$OLD_GLOSSARY_TARGET"
+git -C "$OLD_GLOSSARY_TARGET" init -q -b main
+git -C "$OLD_GLOSSARY_TARGET" remote add origin \
+  "https://github.com/kilbertert/fake-old-glossary-$LANGUAGE.git"
+printf '# Existing domain terms\n\n- **Order**: a request to buy.\n' \
+  > "$OLD_GLOSSARY_TARGET/CONTEXT.md"
+"$S/bootstrap-afk.sh" "$OLD_GLOSSARY_TARGET" --language "$LANGUAGE" --no-build >/dev/null
+[ -e "$OLD_GLOSSARY_TARGET/GLOSSARY.md" ] \
+  || { echo "bootstrap did not produce GLOSSARY.md for a pre-rename project" >&2; exit 1; }
+[ ! -e "$OLD_GLOSSARY_TARGET/CONTEXT.md" ] \
+  || { echo "bootstrap left CONTEXT.md beside the new GLOSSARY.md" >&2; exit 1; }
+grep -q 'a request to buy' "$OLD_GLOSSARY_TARGET/GLOSSARY.md" \
+  || { echo "bootstrap replaced the project's existing glossary with a blank template" >&2; exit 1; }
 
 echo "$LANGUAGE smoke test passed"

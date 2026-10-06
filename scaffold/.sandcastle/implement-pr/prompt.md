@@ -47,6 +47,12 @@ Not everything in here is necessarily actionable — reviewers may leave context
 2. For a code change, run the Economy ladder and stop at the first option that
    fully addresses the confirmed feedback.
 3. Make the code changes you decided on. Run `npm run check`, then `node .sandcastle/policy-check.mjs commit`, before committing. Use conventional-commit messages (`feat:`, `fix:`, `refactor:`, etc.). Do NOT use a `RALPH:` prefix.
+   If the repo has a project verification skill — a directory matching
+   `.claude/skills/verify-*/` — and your change alters behavior a user can see,
+   run that skill and capture its evidence too. Tests are not a substitute: it
+   drives the real app the way a user does. The skill's own evidence is usually
+   gitignored, so put what you rely on somewhere the commit carries. If you
+   cannot run it, say so and why in the commit body; do not report it as done.
 4. If you made no changes that's fine — only commit when there's a real diff.
 
 You do not have to reply to every thread. Reply only where a reply adds value: confirming what you changed, explaining why you chose not to make a requested change, answering a question, or pointing out something the reviewer should look at. Silence is fine for context-only comments.

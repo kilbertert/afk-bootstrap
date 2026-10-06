@@ -112,9 +112,22 @@ cp "$S/templates/implement.$LANGUAGE.md"      "$TARGET/.sandcastle/implement.md"
 cp "$S/templates/prompt.$LANGUAGE.md"         "$TARGET/.sandcastle/implement-prd/prompt.md"
 cp "$S/templates/Dockerfile.$LANGUAGE"        "$TARGET/.sandcastle/Dockerfile"
 cp "$S/templates/CODING_STANDARDS.md"         "$TARGET/.sandcastle/CODING_STANDARDS.md"
-if [ ! -e "$TARGET/CONTEXT.md" ]; then
-  cp "$S/templates/CONTEXT.md" "$TARGET/CONTEXT.md"
-  sed -i "s/{{PROJECT_NAME}}/$SLUG/g" "$TARGET/CONTEXT.md"
+# The domain doc is project-owned: an existing glossary is never overwritten.
+# A project that predates the GLOSSARY.md rename carries its terms in CONTEXT.md,
+# and the generated prompts now name GLOSSARY.md — so generating a blank template
+# beside it would leave every agent reading an empty file while the real terms sit
+# unused in the old name. Rename it instead, preserving the content.
+if [ -e "$TARGET/CONTEXT.md" ] && [ ! -e "$TARGET/GLOSSARY.md" ]; then
+  mv "$TARGET/CONTEXT.md" "$TARGET/GLOSSARY.md"
+  echo "renamed CONTEXT.md -> GLOSSARY.md (existing glossary content preserved)"
+elif [ -e "$TARGET/CONTEXT.md" ] && [ -e "$TARGET/GLOSSARY.md" ]; then
+  # Both present: refuse to guess which is current; overwriting either would
+  # destroy project content. Leave both and say so.
+  echo "warning: both CONTEXT.md and GLOSSARY.md exist; merge them by hand" >&2
+fi
+if [ ! -e "$TARGET/GLOSSARY.md" ]; then
+  cp "$S/templates/GLOSSARY.md" "$TARGET/GLOSSARY.md"
+  sed -i "s/{{PROJECT_NAME}}/$SLUG/g" "$TARGET/GLOSSARY.md"
 fi
 mkdir -p "$TARGET/docs"
 if [ ! -e "$TARGET/docs/afk-workflow.md" ]; then

@@ -32,7 +32,7 @@ re-scaffold.
 ./bootstrap-afk.sh ~/Projects/<name> --language node|python --repo <owner>/<repo>
 ```
 
-Creates `.sandcastle/`, Actions, `CONTEXT.md`, `CODING_STANDARDS.md`,
+Creates `.sandcastle/`, Actions, `GLOSSARY.md`, `CODING_STANDARDS.md`,
 `docs/afk-workflow.md`, `docs/agents/`, `.afk-bootstrap.json`, `package.json`(+lock),
 `pnpm-workspace.yaml`. Verify:
 `planner.ts`, `implement-prompt.md`, `ralph` script, python prompts use uv, esbuild

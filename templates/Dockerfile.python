@@ -10,6 +10,15 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends git curl jq ca-certificates python3 python3-pip python3-venv \
   && rm -rf /var/lib/apt/lists/*
 
+# If your test suite launches a real browser (e.g. Playwright), bake the
+# browser + OS deps in so the agent can self-verify inside the container
+# instead of reporting a false BLOCKED. Keep the version in sync with your
+# @playwright/test and uncomment `ENV PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright`
+# before USER below — without it the browsers land somewhere the agent's
+# non-root user cannot read.
+# RUN PLAYWRIGHT_BROWSERS_PATH=/opt/ms-playwright npx --yes playwright@1.62.0 install --with-deps chromium \
+#   && rm -rf /var/lib/apt/lists/*
+
 # uv (official standalone installer; UV_INSTALL_DIR puts it on PATH for all users)
 RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh \
   && rm -rf /root/.cache

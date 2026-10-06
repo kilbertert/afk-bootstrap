@@ -34,6 +34,12 @@ Before committing, run `npm run check` (typecheck + tests + build) and
 `git diff --check` to ensure everything passes. Then run
 `node .sandcastle/policy-check.mjs commit`. Do not weaken or skip checks.
 
+If the repo has a project verification skill — a directory matching
+`.claude/skills/verify-*/` — and your change alters behavior a user can see,
+run that skill and capture its evidence before committing. Tests are not a
+substitute: it drives the real app the way a user does. If you cannot run it,
+say so and why in the commit body; do not report it as done.
+
 # COMMIT
 
 Make git commits on `{{BRANCH}}` with **Conventional Commit** messages

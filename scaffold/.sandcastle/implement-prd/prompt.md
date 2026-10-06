@@ -39,6 +39,12 @@ Use red-green-refactor where applicable.
 
 Before committing, run `npm run typecheck` and `npm test`.
 
+If the repo has a project verification skill — a directory matching
+`.claude/skills/verify-*/` — and your change alters behavior a user can see,
+run that skill and capture its evidence too. Tests are not a substitute: it
+drives the real app the way a user does. If you cannot run it, say so and why
+in the commit body; do not report it as done.
+
 # COMMIT
 
 Make one or more git commits on `{{BRANCH}}`. Use conventional-commit

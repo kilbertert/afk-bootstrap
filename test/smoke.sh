@@ -1100,4 +1100,31 @@ printf '# Existing domain terms\n\n- **Order**: a request to buy.\n' \
 grep -q 'a request to buy' "$OLD_GLOSSARY_TARGET/GLOSSARY.md" \
   || { echo "bootstrap replaced the project's existing glossary with a blank template" >&2; exit 1; }
 
+# A project already using the new name must NOT be reported as changed. The
+# change report was derived from an unconditional append, so every prompt landed
+# in it whether or not the substitution matched — a false "changed" on every run
+# and in every dry run.
+ALREADY="$TMP/glossary-already-$LANGUAGE"
+mkdir -p "$ALREADY/.github" "$ALREADY/docs"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$ALREADY/"
+printf '# terms\n' > "$ALREADY/GLOSSARY.md"
+printf '# CONTEXT\n\nRead GLOSSARY.md for glossary terms.\n' \
+  > "$ALREADY/.sandcastle/implement-prompt.md"
+ALREADY_OUT="$("$S/upgrade-afk.sh" "$ALREADY" --cron-hour 13 --dry-run)"
+if grep -q 'changed: .sandcastle/implement-prompt.md' <<<"$ALREADY_OUT"; then
+  echo "a prompt already naming GLOSSARY.md was reported as changed" >&2; exit 1
+fi
+
+# A target path or document name containing a space must still be reported
+# correctly. Word-splitting a grep result fragments the path into pieces that
+# match no file, so the report named garbage instead of the document to fix.
+SPACED_PROSE="$TMP/glossary spaced $LANGUAGE"
+mkdir -p "$SPACED_PROSE/.github" "$SPACED_PROSE/docs/old notes"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$SPACED_PROSE/"
+printf 'See CONTEXT.md for terms.\n' > "$SPACED_PROSE/docs/old notes/team terms.md"
+printf '# t\n' > "$SPACED_PROSE/GLOSSARY.md"
+SPACED_OUT="$("$S/upgrade-afk.sh" "$SPACED_PROSE" --cron-hour 13 2>&1)"
+grep -qF 'old notes/team terms.md' <<<"$SPACED_OUT" \
+  || { echo "a spaced document path was not reported intact" >&2; exit 1; }
+
 echo "$LANGUAGE smoke test passed"

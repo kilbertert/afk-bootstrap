@@ -467,7 +467,8 @@ if [ "$from_minor" -lt 2 ] && [ "$to_minor" -ge 2 ]; then
   for f in "$TARGET/docs/afk-workflow.md" "$TARGET/docs/afk-development.md" "$TARGET/README.md"; do
     [ -e "$f" ] || continue
     if grep -qE 'claude-ark|agentrouter|psydo|aliyun-deepseek' "$f"; then
-      PROSE="$PROSE ${f#"$TARGET"/}"
+      PROSE="$PROSE
+${f#"$TARGET"/}"
     fi
   done
 fi
@@ -791,7 +792,6 @@ if [ "$to_minor" -ge 4 ]; then
     # Derive "did this change" from the file itself rather than a separate grep,
     # so the pattern above is the single source of truth for the anchor.
     cmp -s "$STAGE/before/$rel" "$WORK/$rel" || GLOSSARY_FILES="$GLOSSARY_FILES $rel"
-    GLOSSARY_FILES="$GLOSSARY_FILES $rel"
   done
 
   # The prompts now name GLOSSARY.md, so a project still holding CONTEXT.md would
@@ -807,7 +807,8 @@ if [ "$to_minor" -ge 4 ]; then
   elif [ -e "$TARGET/CONTEXT.md" ] && [ -e "$TARGET/GLOSSARY.md" ]; then
     # Both present: refuse to guess which one is current. Overwriting either
     # would destroy project content, so report and leave both in place.
-    PROSE="$PROSE CONTEXT.md"
+    PROSE="$PROSE
+CONTEXT.md"
     say "note: both CONTEXT.md and GLOSSARY.md exist; left both, merge them by hand"
   fi
 
@@ -816,9 +817,12 @@ if [ "$to_minor" -ge 4 ]; then
   # every root document and anything under docs/ can carry the old name, and a
   # hardcoded list silently under-reports. `.sandcastle/` is excluded because
   # those files were rewritten above; `.git`/`node_modules` are noise.
-  PROSE_HITS="$(grep -rl --exclude-dir=.git --exclude-dir=node_modules \
-      -e 'CONTEXT\.md' "$TARGET/docs" "$TARGET"/*.md 2>/dev/null || true)"
-  for f in $PROSE_HITS; do
+  # Read line by line, not word-split: a project path containing a space would
+  # otherwise fragment each hit into pieces that match no file, and the report
+  # would silently name garbage instead of the documents to fix. A spaced target
+  # is a supported shape (see the spaced-tool-directory smoke case).
+  while IFS= read -r f; do
+    [ -n "$f" ] || continue
     rel="${f#"$TARGET"/}"
     # Skip the files this step already rewrote in $WORK. They still hold the old
     # name in $TARGET — that is the input, not a leftover — so reporting them
@@ -826,8 +830,12 @@ if [ "$to_minor" -ge 4 ]; then
     case " $GLOSSARY_FILES " in
       *" $rel "*) continue ;;
     esac
-    PROSE="$PROSE $rel"
-  done
+    PROSE="$PROSE
+$rel"
+  done <<EOF
+$(grep -rl --exclude-dir=.git --exclude-dir=node_modules \
+    -e 'CONTEXT\.md' "$TARGET/docs" "$TARGET"/*.md 2>/dev/null || true)
+EOF
 fi
 
 if [ "$STEP_RAN" = "0" ]; then
@@ -874,7 +882,11 @@ fi
 if [ -n "$PROSE" ]; then
   say ""
   say "Project prose still names something this migration replaced (it does not edit project prose):"
-  for f in $PROSE; do say "  - $f"; done
+  while IFS= read -r f; do
+    [ -n "$f" ] && say "  - $f"
+  done <<EOF
+$PROSE
+EOF
 fi
 
 if [ "$DRY_RUN" = "1" ]; then

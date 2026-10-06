@@ -663,7 +663,12 @@ fi
 # Only a run that COMPLETED counts as evidence: a cancelled run's duration is the
 # budget it hit, not the work it did. That is the distinction the 45m sizing got
 # wrong, so it is stated here rather than left implicit.
-if [ "$to_patch" -ge 1 ] && [ "$to_minor" -ge 3 ]; then
+# Gated on the minor version, not `to_patch -ge 1`. The patch term made this step
+# disappear the moment the template moved past 1.3.1 — a project coming from 1.3.x
+# would then silently keep its 45m budget, which is the defect this step removes.
+# "At or above the version that introduced it" is the condition; a patch level is
+# not a proxy for it.
+if [ "$to_minor" -ge 3 ]; then
   STEP_RAN=1
   ARCH="$WORK/.github/workflows/architecture-review.yml"
   if [ ! -e "$ARCH" ]; then
@@ -740,6 +745,75 @@ fi
 # A version pair no step handles must fail rather than publish a copy that only
 # has its metadata rewritten — the project would then claim a version whose
 # changes it never received.
+# `to_minor -ge 4`: there is no from-version gate because the rename has to reach
+# every older project. A 1.1.x project runs the 1.2.0 and 1.3.0 steps above in the
+# same invocation, so gating on `from_minor` would strand it on the old filename.
+if [ "$to_minor" -ge 4 ]; then
+  STEP_RAN=1
+  GLOSSARY_FILES=""
+  GLOSSARY_RENAME=0
+  say "== $FROM -> $TEMPLATE_VERSION: domain doc CONTEXT.md -> GLOSSARY.md =="
+
+  # $WORK stages only .sandcastle/ and .github/workflows/; the domain doc lives
+  # under docs/. Stage it here so publish_file has a source to copy.
+  if [ -e "$TARGET/docs/agents/domain.md" ]; then
+    mkdir -p "$WORK/docs/agents"
+    cp "$TARGET/docs/agents/domain.md" "$WORK/docs/agents/domain.md"
+  fi
+
+  # `.sandcastle/implement.md` is the per-language render of
+  # `templates/implement.<lang>.md` (bootstrap-afk.sh copies it there), so it
+  # carries the same reference and must move with the rest. Missing it would
+  # leave the implement job pointing at a filename that no longer exists.
+  for rel in \
+    .sandcastle/implement.md \
+    .sandcastle/implement-prompt.md \
+    .sandcastle/implement-prd/prompt.md \
+    .sandcastle/review-prompt.md \
+    .sandcastle/review/axis-prompt.md \
+    .sandcastle/review/prompt.md \
+    .sandcastle/implement/prompt.md \
+    .sandcastle/implement-pr/prompt.md \
+    .sandcastle/update-branch/prompt.md \
+    .sandcastle/architecture-review/prompt.md \
+    .sandcastle/write-pr/prompt.md \
+    .sandcastle/write-prd-pr/prompt.md \
+    docs/agents/domain.md ; do
+    [ -e "$WORK/$rel" ] || continue
+    grep -q 'CONTEXT\.md' "$WORK/$rel" 2>/dev/null || continue
+    # Anchored on the exact filename the previous template emitted, so a project
+    # that already migrated by hand simply has nothing to match.
+    perl -pi -e 's/\bCONTEXT\.md\b/GLOSSARY.md/g' "$WORK/$rel"
+    GLOSSARY_FILES="$GLOSSARY_FILES $rel"
+  done
+
+  # The prompts now name GLOSSARY.md, so a project still holding CONTEXT.md would
+  # point every agent at a file that does not exist. The project's own copy is
+  # renamed, not overwritten: the glossary content is project-owned.
+  GLOSSARY_RENAME=0
+  if [ -e "$TARGET/CONTEXT.md" ] && [ ! -e "$TARGET/GLOSSARY.md" ]; then
+    GLOSSARY_RENAME=1
+    # Staged under the NEW name: publish_file copies from $WORK, so the rename is
+    # a write of GLOSSARY.md followed by a delete of CONTEXT.md.
+    cp "$TARGET/CONTEXT.md" "$WORK/GLOSSARY.md"
+    say "renaming CONTEXT.md -> GLOSSARY.md (project glossary content preserved)"
+  elif [ -e "$TARGET/CONTEXT.md" ] && [ -e "$TARGET/GLOSSARY.md" ]; then
+    # Both present: refuse to guess which one is current. Overwriting either
+    # would destroy project content, so report and leave both in place.
+    PROSE="$PROSE CONTEXT.md"
+    say "note: both CONTEXT.md and GLOSSARY.md exist; left both, merge them by hand"
+  fi
+
+  # Project-owned prose is reported, never rewritten — the same policy the
+  # retired-profile step applies to the same file. `docs/afk-workflow.md` is
+  # copied from the template only when absent, so after first scaffold it belongs
+  # to the project and may have been edited.
+  if [ -e "$TARGET/docs/afk-workflow.md" ] \
+     && grep -q 'CONTEXT\.md' "$TARGET/docs/afk-workflow.md" 2>/dev/null; then
+    PROSE="$PROSE docs/afk-workflow.md"
+  fi
+fi
+
 if [ "$STEP_RAN" = "0" ]; then
   echo "no upgrade step defined from $FROM to $TEMPLATE_VERSION" >&2
   exit 1
@@ -769,10 +843,21 @@ if ! diff -rq "$TARGET/.github/workflows" "$WORK/.github/workflows" >/dev/null 2
   CHANGED=1
   note "changed: .github/workflows/"
 fi
+# Files the 1.4.0 glossary step rewrote. Without this the change report would
+# under-state the run: the comparison above is a fixed list, so a file that only
+# this step touches would be silently migrated.
+for rel in ${GLOSSARY_FILES:-}; do
+  CHANGED=1
+  note "changed: $rel"
+done
+if [ "${GLOSSARY_RENAME:-0}" = "1" ]; then
+  CHANGED=1
+  note "renamed: CONTEXT.md -> GLOSSARY.md"
+fi
 
 if [ -n "$PROSE" ]; then
   say ""
-  say "Project prose still names a retired profile (this script does not edit it):"
+  say "Project prose still names something this migration replaced (it does not edit project prose):"
   for f in $PROSE; do say "  - $f"; done
 fi
 
@@ -798,9 +883,12 @@ fi
 # only the copies that succeeded would leave the failed one damaged.
 PUBLISHED_FILES=""
 PUBLISHED_DIRS=""
+# Files this migration deletes as part of a rename. A delete has no copy to roll
+# back from, so the original is backed up first and restored like any other file.
+PUBLISHED_DELETES=""
 restore_published() {
   local status=$?
-  if [ -n "$PUBLISHED_FILES$PUBLISHED_DIRS" ]; then
+  if [ -n "$PUBLISHED_FILES$PUBLISHED_DIRS$PUBLISHED_DELETES" ]; then
     say "publish failed; restoring the project" >&2
     # A directory is restored by removing whatever is there now and copying the
     # backup back. Copying onto a partially-written directory would nest the old
@@ -820,6 +908,12 @@ restore_published() {
         rmdir "$(dirname "$TARGET/$rel")" 2>/dev/null || true
         continue
       fi
+      cp "$STAGE/backup/$rel" "$TARGET/$rel" || say "could not restore $rel" >&2
+    done
+    # A deletion is restored by putting the backed-up original back. This runs
+    # after the loop above, so a rename is undone as: new name written, then old
+    # name restored — the project returns to holding exactly CONTEXT.md.
+    for rel in $PUBLISHED_DELETES; do
       cp "$STAGE/backup/$rel" "$TARGET/$rel" || say "could not restore $rel" >&2
     done
   fi
@@ -855,6 +949,19 @@ publish_dir() {
   return 0
 }
 
+# Remove a file as part of a rename, keeping a restorable backup. Used instead of
+# a bare `rm` so a failure later in the publish cannot leave the project holding
+# the new name without the old one having existed.
+publish_delete() {
+  local rel="$1"
+  [ -e "$TARGET/$rel" ] || return 0
+  mkdir -p "$(dirname "$STAGE/backup/$rel")"
+  cp "$TARGET/$rel" "$STAGE/backup/$rel" || return 1
+  PUBLISHED_DELETES="$rel $PUBLISHED_DELETES"
+  rm -f "$TARGET/$rel" || return 1
+  return 0
+}
+
 # Metadata goes last: until every content file is in place it should keep
 # describing the version the tree actually is.
 for rel in .sandcastle/Dockerfile .sandcastle/profile.ts .sandcastle/main.ts; do
@@ -874,11 +981,23 @@ if [ -d "$WORK/.sandcastle/architecture-review" ]; then
     publish_file "$rel" || { say "could not publish $rel" >&2; exit 1; }
   done
 fi
+# Files the 1.4.0 glossary step rewrote, then the rename itself. The new name is
+# written before the old one is removed, so an interruption can only leave both
+# present — never neither.
+for rel in ${GLOSSARY_FILES:-}; do
+  cmp -s "$TARGET/$rel" "$WORK/$rel" 2>/dev/null && continue
+  publish_file "$rel" || { say "could not publish $rel" >&2; exit 1; }
+done
+if [ "${GLOSSARY_RENAME:-0}" = "1" ]; then
+  publish_file "GLOSSARY.md" || { say "could not publish GLOSSARY.md" >&2; exit 1; }
+  publish_delete "CONTEXT.md" || { say "could not remove CONTEXT.md" >&2; exit 1; }
+fi
 publish_file ".afk-bootstrap.json" || { say "could not publish .afk-bootstrap.json" >&2; exit 1; }
 
 # Every write is done; disarm the rollback rather than restoring over it.
 PUBLISHED_FILES=""
 PUBLISHED_DIRS=""
+PUBLISHED_DELETES=""
 trap 'rm -rf "$STAGE"' EXIT
 
 say ""
@@ -892,5 +1011,6 @@ Still to do (host runner owns delivery — this script commits nothing):
      gh variable set AFK_PROFILE --repo <owner/name> --body claude-stepfun
    Changing it before the rebuild makes the image's claude wrapper exit 2,
    because the old image has no claude-stepfun dispatch arm.
-3. Update any project prose still naming a retired profile (listed above).
+3. Update the project prose listed above — this script reports it but never
+   rewrites a project-owned document.
 EOF

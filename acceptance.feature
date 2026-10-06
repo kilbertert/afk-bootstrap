@@ -66,7 +66,7 @@ Feature: Self-contained AFK bootstrap baseline
       When the project is inspected after bootstrap
       Then no automatic PRD splitter workflow, script, or project-local planning skill is generated
       And the retained PRD workflow runs only after native sub-issues exist
-      And CONTEXT.md is a glossary while docs/agents and docs/adr point to the other fact sources
+      And GLOSSARY.md is a glossary while docs/agents and docs/adr point to the other fact sources
 
     Scenario: Review is provider-neutral and preserves two axes
       Given a project pull request with a linked issue and review conversation

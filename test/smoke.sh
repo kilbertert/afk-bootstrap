@@ -16,7 +16,7 @@ mkdir "$TARGET"
 git -C "$TARGET" init -q -b main
 git -C "$TARGET" remote add origin "https://github.com/$REPO.git"
 mkdir -p "$TARGET/docs/agents" "$TARGET/docs/adr"
-printf '# Existing glossary\n' > "$TARGET/CONTEXT.md"
+printf '# Existing glossary\n' > "$TARGET/GLOSSARY.md"
 printf '# Existing workflow\nagentrouter\n' > "$TARGET/docs/afk-workflow.md"
 printf '# Existing domain docs\n' > "$TARGET/docs/agents/domain.md"
 printf '# Existing ADR\n' > "$TARGET/docs/adr/0001-existing.md"
@@ -80,7 +80,7 @@ for f in \
   .sandcastle/main.ts .sandcastle/profile.ts .sandcastle/planner.ts .sandcastle/run-with-extraction.ts \
   .sandcastle/policy-check.mjs .sandcastle/consensus-contract.json .sandcastle/trusted-pr-delivery.sh \
   .sandcastle/implement.md .sandcastle/Dockerfile .sandcastle/.env.example .sandcastle/.gitignore \
-  .sandcastle/CODING_STANDARDS.md CONTEXT.md CLAUDE.md docs/afk-workflow.md \
+  .sandcastle/CODING_STANDARDS.md GLOSSARY.md CLAUDE.md docs/afk-workflow.md \
   docs/agents/issue-tracker.md docs/agents/triage-labels.md docs/agents/domain.md \
   .sandcastle/implement-prd/prompt.md .sandcastle/write-prd-pr \
   .sandcastle/implement .sandcastle/write-pr .sandcastle/review .sandcastle/implement-pr \
@@ -130,12 +130,12 @@ node -e '
   if (!d.vitest) { console.error("no test runner in devDependencies"); process.exit(1); }
 ' "$TARGET/package.json" || { echo "scaffold names a test script with no runner" >&2; exit 1; }
 
-grep -q '# Existing glossary' "$TARGET/CONTEXT.md" || { echo "existing glossary was overwritten" >&2; exit 1; }
-if grep -q '{{PROJECT_NAME}}' "$WORKTREE_TARGET/CONTEXT.md"; then
+grep -q '# Existing glossary' "$TARGET/GLOSSARY.md" || { echo "existing glossary was overwritten" >&2; exit 1; }
+if grep -q '{{PROJECT_NAME}}' "$WORKTREE_TARGET/GLOSSARY.md"; then
   echo "generated glossary contains an unrendered project name" >&2
   exit 1
 fi
-grep -q "# fake-$LANGUAGE-project" "$WORKTREE_TARGET/CONTEXT.md" \
+grep -q "# fake-$LANGUAGE-project" "$WORKTREE_TARGET/GLOSSARY.md" \
   || { echo "generated glossary project name is incorrect" >&2; exit 1; }
 grep -q '# Existing workflow' "$TARGET/docs/afk-workflow.md" || { echo "existing workflow was overwritten" >&2; exit 1; }
 grep -q '# Existing domain docs' "$TARGET/docs/agents/domain.md" || { echo "existing domain docs were overwritten" >&2; exit 1; }
@@ -205,7 +205,7 @@ fi
 node -e '
   const fs = require("fs");
   const metadata = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.3.2" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
+  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.4.0" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
   // The assigned schedule hour must be recorded, or the next project on this
   // host has nothing to consult and collides by default — the defect that
   // made every project architecture review run on the same minute.
@@ -394,7 +394,7 @@ grep -q 'claude-stepfun' "$UPGRADE_TARGET/.sandcastle/main.ts" \
 node -e '
   const fs = require("fs");
   const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-  if (m.afk_template_version !== "1.3.2") process.exit(1);
+  if (m.afk_template_version !== "1.4.0") process.exit(1);
   // Cumulative migration: a 1.1.x project must come out of ONE run with both
   // the 1.2.0 provider migration and the 1.3.2 schedule migration applied, and
   // the assigned hour recorded. A step gated on from_minor alone would leave a
@@ -1021,5 +1021,45 @@ fi
   || { echo "a failed publish did not restore the project" >&2; exit 1; }
 [ -d "$ROLLBACK/.github/workflows/workflows" ] \
   && { echo "restoring the workflow directory nested it instead of replacing it" >&2; exit 1; }
+
+# ---- 1.4.0: the domain doc is renamed, not just re-pointed -------------------
+# The scaffold prompts this run rewrites now name GLOSSARY.md. Renaming only the
+# prompts would point every agent at a file that does not exist, so the project's
+# own doc must move with them.
+GLOSSARY_TARGET="$TMP/glossary-rename-$LANGUAGE"
+mkdir -p "$GLOSSARY_TARGET/.github" "$GLOSSARY_TARGET/docs" "$GLOSSARY_TARGET/.sandcastle"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$GLOSSARY_TARGET/"
+printf '# Project glossary\n\n- **Order**: a request to buy.\n' > "$GLOSSARY_TARGET/CONTEXT.md"
+printf '# CONTEXT\n\nRead `CONTEXT.md` for glossary terms.\n' \
+  > "$GLOSSARY_TARGET/.sandcastle/implement-prompt.md"
+"$S/upgrade-afk.sh" "$GLOSSARY_TARGET" --cron-hour 13 >/dev/null
+[ -e "$GLOSSARY_TARGET/GLOSSARY.md" ] \
+  || { echo "upgrade did not rename the domain doc to GLOSSARY.md" >&2; exit 1; }
+[ ! -e "$GLOSSARY_TARGET/CONTEXT.md" ] \
+  || { echo "upgrade left CONTEXT.md in place after renaming" >&2; exit 1; }
+# The glossary is project-owned: renamed, never regenerated from the template.
+grep -q 'a request to buy' "$GLOSSARY_TARGET/GLOSSARY.md" \
+  || { echo "rename replaced the project's glossary content" >&2; exit 1; }
+grep -q 'GLOSSARY\.md' "$GLOSSARY_TARGET/.sandcastle/implement-prompt.md" \
+  || { echo "a generated prompt still names the retired filename" >&2; exit 1; }
+if grep -q 'CONTEXT\.md' "$GLOSSARY_TARGET/.sandcastle/implement-prompt.md"; then
+  echo "a generated prompt still names CONTEXT.md" >&2; exit 1
+fi
+# Idempotent: a second run has nothing left to rename.
+"$S/upgrade-afk.sh" "$GLOSSARY_TARGET" | grep -q 'already at' \
+  || { echo "glossary rename broke idempotence" >&2; exit 1; }
+
+# When both names are present the migration must not guess which is current.
+# Overwriting either would destroy project content, so it leaves both and says so.
+BOTH="$TMP/glossary-both-$LANGUAGE"
+mkdir -p "$BOTH/.github" "$BOTH/docs"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$BOTH/"
+printf '# old\n' > "$BOTH/CONTEXT.md"
+printf '# new\n' > "$BOTH/GLOSSARY.md"
+"$S/upgrade-afk.sh" "$BOTH" --cron-hour 13 >/dev/null
+[ -e "$BOTH/CONTEXT.md" ] && [ -e "$BOTH/GLOSSARY.md" ] \
+  || { echo "upgrade destroyed one of two competing domain docs" >&2; exit 1; }
+grep -q '# old' "$BOTH/CONTEXT.md" && grep -q '# new' "$BOTH/GLOSSARY.md" \
+  || { echo "upgrade overwrote a competing domain doc" >&2; exit 1; }
 
 echo "$LANGUAGE smoke test passed"

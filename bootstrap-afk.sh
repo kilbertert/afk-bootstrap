@@ -112,9 +112,9 @@ cp "$S/templates/implement.$LANGUAGE.md"      "$TARGET/.sandcastle/implement.md"
 cp "$S/templates/prompt.$LANGUAGE.md"         "$TARGET/.sandcastle/implement-prd/prompt.md"
 cp "$S/templates/Dockerfile.$LANGUAGE"        "$TARGET/.sandcastle/Dockerfile"
 cp "$S/templates/CODING_STANDARDS.md"         "$TARGET/.sandcastle/CODING_STANDARDS.md"
-if [ ! -e "$TARGET/CONTEXT.md" ]; then
-  cp "$S/templates/CONTEXT.md" "$TARGET/CONTEXT.md"
-  sed -i "s/{{PROJECT_NAME}}/$SLUG/g" "$TARGET/CONTEXT.md"
+if [ ! -e "$TARGET/GLOSSARY.md" ]; then
+  cp "$S/templates/GLOSSARY.md" "$TARGET/GLOSSARY.md"
+  sed -i "s/{{PROJECT_NAME}}/$SLUG/g" "$TARGET/GLOSSARY.md"
 fi
 mkdir -p "$TARGET/docs"
 if [ ! -e "$TARGET/docs/afk-workflow.md" ]; then

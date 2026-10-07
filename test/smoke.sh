@@ -134,6 +134,13 @@ node -e '
 ' "$TARGET/package.json" || { echo "scaffold names a test script with no runner" >&2; exit 1; }
 
 grep -q '# Existing glossary' "$TARGET/GLOSSARY.md" || { echo "existing glossary was overwritten" >&2; exit 1; }
+# A fresh scaffold must pass its own map freshness check. The map lists the
+# package scripts and the files at the repository root, so generating it before
+# `package.json` is merged leaves it describing a tree the scaffold then changes
+# — and the policy job regenerates from the finished repository and compares, so
+# an untouched new project would go red on its first push.
+( cd "$TARGET" && node .sandcastle/repo-map.check.mjs >/dev/null ) \
+  || { echo "a fresh scaffold ships a stale REPO-MAP.md" >&2; exit 1; }
 if grep -q '{{PROJECT_NAME}}' "$WORKTREE_TARGET/GLOSSARY.md"; then
   echo "generated glossary contains an unrendered project name" >&2
   exit 1
@@ -370,6 +377,14 @@ fi
 UPGRADE_TARGET="$TMP/upgrade-$LANGUAGE"
 mkdir -p "$UPGRADE_TARGET/.github" "$UPGRADE_TARGET/docs"
 cp -R "$S/test/fixtures/legacy-1.1.x/." "$UPGRADE_TARGET/"
+# The 1.5.2 prompts, so the map-pointer migration is exercised against real
+# previous output. This matters more than it looks: the pointers are added by
+# anchored replacement, the two sentences differ per prompt, and a missed anchor
+# is *silent* (the loop reads it as "the author rewrote this line and left it
+# alone"). Without a fixture that carries all five shapes, a step that migrates
+# four of them passes green.
+cp -R "$S/test/fixtures/legacy-1.5.2-prompts/.sandcastle" "$UPGRADE_TARGET/"
+cp "$S/test/fixtures/legacy-1.5.2-prompts/implement.md" "$UPGRADE_TARGET/.sandcastle/implement.md"
 
 # A project with no schedule to carry over and no --cron-hour must be refused,
 # not silently defaulted: a default is what put every project on one hour.
@@ -445,6 +460,30 @@ grep -qF 'npm install --global --allow-scripts=@anthropic-ai/claude-code' \
 # red — so the check is run here, where it is the migration's output under test.
 ( cd "$UPGRADE_TARGET" && node .sandcastle/repo-map.check.mjs >/dev/null ) \
   || { echo "upgrade wrote a repository map that is already stale" >&2; exit 1; }
+# All five implementation prompts gain the pointer, including the two whose
+# read list starts somewhere other than `Read `GLOSSARY` — the PRD prompt lists
+# docs first. A single anchor migrates four and reports success for five.
+for prompt in \
+  .sandcastle/implement.md \
+  .sandcastle/implement-prompt.md \
+  .sandcastle/implement/prompt.md \
+  .sandcastle/implement-pr/prompt.md \
+  .sandcastle/implement-prd/prompt.md; do
+  grep -q 'REPO-MAP.md' "$UPGRADE_TARGET/$prompt" \
+    || { echo "upgrade left $prompt without the map pointer" >&2; exit 1; }
+done
+# The `claude` dispatch arm is the only one with no --settings flag, so the
+# substitution anchored on that flag cannot reach it — and that arm is paired
+# with the mounts that are no longer conditional. A mount the wrapper does not
+# read is a server the agent does not get.
+grep -qF 'claude) exec /usr/local/bin/claude-real --mcp-config /home/agent/.afk-mcp.json' \
+  "$UPGRADE_TARGET/.sandcastle/Dockerfile" \
+  || { echo "upgrade left the claude arm without --mcp-config" >&2; exit 1; }
+grep -qF '...mcpConfigMounts(),' "$UPGRADE_TARGET/.sandcastle/profile.ts" \
+  || { echo "upgrade left the MCP mounts out of profile.ts" >&2; exit 1; }
+if grep -q '? { mounts: \[{ hostPath: settingsPath' "$UPGRADE_TARGET/.sandcastle/profile.ts"; then
+  echo "migrated profile.ts still gates the mounts on settingsPath" >&2; exit 1
+fi
 # A project document is its own source of truth: the migration reports it, never rewrites it.
 grep -q 'afk-workflow.md' <<<"$UPGRADE_OUT" \
   || { echo "upgrade silently ignored project prose naming a retired profile" >&2; exit 1; }

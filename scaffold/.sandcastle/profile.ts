@@ -81,14 +81,24 @@ export function claudeProfile(
       // it cannot start (verified — the session still exits 0), so a dead path
       // would degrade the agent's tools with no signal anywhere. mcp-config.ts
       // owns that decision; mcp-config.check.ts asserts it.
-      ...(settingsPath
-        ? {
-            mounts: [
-              { hostPath: settingsPath, sandboxPath: "/home/agent/.afk-profile-settings.json", readonly: true },
-              ...mcpConfigMounts(),
-            ],
-          }
-        : {}),
+      // The mounts are unconditional. The MCP pair is independent of the
+      // endpoint: the graph is mounted from the host and serena is in the image,
+      // both regardless of how the agent authenticates. Gating them on
+      // `settingsPath` (as this started out) made the setting a proxy for
+      // "is this a non-default profile" — and the `claude` profile is the one
+      // that resolves no settings file, so the default profile was exactly the
+      // one that got no mounts, no config file, and therefore no servers. The
+      // wrapper's `claude` arm also passes no --mcp-config, so nothing else
+      // supplied them: not a wrong path, just absent.
+      mounts: [
+        // Present only when the profile resolves an endpoint, because without
+        // one there is no file to mount — the wrapper's `claude` arm uses the
+        // Anthropic default and reads no settings.
+        ...(settingsPath
+          ? [{ hostPath: settingsPath, sandboxPath: "/home/agent/.afk-profile-settings.json", readonly: true }]
+          : []),
+        ...mcpConfigMounts(),
+      ],
     }),
   };
 }

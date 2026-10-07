@@ -1295,6 +1295,24 @@ SERENAJS
     exit 1
   fi
 
+  # The `claude` arm of the wrapper gained --mcp-config too, and the anchor above
+  # cannot reach it: that arm is the *only* one with no --settings flag, which is
+  # also why the profile mounts it is paired with are no longer conditional. The
+  # two halves are one change — a mount the wrapper never reads is a server the
+  # agent never gets, and the reverse. A project that rewrote the arm is refused
+  # rather than half-migrated, because an unread mount is exactly the silent
+  # degradation this step exists to remove.
+  CLAUDE_ARM="  '  claude) exec /usr/local/bin/claude-real \"\$@\" ;;' \\"
+  CLAUDE_ARM_NEW="  '  claude) exec /usr/local/bin/claude-real --mcp-config /home/agent/.afk-mcp.json \"\$@\" ;;' \\"
+  if grep -qF -- "$CLAUDE_ARM_NEW" "$DOCKER"; then
+    note "Dockerfile: claude arm already passes --mcp-config"
+  elif grep -qF -- "$CLAUDE_ARM" "$DOCKER"; then
+    subst "$DOCKER" "$CLAUDE_ARM" "$CLAUDE_ARM_NEW"
+  else
+    echo "Dockerfile: no claude dispatch arm found — refusing to guess" >&2
+    exit 1
+  fi
+
   # 1c. The map itself, generated from the project's own shape. The policy job
   #     this step also wires fails on a missing or stale map, so a project that
   #     reaches 1.6.0 without one would go red on its first push.
@@ -1344,25 +1362,45 @@ import { mcpConfigMounts, writeMcpConfig } from "./mcp-config.js";'
   // needs a file to point at, and writing it per run is what keeps it true to
   // what this host actually has.
   writeMcpConfig();'
-    # The mounts object grows from a one-element literal to a list. Anchored on
-    # the exact line 1.5.x wrote.
+    # The mounts literal 1.5.x wrote is replaced whole. It was a conditional
+    # one-element list; it becomes an unconditional list, so the `claude` profile
+    # — the one that resolves no settings file — still receives the MCP pair.
+    # Anchored on the exact three lines 1.5.x emitted, so a project that has
+    # rewritten them is refused rather than half-migrated.
     node -e '
       const fs = require("fs");
       const [path] = process.argv.slice(1);
-      const lines = fs.readFileSync(path, "utf8").split("\n");
-      const i = lines.findIndex((l) => l.includes("? { mounts: [{ hostPath: settingsPath,"));
-      if (i < 0) {
+      const src = fs.readFileSync(path, "utf8");
+      const anchor = [
+        "      ...(settingsPath",
+        "        ? { mounts: [{ hostPath: settingsPath, sandboxPath: \"/home/agent/.afk-profile-settings.json\", readonly: true }] }",
+        "        : {}),",
+      ].join("\n");
+      if (!src.includes(anchor)) {
         console.error("profile.ts: mount literal not found — refusing to guess");
         process.exit(1);
       }
-      lines[i] = "        ? {";
-      lines.splice(i + 1, 0,
-        "            mounts: [",
-        "              { hostPath: settingsPath, sandboxPath: \"/home/agent/.afk-profile-settings.json\", readonly: true },",
-        "              ...mcpConfigMounts(),",
-        "            ],",
-        "          }");
-      fs.writeFileSync(path, lines.join("\n"));
+      const replacement = [
+        "      // The mounts are unconditional. The MCP pair is independent of the",
+        "      // endpoint: the graph is mounted from the host and serena is in the image,",
+        "      // both regardless of how the agent authenticates. Gating them on",
+        "      // settingsPath (as this started out) made the setting a proxy for",
+        "      // \"is this a non-default profile\" — and the claude profile is the one",
+        "      // that resolves no settings file, so the default profile was exactly the",
+        "      // one that got no mounts, no config file, and therefore no servers. The",
+        "      // wrapper arm also passes no --mcp-config, so nothing else",
+        "      // supplied them: not a wrong path, just absent.",
+        "      mounts: [",
+        "        // Present only when the profile resolves an endpoint, because without",
+        "        // one there is no file to mount — the wrapper claude arm uses the",
+        "        // Anthropic default and reads no settings.",
+        "        ...(settingsPath",
+        "          ? [{ hostPath: settingsPath, sandboxPath: \"/home/agent/.afk-profile-settings.json\", readonly: true }]",
+        "          : []),",
+        "        ...mcpConfigMounts(),",
+        "      ],",
+      ].join("\n");
+      fs.writeFileSync(path, src.replace(anchor, replacement));
     ' "$PROF"
     note "profile.ts: MCP config wiring added"
   else
@@ -1377,6 +1415,16 @@ import { mcpConfigMounts, writeMcpConfig } from "./mcp-config.js";'
   # 3. The five implement prompts gain the map pointer. Anchored on the
   #    read-list sentence the previous template emitted, so a project that
   #    rewrote that sentence is left alone (its author had a reason).
+  #
+  #    Two anchors, not one, because the sentence differs per prompt: four of the
+  #    five open `Read \`GLOSSARY` (implement.md, implement-prompt.md,
+  #    implement/prompt.md, implement-pr/prompt.md), while the PRD prompt
+  #    (`.sandcastle/implement-prd/prompt.md`) opens `Read the relevant files
+  #    under \`docs/\`` — it is the one that lists docs before the glossary. A
+  #    single anchor matched four of the five and reported the loop as done: the
+  #    prompt that runs every *PRD* agent was left without the map pointer, and
+  #    the miss is silent by design (`rc=3` means "the author rewrote it"), so
+  #    nothing anywhere said so. Each prompt is anchored on what it carries.
   for rel in \
     .sandcastle/implement.md \
     .sandcastle/implement-prompt.md \
@@ -1392,13 +1440,20 @@ import { mcpConfigMounts, writeMcpConfig } from "./mcp-config.js";'
     cat > "$STAGE/add-map-pointer.mjs" <<'MAPJS'
 import { readFileSync, writeFileSync } from "node:fs";
 const [path] = process.argv.slice(2);
+// Each pair is (what the previous template wrote, what it becomes). The first
+// prefix that matches wins; a prompt carrying none of them is one this step has
+// not seen, and the caller reports it rather than claiming the migration ran.
+const ANCHORS = [
+  ["Read `GLOSSARY", "Read `.sandcastle/REPO-MAP.md` first (where things live), then `GLOSSARY"],
+  ["Read the relevant files under `docs/`", "Read `.sandcastle/REPO-MAP.md` first (where things live), then the relevant files under `docs/`"],
+];
 const before = readFileSync(path, "utf8");
-const after = before.replace(
-  "Read `GLOSSARY",
-  "Read `.sandcastle/REPO-MAP.md` first (where things live), then `GLOSSARY",
-);
-if (after === before) process.exit(3);
-writeFileSync(path, after);
+for (const [from, to] of ANCHORS) {
+  if (!before.includes(from)) continue;
+  writeFileSync(path, before.replace(from, to));
+  process.exit(0);
+}
+process.exit(3);
 MAPJS
     node "$STAGE/add-map-pointer.mjs" "$WORK/$rel" || rc=$?
     case ${rc:-0} in

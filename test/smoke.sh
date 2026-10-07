@@ -954,6 +954,45 @@ grep -qF 'the workflow creates the issue from this' \
   "$HANDFIX/.sandcastle/architecture-review/extraction.md" \
   || { echo "the migration overwrote a hand-repaired extract prompt" >&2; exit 1; }
 
+# A project that reworded ONE of the two examples and left the other. Gating the
+# whole file on a single anchor would call this repaired and skip it, leaving the
+# surviving "matches the issue you created" in place — Devin Review's example on
+# #57. Each anchor migrates on its own.
+PARTIAL="$TMP/partial-extract-$LANGUAGE"
+mkdir -p "$PARTIAL/.github/workflows" "$PARTIAL/.sandcastle/architecture-review"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$PARTIAL/"
+node -e '
+  const fs = require("fs"), f = process.argv[1] + "/.afk-bootstrap.json";
+  const m = JSON.parse(fs.readFileSync(f, "utf8"));
+  m.afk_template_version = "1.5.0"; m.cron_hour = 13;
+  fs.writeFileSync(f, JSON.stringify(m, null, 2) + "\n");
+' "$PARTIAL"
+cp "$S/scaffold/.sandcastle/profile.ts" "$PARTIAL/.sandcastle/profile.ts"
+cp "$S/scaffold/.github/workflows/architecture-review.yml" "$PARTIAL/.github/workflows/"
+node -e '
+  const fs = require("fs"), p = process.argv[1] + "/.github/workflows/architecture-review.yml";
+  fs.writeFileSync(p, fs.readFileSync(p, "utf8").split("__AFK_CRON_HOUR__").join("13"));
+' "$PARTIAL"
+# Prompt already repair-free, so only the extraction half of the step is under
+# test here.
+printf '# TASK\n\nReport it as structured output — you do not create the issue.\n' \
+  > "$PARTIAL/.sandcastle/architecture-review/prompt.md"
+sed 's/"body": "The PRD body you published.",/"body": "The PRD body for the workflow to publish.",/' \
+  "$S/test/fixtures/architecture-review-buggy/extraction.md" \
+  > "$PARTIAL/.sandcastle/architecture-review/extraction.md"
+grep -qF '"title": "PRD title (matches the issue you created)"' \
+  "$PARTIAL/.sandcastle/architecture-review/extraction.md" \
+  || { echo "the partial fixture lost the legacy title example" >&2; exit 1; }
+"$S/upgrade-afk.sh" "$PARTIAL" >/dev/null \
+  || { echo "upgrade refused the partial fixture" >&2; exit 1; }
+if grep -qF 'the issue you created' \
+   "$PARTIAL/.sandcastle/architecture-review/extraction.md"; then
+  echo "a reworded body example hid the legacy title instruction" >&2; exit 1
+fi
+grep -qF 'The PRD body for the workflow to publish.' \
+  "$PARTIAL/.sandcastle/architecture-review/extraction.md" \
+  || { echo "the migration overwrote the project's reworded body example" >&2; exit 1; }
+
 # A project whose cron this template did NOT write keeps its own schedule, but
 # the hour it already occupies must still be recorded. Without that the record
 # says the project holds no hour, and the next project on this host reads that

@@ -1127,16 +1127,36 @@ The `title` and `body` you emit are what the workflow will publish as the issue 
   # The extraction pass, converged independently of the prompt. The same shape of
   # gate: absent means nothing to fix; an extraction prompt that no longer says
   # the agent published the issue has already been repaired and is left as it is.
+  # Keyed per anchor, not per file. A file gate on one anchor silently skips a
+  # file that carries the other: a project can reword the body example and keep
+  # "matches the issue you created" on the title, and a file-level check would
+  # call that repaired while the extract pass still asks about an issue the
+  # produce pass was forbidden to create. Each anchor migrates alone, and the
+  # heading anchor migrates only when something else in the file has.
   if [ ! -e "$ARCH_EXTRACT" ]; then
     note "architecture-review/extraction.md absent; nothing to converge (a 1.1.x project gets the current one)"
-  elif ! grep -qF -e 'The PRD body you published.' "$ARCH_EXTRACT"; then
-    note "architecture-review/extraction.md: already describes the workflow as publisher; left as the project wrote it"
   else
-    say "== $FROM -> $TEMPLATE_VERSION: the extract pass stops asking for the issue the agent created =="
-    subst "$ARCH_EXTRACT" "$ARCH_EXTRACT_OLD" "$ARCH_EXTRACT_NEW"
-    subst "$ARCH_EXTRACT" "$ARCH_EXTRACT_TITLE_OLD" "$ARCH_EXTRACT_TITLE_NEW"
-    subst "$ARCH_EXTRACT" "$ARCH_EXTRACT_BODY_OLD" "$ARCH_EXTRACT_BODY_NEW"
-    note "architecture-review/extraction.md: title/body now read as what the workflow publishes"
+    if grep -qF -e "$ARCH_EXTRACT_TITLE_OLD" "$ARCH_EXTRACT"; then
+      EXTRACT_TOUCHED=1
+      subst "$ARCH_EXTRACT" "$ARCH_EXTRACT_TITLE_OLD" "$ARCH_EXTRACT_TITLE_NEW"
+    fi
+    if grep -qF -e "$ARCH_EXTRACT_BODY_OLD" "$ARCH_EXTRACT"; then
+      EXTRACT_TOUCHED=1
+      subst "$ARCH_EXTRACT" "$ARCH_EXTRACT_BODY_OLD" "$ARCH_EXTRACT_BODY_NEW"
+    fi
+    # The preamble sentence is the counterpart of the two examples and the only
+    # place the pass says who publishes. Present but uninteresting when nothing
+    # else moved, which is why it is not an anchor of its own: a hand-repaired
+    # file already has it, and a pristine one gets it exactly once.
+    if [ "${EXTRACT_TOUCHED:-0}" = "1" ]; then
+      say "== $FROM -> $TEMPLATE_VERSION: the extract pass stops asking for the issue the agent created =="
+      if grep -qF -e "$ARCH_EXTRACT_OLD" "$ARCH_EXTRACT"; then
+        subst "$ARCH_EXTRACT" "$ARCH_EXTRACT_OLD" "$ARCH_EXTRACT_NEW"
+      fi
+      note "architecture-review/extraction.md: title/body now read as what the workflow publishes"
+    else
+      note "architecture-review/extraction.md: already describes the workflow as publisher; left as the project wrote it"
+    fi
   fi
 fi
 

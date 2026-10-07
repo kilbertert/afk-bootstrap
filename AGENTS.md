@@ -103,7 +103,7 @@ docker images | grep sandcastle:<slug>   (unless --no-build)
 | `python` | `uv sync --extra dev && uv run pytest && uv run ruff check` | `python3` + `uv` (agent CLIs still come from the node 24 base) |
 
 Both Dockerfiles: node 24 base (carries claude-code + codex 0.146.1), `gh`,
-AFK_PROFILE dispatch wrapper (`claude` vs `claude-stepfun`), agent user
+AFK_PROFILE dispatch wrapper (`claude` vs `claude-deepseek`), agent user
 rename with `AGENT_UID`/`AGENT_GID` build args (= host uid/gid).
 
 ## Architecture — two execution paths (read this before comparing to the reference)
@@ -166,7 +166,7 @@ default branch directly.
   in the container). Keep the generated Dockerfile in sync with the project.
 - **Issue number**: the AFK target must be an *open issue*, not a PR (they
   share GitHub's number space).
-- **Model providers are server-global** (`claude`, `claude-stepfun`); a new
+- **Model providers are server-global** (`claude`, `claude-deepseek`); a new
   project adds zero new credentials. Pick one per repo via the `AFK_PROFILE`
   Actions variable. Both mount a host settings file read-only; neither bakes a
   key into the image, because a baked key is readable from the image layer and

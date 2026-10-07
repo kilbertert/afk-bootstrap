@@ -115,12 +115,12 @@ architecture-review 实测跑 **20–68 分钟**（不是几分钟），所以�
 ```
 
 生成项目内 AFK 载荷 → 开 PR #70 → `quality` CI 通过 → squash 合并 → 本地 main 同步。
-随后：`sandcastle:genesis-evidence` 镜像构建 ✅、`AFK_PROFILE=claude-stepfun` 变量设置 ✅、4 个 `agent:*` labels 创建 ✅。
+随后：`sandcastle:genesis-evidence` 镜像构建 ✅、`AFK_PROFILE=claude-deepseek` 变量设置 ✅、4 个 `agent:*` labels 创建 ✅。
 
 ```bash
 cd ~/Projects/genesis-evidence
 npm install                        # 首次：生成 node_modules
-AFK_PROFILE=claude-stepfun pnpm afk -- <一个 open 的 issue 号>
+AFK_PROFILE=claude-deepseek pnpm afk -- <一个 open 的 issue 号>
 ```
 
 ---
@@ -144,14 +144,14 @@ AFK 有**两条并行机制**，别混为一谈（早期会话曾误读并传播
 | profile | 端点 | 宿主文件 |
 |---|---|---|
 | `claude` | Anthropic API | 宿主 shell 已导出的凭据 |
-| `claude-stepfun` | StepFun 原生 Anthropic Messages API | `~/cliproxyapi/settings.stepfun.json` |
+| `claude-deepseek` | 本机 cli-proxy-api 中继的 Anthropic Messages API | `~/cliproxyapi/settings.deepseek.json` |
 
 ```bash
-gh variable set AFK_PROFILE --repo <owner/name> --body claude-stepfun
+gh variable set AFK_PROFILE --repo <owner/name> --body claude-deepseek
 ```
 
 默认模型由该 settings 文件里的 `ANTHROPIC_DEFAULT_*_MODEL` 决定。文件在别处时用
-`AFK_STEPFUN_SETTINGS` 指过去。
+`AFK_DEEPSEEK_SETTINGS` 指过去。
 
 **为什么是挂载而不是烤进镜像**：烤进去的密钥会留在镜像层里，任何能拉这个镜像的人
 都能读出来；轮换密钥还必须记得 `--no-cache`，因为 secret 挂载不会让层缓存失效。

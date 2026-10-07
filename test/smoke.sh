@@ -101,18 +101,18 @@ grep -q '"ralph"' "$TARGET/package.json" || { echo "ralph script missing" >&2; e
 if grep -q 'prd:to-issues' "$TARGET/package.json"; then echo "automatic splitter script remains" >&2; exit 1; fi
 grep -q 'esbuild: true' "$TARGET/pnpm-workspace.yaml" || { echo "pnpm esbuild approval missing" >&2; exit 1; }
 grep -q "sandcastle:fake-$LANGUAGE-project" "$TARGET/.sandcastle/profile.ts" || { echo "profile image name not rendered" >&2; exit 1; }
-grep -q 'claude-stepfun' "$TARGET/.sandcastle/profile.ts" || { echo "claude-stepfun profile missing" >&2; exit 1; }
-grep -q 'claude-stepfun' "$TARGET/.sandcastle/main.ts" || { echo "claude-stepfun CLI option missing" >&2; exit 1; }
-grep -q 'claude-stepfun)' "$TARGET/.sandcastle/Dockerfile" || { echo "claude-stepfun Docker dispatch missing" >&2; exit 1; }
+grep -q 'claude-deepseek' "$TARGET/.sandcastle/profile.ts" || { echo "claude-deepseek profile missing" >&2; exit 1; }
+grep -q 'claude-deepseek' "$TARGET/.sandcastle/main.ts" || { echo "claude-deepseek CLI option missing" >&2; exit 1; }
+grep -q 'claude-deepseek)' "$TARGET/.sandcastle/Dockerfile" || { echo "claude-deepseek Docker dispatch missing" >&2; exit 1; }
 # The generated workflow doc is project-owned once it lands (the fixture above
 # pre-creates one), so the provider documentation is asserted on the template.
-grep -q 'claude-stepfun' "$S/templates/afk-workflow.md" || { echo "claude-stepfun workflow documentation missing" >&2; exit 1; }
+grep -q 'claude-deepseek' "$S/templates/afk-workflow.md" || { echo "claude-deepseek workflow documentation missing" >&2; exit 1; }
 if grep -qE 'claude-ark|agentrouter|psydo|aliyun-deepseek' "$TARGET/.sandcastle/profile.ts" "$TARGET/.sandcastle/main.ts" "$TARGET/.sandcastle/Dockerfile" "$S/templates/afk-workflow.md"; then
   echo "a retired provider profile is still scaffolded" >&2
   exit 1
 fi
-grep -q 'vars.AFK_PROFILE || .claude-stepfun.' "$TARGET/.github/workflows/agent-implement.yml" \
-  || { echo "workflow does not fall back to claude-stepfun" >&2; exit 1; }
+grep -q 'vars.AFK_PROFILE || .claude-deepseek.' "$TARGET/.github/workflows/agent-implement.yml" \
+  || { echo "workflow does not fall back to claude-deepseek" >&2; exit 1; }
 # The scaffold's own instruction says "Run `npm run check` before committing", so a
 # project must actually HAVE it — a fresh scaffold previously shipped neither
 # `check` nor a test runner, and every agent was handed an instruction that failed
@@ -205,7 +205,7 @@ fi
 node -e '
   const fs = require("fs");
   const metadata = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.4.0" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
+  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.5.0" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
   // The assigned schedule hour must be recorded, or the next project on this
   // host has nothing to consult and collides by default — the defect that
   // made every project architecture review run on the same minute.
@@ -329,7 +329,7 @@ else
   PROFILE_HOME="$TMP/profile-home"
   mkdir -p "$PROFILE_HOME/cliproxyapi"
   printf '{"env":{"ANTHROPIC_BASE_URL":"https://example.invalid/step_plan","ANTHROPIC_AUTH_TOKEN":"fake-key"}}\n' \
-    > "$PROFILE_HOME/cliproxyapi/settings.stepfun.json"
+    > "$PROFILE_HOME/cliproxyapi/settings.deepseek.json"
   (
     cd "$TARGET"
     npm install --silent
@@ -343,16 +343,16 @@ else
         // A retired profile must be rejected, not silently resolved.
         try { claudeProfile("aliyun-deepseek"); process.exit(1); }
         catch (error) { if (!String(error).includes("Unsupported profile")) throw error; }
-        claudeProfile("claude-stepfun");
+        claudeProfile("claude-deepseek");
       });
     '
   ) || { echo "generated profile did not load" >&2; exit 1; }
-  [ -e "$PROFILE_HOME/cliproxyapi/settings.stepfun.json" ] \
-    || { echo "host stepfun settings fixture missing" >&2; exit 1; }
+  [ -e "$PROFILE_HOME/cliproxyapi/settings.deepseek.json" ] \
+    || { echo "host deepseek settings fixture missing" >&2; exit 1; }
   grep -q 'home/agent/.afk-profile-settings.json' "$TARGET/.sandcastle/Dockerfile" \
     || { echo "Dockerfile does not use the mounted settings path" >&2; exit 1; }
-  grep -q 'settings.stepfun.json' "$TARGET/.sandcastle/profile.ts" \
-    || { echo "profile.ts does not resolve the stepfun host settings file" >&2; exit 1; }
+  grep -q 'settings.deepseek.json' "$TARGET/.sandcastle/profile.ts" \
+    || { echo "profile.ts does not resolve the deepseek host settings file" >&2; exit 1; }
 fi
 
 # ---- upgrade-afk: anchored migration of an already-scaffolded project --------
@@ -382,19 +382,19 @@ rm -rf "$NO_HOUR"
 
 UPGRADE_OUT="$("$S/upgrade-afk.sh" "$UPGRADE_TARGET" --cron-hour 13)"
 printf '%s\n' "$UPGRADE_OUT"
-grep -q 'claude-stepfun)' "$UPGRADE_TARGET/.sandcastle/Dockerfile" \
-  || { echo "upgrade did not install the stepfun dispatch arm" >&2; exit 1; }
+grep -q 'claude-deepseek)' "$UPGRADE_TARGET/.sandcastle/Dockerfile" \
+  || { echo "upgrade did not install the deepseek dispatch arm" >&2; exit 1; }
 if grep -qE 'claude-ark\|agentrouter\|psydo' "$UPGRADE_TARGET/.sandcastle/Dockerfile"; then
   echo "upgrade left the retired dispatch arm in place" >&2; exit 1
 fi
-grep -q 'vars.AFK_PROFILE || .claude-stepfun.' "$UPGRADE_TARGET/.github/workflows/agent-implement.yml" \
+grep -q 'vars.AFK_PROFILE || .claude-deepseek.' "$UPGRADE_TARGET/.github/workflows/agent-implement.yml" \
   || { echo "upgrade did not update the workflow fallback" >&2; exit 1; }
-grep -q 'claude-stepfun' "$UPGRADE_TARGET/.sandcastle/main.ts" \
+grep -q 'claude-deepseek' "$UPGRADE_TARGET/.sandcastle/main.ts" \
   || { echo "upgrade did not update the CLI usage string" >&2; exit 1; }
 node -e '
   const fs = require("fs");
   const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-  if (m.afk_template_version !== "1.4.0") process.exit(1);
+  if (m.afk_template_version !== "1.5.0") process.exit(1);
   // Cumulative migration: a 1.1.x project must come out of ONE run with both
   // the 1.2.0 provider migration and the 1.3.2 schedule migration applied, and
   // the assigned hour recorded. A step gated on from_minor alone would leave a
@@ -428,7 +428,7 @@ cp "$UPGRADE_TARGET/.sandcastle/Dockerfile" "$NO_PROVENANCE/.sandcastle/"
 if "$S/upgrade-afk.sh" "$NO_PROVENANCE" >/dev/null 2>&1; then
   echo "upgrade accepted a project with no .afk-bootstrap.json" >&2; exit 1
 fi
-# The hand-port shape (a project that applied the stepfun profile by hand, with
+# The hand-port shape (a project that applied a provider profile by hand, with
 # the endpoint baked in) converges onto the same mounted result, and its baked
 # secret block is removed rather than left as a dead arm.
 HANDPORT="$TMP/handport-$LANGUAGE"
@@ -436,12 +436,12 @@ mkdir -p "$HANDPORT/.github/workflows"
 cp -R "$S/test/fixtures/handport-1.1.x/." "$HANDPORT/"
 "$S/upgrade-afk.sh" "$HANDPORT" --cron-hour 11 >/dev/null \
   || { echo "upgrade refused the hand-port shape" >&2; exit 1; }
-[ "$(grep -c 'claude-stepfun)' "$HANDPORT/.sandcastle/Dockerfile")" = 1 ] \
+[ "$(grep -c 'claude-deepseek)' "$HANDPORT/.sandcastle/Dockerfile")" = 1 ] \
   || { echo "hand-port did not converge to a single dispatch arm" >&2; exit 1; }
 if grep -qE 'STEPFUN_BASE_URL|api_key|afk-stepfun-settings\.json' "$HANDPORT/.sandcastle/Dockerfile"; then
   echo "hand-port kept the baked endpoint instead of mounting it" >&2; exit 1
 fi
-grep -q 'settings.stepfun.json' "$HANDPORT/.sandcastle/profile.ts" \
+grep -q 'settings.deepseek.json' "$HANDPORT/.sandcastle/profile.ts" \
   || { echo "hand-port did not resolve the mounted settings path" >&2; exit 1; }
 
 # An *added provider* is the case a presence test misses: it needs no change
@@ -515,7 +515,7 @@ for retired in psydo claude-ark agentrouter aliyun-deepseek; do
   if grep -qF -e "$retired" "$FB/.github/workflows/agent-implement.yml"; then
     echo "upgrade left the retired fallback $retired in place" >&2; exit 1
   fi
-  grep -qF -e "vars.AFK_PROFILE || 'claude-stepfun'" "$FB/.github/workflows/agent-implement.yml" \
+  grep -qF -e "vars.AFK_PROFILE || 'claude-deepseek'" "$FB/.github/workflows/agent-implement.yml" \
     || { echo "upgrade did not write the new fallback for $retired" >&2; exit 1; }
 done
 
@@ -533,7 +533,7 @@ cp "$S/test/fixtures/legacy-1.1.x/.github/workflows/agent-implement.yml" \
 if grep -qF -e "vars.AFK_PROFILE || 'psydo'" "$YAML_FB/.github/workflows/custom-agent.yaml"; then
   echo "upgrade left a retired fallback in a .yaml workflow" >&2; exit 1
 fi
-grep -qF -e "vars.AFK_PROFILE || 'claude-stepfun'" "$YAML_FB/.github/workflows/custom-agent.yaml" \
+grep -qF -e "vars.AFK_PROFILE || 'claude-deepseek'" "$YAML_FB/.github/workflows/custom-agent.yaml" \
   || { echo "upgrade did not rewrite the .yaml workflow fallback" >&2; exit 1; }
 
 # A checkout path containing a space must not split the reference list.
@@ -962,8 +962,8 @@ node -e '
 ' "$OLDEST/.afk-bootstrap.json"
 "$S/upgrade-afk.sh" "$OLDEST" --cron-hour 13 >/dev/null \
   || { echo "upgrade refused a 1.1.1 project" >&2; exit 1; }
-grep -q 'claude-stepfun)' "$OLDEST/.sandcastle/Dockerfile" \
-  || { echo "1.1.1 upgrade did not install the stepfun dispatch arm" >&2; exit 1; }
+grep -q 'claude-deepseek)' "$OLDEST/.sandcastle/Dockerfile" \
+  || { echo "1.1.1 upgrade did not install the deepseek dispatch arm" >&2; exit 1; }
 # Dry run writes nothing.
 node -e '
   const fs = require("fs");

@@ -57,7 +57,7 @@ approved.
 
 - Build the image: `docker build --build-arg AGENT_UID=$(id -u) --build-arg AGENT_GID=$(id -g) -t sandcastle:<slug> .sandcastle`
 - Config (all via API/gh — do it yourself):
-  - `AFK_PROFILE` repo variable (`claude-stepfun`; `claude` talks to the Anthropic API directly)
+  - `AFK_PROFILE` repo variable (`claude-deepseek`; `claude` talks to the Anthropic API directly)
   - `agent:*` labels: `implement review update-branch in-progress blocked queued`
   - `AGENT_PAT` repo secret (host-side PR creation and label chaining)
   - `AFK_AGENT_READ_TOKEN` repo secret (read-only/minimum-scope token for Docker agents)
@@ -97,7 +97,7 @@ in `agent:blocked`.
 | 8 | A label is present but the downstream workflow never starts | The label was added with `GITHUB_TOKEN`; configure `AGENT_PAT`. The workflow must fail closed and add `agent:blocked`, never fall back |
 | 9 | Actions can't create PRs ("not permitted to create") | `can_approve_pull_request_reviews: true` + `default_workflow_permissions: write` |
 | 10 | Artifact quota "usage recalculated 6-12h" blocks windows-verify | Clear scoped caches/artifacts, re-run once, and leave delivery blocked until the deterministic check passes |
-| 11 | Selected model provider is unavailable or out of quota | Update `~/cliproxyapi/settings.stepfun.json` to a working endpoint and rerun the bounded issue command (the endpoint is mounted, so no image rebuild is needed for a key rotation; a base-URL change is also just the file) |
+| 11 | Selected model provider is unavailable or out of quota | Update `~/cliproxyapi/settings.deepseek.json` to a working endpoint and rerun the bounded issue command (the endpoint is mounted, so no image rebuild is needed for a key rotation; a base-URL change is also just the file) |
 
 ## Model providers
 
@@ -105,8 +105,8 @@ Two profiles, both mounting a host settings file read-only rather than baking
 the endpoint into the image:
 
 - `claude` → the Anthropic API, using whatever credential the host shell exports.
-- `claude-stepfun` → StepFun's native Anthropic Messages API, via
-  `~/cliproxyapi/settings.stepfun.json` (`AFK_STEPFUN_SETTINGS` overrides the path).
+- `claude-deepseek` → the host-local `cli-proxy-api` relay's Anthropic Messages API, via
+  `~/cliproxyapi/settings.deepseek.json` (`AFK_DEEPSEEK_SETTINGS` overrides the path).
 
 `claude-ark`, `agentrouter`, `psydo`, and `aliyun-deepseek` are retired: the
 first three resolved to settings files whose upstream quota is exhausted, and

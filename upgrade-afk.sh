@@ -884,10 +884,17 @@ if [ "$from_minor" -lt 5 ] && [ "$to_minor" -ge 5 ]; then
   # path a fixture already covers.
   OLD_ARM_120="'  claude-stepfun) args=();"
   OLD_ARM_110="'  claude-ark|agentrouter|psydo) args=();"
+  # A project that hand-added the relay profile before this version exists keeps
+  # both names in ONE arm. Narrow it to the single live profile: leaving the
+  # retired name in a dispatch arm advertises a profile whose settings file no
+  # longer exists.
+  OLD_ARM_COMBINED="'  claude-stepfun|claude-deepseek) args=();"
   if grep -qF -e "$OLD_ARM_120" "$DOCKER"; then
     subst "$DOCKER" "$OLD_ARM_120" "$NEW_ARM"
   elif grep -qF -e "$OLD_ARM_110" "$DOCKER"; then
     subst "$DOCKER" "$OLD_ARM_110" "$NEW_ARM"
+  elif grep -qF -e "$OLD_ARM_COMBINED" "$DOCKER"; then
+    subst "$DOCKER" "$OLD_ARM_COMBINED" "$NEW_ARM"
   elif grep -qF -e "$NEW_ARM" "$DOCKER"; then
     note "Dockerfile: dispatch arm already names claude-deepseek"
   else
@@ -900,9 +907,22 @@ if [ "$from_minor" -lt 5 ] && [ "$to_minor" -ge 5 ]; then
   # template wrote, so a project that already customised this file is reported
   # rather than silently rewritten.
   PROF="$WORK/.sandcastle/profile.ts"
-  if grep -qF -e '"claude-deepseek"' "$PROF"; then
-    note "profile.ts: already names claude-deepseek"
+  if grep -qF -e '"claude-deepseek"' "$PROF" && ! grep -qF -e '"claude-stepfun"' "$PROF"; then
+    note "profile.ts: already names only claude-deepseek"
   elif grep -qF -e '"claude-stepfun"' "$PROF"; then
+    if grep -qF -e '"claude-deepseek": process.env.AFK_DEEPSEEK_SETTINGS' "$PROF"; then
+      # Hand-migrated: the relay entry is already there, so only the retired
+      # entry is removed. Rewriting it would duplicate the profile key.
+      node -e '
+        const fs = require("fs");
+        const [path] = process.argv.slice(1);
+        const lines = fs.readFileSync(path, "utf8").split("\n");
+        const i = lines.findIndex((l) => l.includes("\"claude-stepfun\": process.env.AFK_STEPFUN_SETTINGS"));
+        if (i >= 0) lines.splice(i, 1);
+        fs.writeFileSync(path, lines.join("\n"));
+      ' "$PROF"
+      note "profile.ts: removed the retired claude-stepfun entry"
+    else
     subst "$PROF" \
       '  "claude-stepfun": process.env.AFK_STEPFUN_SETTINGS ?? join(homedir(), "cliproxyapi/settings.stepfun.json"),' \
       '  // Local relay (cli-proxy-api on 127.0.0.1:8317), reached with a host-network
@@ -910,6 +930,7 @@ if [ "$from_minor" -lt 5 ] && [ "$to_minor" -ge 5 ]; then
   // address, so the container MUST share the host network namespace —
   // a default-bridge container cannot reach the host 127.0.0.1 (measured).
   "claude-deepseek": process.env.AFK_DEEPSEEK_SETTINGS ?? join(homedir(), "cliproxyapi/settings.deepseek.json"),'
+    fi
     # The network spread must land inside the docker() call, before the mounts —
     # the same position the template writes it. Without it the relay profile
     # would mount a loopback URL the sandbox cannot reach.

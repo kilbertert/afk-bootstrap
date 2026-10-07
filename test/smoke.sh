@@ -993,6 +993,35 @@ grep -qF 'The PRD body for the workflow to publish.' \
   "$PARTIAL/.sandcastle/architecture-review/extraction.md" \
   || { echo "the migration overwrote the project's reworded body example" >&2; exit 1; }
 
+# An example reworded into words the exact anchors do not match, still naming an
+# issue the agent created. Neither anchor fires, both halves read as "already
+# migrated", and the file would be stamped with the new version — unreachable by
+# any later run. The step must refuse instead of recording a repair it did not do.
+RESIDUAL="$TMP/residual-extract-$LANGUAGE"
+mkdir -p "$RESIDUAL/.github/workflows" "$RESIDUAL/.sandcastle/architecture-review"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$RESIDUAL/"
+node -e '
+  const fs = require("fs"), f = process.argv[1] + "/.afk-bootstrap.json";
+  const m = JSON.parse(fs.readFileSync(f, "utf8"));
+  m.afk_template_version = "1.5.0"; m.cron_hour = 13;
+  fs.writeFileSync(f, JSON.stringify(m, null, 2) + "\n");
+' "$RESIDUAL"
+cp "$S/scaffold/.sandcastle/profile.ts" "$RESIDUAL/.sandcastle/profile.ts"
+cp "$S/scaffold/.github/workflows/architecture-review.yml" "$RESIDUAL/.github/workflows/"
+node -e '
+  const fs = require("fs"), p = process.argv[1] + "/.github/workflows/architecture-review.yml";
+  fs.writeFileSync(p, fs.readFileSync(p, "utf8").split("__AFK_CRON_HOUR__").join("13"));
+' "$RESIDUAL"
+printf '# TASK\n\nReport it as structured output — you do not create the issue.\n' \
+  > "$RESIDUAL/.sandcastle/architecture-review/prompt.md"
+sed -e 's/"title": "PRD title (matches the issue you created)"/"title": "Title of the issue you created"/' \
+    -e 's/"body": "The PRD body you published.",/"body": "The PRD body for the workflow to publish.",/' \
+  "$S/test/fixtures/architecture-review-buggy/extraction.md" \
+  > "$RESIDUAL/.sandcastle/architecture-review/extraction.md"
+if "$S/upgrade-afk.sh" "$RESIDUAL" >/dev/null 2>&1; then
+  echo "the migration stamped a project whose extract pass still names the agent's issue" >&2; exit 1
+fi
+
 # A project whose cron this template did NOT write keeps its own schedule, but
 # the hour it already occupies must still be recorded. Without that the record
 # says the project holds no hour, and the next project on this host reads that

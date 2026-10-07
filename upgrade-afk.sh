@@ -1157,6 +1157,18 @@ The `title` and `body` you emit are what the workflow will publish as the issue 
     else
       note "architecture-review/extraction.md: already describes the workflow as publisher; left as the project wrote it"
     fi
+    # The prompt half refuses a half-migrated file by looking for `/to-prd-project`
+    # wherever the anchors did not reach; this is the same invariant for the
+    # extraction half. Per-anchor gates cannot cover a project that reworded an
+    # example into different words that still name an agent-created issue — the
+    # exact anchors miss it, both halves of the migration "succeed", and the file
+    # is stamped 1.5.2 so nothing ever revisits it. Refusing is the only safe
+    # answer: this file is short and the phrases are unambiguous, so a residual
+    # match here is a shape this step has never seen, not a false positive.
+    if grep -qF -e 'the issue you created' -e 'body you published' "$ARCH_EXTRACT"; then
+      echo "architecture-review/extraction.md: still asks the agent to report an issue it created — refusing to record this project as migrated" >&2
+      exit 1
+    fi
   fi
 fi
 

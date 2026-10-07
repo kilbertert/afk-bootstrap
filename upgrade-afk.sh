@@ -315,10 +315,17 @@ if [ "$from_minor" -lt 2 ] && [ "$to_minor" -ge 2 ]; then
   DOCKER="$WORK/.sandcastle/Dockerfile"
   OLD_ARM="'  claude-ark|agentrouter|psydo) args=();"
   NEW_ARM="'  claude-stepfun) args=();"
+  # `claude-deepseek` is the arm a LATER step installs. It reaches here when a
+  # project's recorded version is rewound below this step's gate while its tree
+  # is already current — the whole step is a no-op on such a tree, and refusing
+  # it would block a later step from running. Recognise it and leave it.
+  DEEPSEEK_ARM="'  claude-deepseek) args=();"
   if grep -qF -e "$OLD_ARM" "$DOCKER"; then
     subst "$DOCKER" "$OLD_ARM" "$NEW_ARM"
   elif grep -qF -e "$NEW_ARM" "$DOCKER"; then
     note "Dockerfile: dispatch arm already names claude-stepfun"
+  elif grep -qF -e "$DEEPSEEK_ARM" "$DOCKER"; then
+    note "Dockerfile: dispatch arm already names claude-deepseek (a later step's output)"
   else
     echo "Dockerfile: no dispatch arm anchor found — refusing to guess" >&2
     exit 1
@@ -396,7 +403,7 @@ if [ "$from_minor" -lt 2 ] && [ "$to_minor" -ge 2 ]; then
     say ""
     say "profile.ts is not a generated shape — it has project edits this script"
     say "will not overwrite. Migrate .sandcastle/profile.ts by hand: it must keep"
-    say "only the claude and claude-stepfun profiles, with the endpoint supplied"
+    say "only the claude and claude-deepseek profiles, with the endpoint supplied"
     say "by the mounted settings file (see .sandcastle/Dockerfile)."
     exit 1
   fi
@@ -407,10 +414,15 @@ if [ "$from_minor" -lt 2 ] && [ "$to_minor" -ge 2 ]; then
   MAIN="$WORK/.sandcastle/main.ts"
   OLD_USAGE="--profile claude|claude-ark|agentrouter|psydo|aliyun-deepseek"
   NEW_USAGE="--profile claude|claude-stepfun"
+  # As with the dispatch arm: a rewound project whose tree already carries the
+  # later step's usage string is a no-op here, not an error.
+  DEEPSEEK_USAGE="--profile claude|claude-deepseek"
   if grep -qF -e "$OLD_USAGE" "$MAIN"; then
     subst "$MAIN" "$OLD_USAGE" "$NEW_USAGE"
   elif grep -qF -e "$NEW_USAGE" "$MAIN"; then
     note "main.ts: usage string already current"
+  elif grep -qF -e "$DEEPSEEK_USAGE" "$MAIN"; then
+    note "main.ts: usage string already names claude-deepseek (a later step's output)"
   else
     echo "main.ts: no usage string anchor found — refusing to guess" >&2
     exit 1
@@ -437,6 +449,11 @@ if [ "$from_minor" -lt 2 ] && [ "$to_minor" -ge 2 ]; then
       case $fallback in
         ''|"vars.AFK_PROFILE || 'claude-stepfun'"|"vars.AFK_PROFILE || 'claude'")
           # Already what this version ships. Leave it.
+          continue ;;
+        "vars.AFK_PROFILE || 'claude-deepseek'")
+          # What a LATER step ships. It reaches here on a project whose recorded
+          # version was rewound below this step's gate while its tree is already
+          # current — a no-op, not an unrecognised value.
           continue ;;
         "vars.AFK_PROFILE || 'psydo'"|"vars.AFK_PROFILE || 'claude-ark'"|\
         "vars.AFK_PROFILE || 'agentrouter'"|"vars.AFK_PROFILE || 'aliyun-deepseek'")
@@ -838,6 +855,117 @@ $(grep -rl --exclude-dir=.git --exclude-dir=node_modules \
 EOF
 fi
 
+# ---- step: 1.4.x -> 1.5.0 — provider moves to the local relay ----------------
+# Every remote provider the 1.2.0 step installed is now dead: stepfun and
+# tokenrouter both report an exhausted quota, airouter answers "unauthorized
+# client detected". `claude-stepfun` therefore selects a profile that can no
+# longer serve a request, and a run that picks it dies before the agent starts.
+# The only endpoint still answering is the host-local relay (`cli-proxy-api` on
+# 127.0.0.1:8317), which genesis-evidence already proved out as
+# `claude-deepseek`.
+#
+# Distinct from the 1.2.0 step on purpose: that one changes WHICH provider, this
+# one changes HOW the sandbox reaches it. The relay is bound to the host's
+# loopback, so the sandbox must share the host network namespace — a
+# default-bridge container cannot reach the host's 127.0.0.1. That is a real
+# cost: the sandbox loses Docker's bridge isolation. It is confined to the
+# profiles whose endpoint is host-loopback, and `profile-network.check.ts`
+# asserts that confinement rather than trusting it.
+if [ "$from_minor" -lt 5 ] && [ "$to_minor" -ge 5 ]; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: provider -> host-loopback relay =="
+
+  DOCKER="$WORK/.sandcastle/Dockerfile"
+  NEW_ARM="'  claude-deepseek) args=();"
+  # Two older arms reach this version: the 1.2.0 one, and the 1.1.x one. A
+  # project can be recorded at 1.2.0 (so the provider step does not re-run) while
+  # its Dockerfile still carries the 1.1.x arm — the metadata moved without the
+  # Dockerfile. Accepting only the newer arm refused that shape, which is a real
+  # path a fixture already covers.
+  OLD_ARM_120="'  claude-stepfun) args=();"
+  OLD_ARM_110="'  claude-ark|agentrouter|psydo) args=();"
+  if grep -qF -e "$OLD_ARM_120" "$DOCKER"; then
+    subst "$DOCKER" "$OLD_ARM_120" "$NEW_ARM"
+  elif grep -qF -e "$OLD_ARM_110" "$DOCKER"; then
+    subst "$DOCKER" "$OLD_ARM_110" "$NEW_ARM"
+  elif grep -qF -e "$NEW_ARM" "$DOCKER"; then
+    note "Dockerfile: dispatch arm already names claude-deepseek"
+  else
+    echo "Dockerfile: no dispatch arm anchor found — refusing to guess" >&2
+    exit 1
+  fi
+
+  # profile.ts: swap the retired profile entry for the relay one, and add the
+  # network spread the relay needs. Anchored on the exact lines the previous
+  # template wrote, so a project that already customised this file is reported
+  # rather than silently rewritten.
+  PROF="$WORK/.sandcastle/profile.ts"
+  if grep -qF -e '"claude-deepseek"' "$PROF"; then
+    note "profile.ts: already names claude-deepseek"
+  elif grep -qF -e '"claude-stepfun"' "$PROF"; then
+    subst "$PROF" \
+      '  "claude-stepfun": process.env.AFK_STEPFUN_SETTINGS ?? join(homedir(), "cliproxyapi/settings.stepfun.json"),' \
+      '  // Local relay (cli-proxy-api on 127.0.0.1:8317), reached with a host-network
+  // sandbox. The settings file points ANTHROPIC_BASE_URL at the relay loopback
+  // address, so the container MUST share the host network namespace —
+  // a default-bridge container cannot reach the host 127.0.0.1 (measured).
+  "claude-deepseek": process.env.AFK_DEEPSEEK_SETTINGS ?? join(homedir(), "cliproxyapi/settings.deepseek.json"),'
+    # The network spread must land inside the docker() call, before the mounts —
+    # the same position the template writes it. Without it the relay profile
+    # would mount a loopback URL the sandbox cannot reach.
+    if grep -qF 'sandboxNetworkOptions(profile)' "$PROF"; then
+      note "profile.ts: network spread already present"
+    else
+      subst "$PROF" \
+        '      ...(settingsPath' \
+        '      ...sandboxNetworkOptions(profile),
+      ...(settingsPath'
+      subst "$PROF" \
+        'import { docker } from "@ai-hero/sandcastle/sandboxes/docker";' \
+        'import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
+import { sandboxNetworkOptions } from "./profile-network.js";'
+    fi
+  else
+    say ""
+    say "profile.ts names neither claude-stepfun nor claude-deepseek — it has"
+    say "project edits this script will not overwrite. Migrate it by hand: it must"
+    say "keep only the claude and claude-deepseek profiles, and spread"
+    say "sandboxNetworkOptions(profile) into its docker() call."
+    exit 1
+  fi
+
+  # The two network modules are new files, not edits. They are what confines
+  # host networking to the loopback profile and what asserts that confinement.
+  cp "$S/scaffold/.sandcastle/profile-network.ts" "$WORK/.sandcastle/profile-network.ts"
+  cp "$S/scaffold/.sandcastle/profile-network.check.ts" "$WORK/.sandcastle/profile-network.check.ts"
+
+  MAIN="$WORK/.sandcastle/main.ts"
+  NEW_USAGE="--profile claude|claude-deepseek"
+  # Same two-shape problem as the Dockerfile arm: a 1.2.0 project may still carry
+  # the 1.1.x usage string.
+  OLD_USAGE_120="--profile claude|claude-stepfun"
+  OLD_USAGE_110="--profile claude|claude-ark|agentrouter|psydo|aliyun-deepseek"
+  if grep -qF -e "$OLD_USAGE_120" "$MAIN"; then
+    subst "$MAIN" "$OLD_USAGE_120" "$NEW_USAGE"
+  elif grep -qF -e "$OLD_USAGE_110" "$MAIN"; then
+    subst "$MAIN" "$OLD_USAGE_110" "$NEW_USAGE"
+  elif grep -qF -e "$NEW_USAGE" "$MAIN"; then
+    note "main.ts: usage string already current"
+  else
+    echo "main.ts: no usage string anchor found — refusing to guess" >&2
+    exit 1
+  fi
+
+  # Workflows: the fallback default, in every workflow that carries one.
+  # GitHub reads both extensions, so a project that named its workflow .yaml
+  # must be migrated too — otherwise it keeps a fallback the new profile map
+  # rejects and its next run stops before the agent starts.
+  for wf in "$WORK"/.github/workflows/*.yml "$WORK"/.github/workflows/*.yaml; do
+    [ -e "$wf" ] || continue
+    subst_all "$wf" "vars.AFK_PROFILE || 'claude-stepfun'" "vars.AFK_PROFILE || 'claude-deepseek'"
+  done
+fi
+
 if [ "$STEP_RAN" = "0" ]; then
   echo "no upgrade step defined from $FROM to $TEMPLATE_VERSION" >&2
   exit 1
@@ -858,7 +986,7 @@ node -e '
 # What changed is derived by comparing staged against original, so it cannot
 # drift from what the steps actually did.
 CHANGED=0
-for rel in .sandcastle/Dockerfile .sandcastle/profile.ts .sandcastle/main.ts .afk-bootstrap.json; do
+for rel in .sandcastle/Dockerfile .sandcastle/profile.ts .sandcastle/main.ts .sandcastle/profile-network.ts .sandcastle/profile-network.check.ts .afk-bootstrap.json; do
   cmp -s "$TARGET/$rel" "$WORK/$rel" && continue
   CHANGED=1
   note "changed: $rel"
@@ -992,7 +1120,7 @@ publish_delete() {
 
 # Metadata goes last: until every content file is in place it should keep
 # describing the version the tree actually is.
-for rel in .sandcastle/Dockerfile .sandcastle/profile.ts .sandcastle/main.ts; do
+for rel in .sandcastle/Dockerfile .sandcastle/profile.ts .sandcastle/main.ts .sandcastle/profile-network.ts .sandcastle/profile-network.check.ts; do
   publish_file "$rel" || { say "could not publish $rel" >&2; exit 1; }
 done
 if ! diff -rq "$TARGET/.github/workflows" "$WORK/.github/workflows" >/dev/null 2>&1; then
@@ -1036,9 +1164,9 @@ Still to do (host runner owns delivery — this script commits nothing):
 1. Rebuild the sandbox image from the upgraded Dockerfile:
      docker build --build-arg AGENT_UID="\$(id -u)" --build-arg AGENT_GID="\$(id -g)" -t <image> .sandcastle
 2. Then switch the repository variable, in that order:
-     gh variable set AFK_PROFILE --repo <owner/name> --body claude-stepfun
+     gh variable set AFK_PROFILE --repo <owner/name> --body claude-deepseek
    Changing it before the rebuild makes the image's claude wrapper exit 2,
-   because the old image has no claude-stepfun dispatch arm.
+   because the old image has no claude-deepseek dispatch arm.
 3. Update the project prose listed above — this script reports it but never
    rewrites a project-owned document.
 EOF

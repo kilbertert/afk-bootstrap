@@ -134,17 +134,6 @@ if [ ! -e "$TARGET/docs/afk-workflow.md" ]; then
   cp "$S/templates/afk-workflow.md" "$TARGET/docs/afk-workflow.md"
 fi
 
-# The repository map is the one generated artifact that describes THIS repo
-# rather than the template, so it is generated here, once, from the shape the
-# project actually has. From then on it is a project artifact: contributors and
-# agents regenerate it (`node .sandcastle/repo-map.mjs`) when the shape changes,
-# and the policy job fails on a stale one. Regenerating it on every upgrade would
-# fight the project's own edits to it.
-if [ ! -e "$TARGET/.sandcastle/REPO-MAP.md" ]; then
-  ( cd "$TARGET" && node .sandcastle/repo-map.mjs ) \
-    || echo "note: could not generate .sandcastle/REPO-MAP.md — run it by hand" >&2
-fi
-
 # ---- append the managed instruction block without masking project rules ----
 AFK_MANAGED_BLOCK="$S/templates/AFK-MANAGED-BLOCK.md"
 append_managed_block() {
@@ -274,6 +263,18 @@ if [ -f "$TARGET/pnpm-workspace.yaml" ]; then
   fi
 else
   cp "$S/templates/pnpm-workspace.yaml" "$TARGET/pnpm-workspace.yaml"
+fi
+
+# The repository map is the one generated artifact that describes THIS repo
+# rather than the template, so it is generated here — after every scaffold write,
+# because the map reports what `package.json` says (its scripts, its entry
+# points). Generating it earlier produced a map that disagreed with the finished
+# tree, and the policy job's freshness check then failed on a fresh scaffold.
+# From here on it is a project artifact: contributors and agents regenerate it
+# (`node .sandcastle/repo-map.mjs`) when the shape changes.
+if [ ! -e "$TARGET/.sandcastle/REPO-MAP.md" ]; then
+  ( cd "$TARGET" && node .sandcastle/repo-map.mjs ) \
+    || echo "note: could not generate .sandcastle/REPO-MAP.md — run it by hand" >&2
 fi
 
 # ---- build the sandbox image ----------------------------------------------

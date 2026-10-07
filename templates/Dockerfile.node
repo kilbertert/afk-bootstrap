@@ -9,6 +9,14 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends git curl jq ca-certificates \
   && rm -rf /var/lib/apt/lists/*
 
+# uv (official standalone installer; UV_INSTALL_DIR puts it on PATH for all users)
+# The Node image needs it for the same reason the Python one does: serena is
+# installed with `uv tool install` below. Without it the build stops at that
+# layer — and a Node project's sandbox is expected to carry the same tooling as a
+# Python project's.
+RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh \
+  && rm -rf /root/.cache
+
 # If your test suite launches a real browser (e.g. Playwright), bake the
 # browser + OS deps in so the agent can self-verify inside the container
 # instead of reporting a false BLOCKED. Keep the version in sync with your

@@ -81,6 +81,9 @@ for f in \
   .sandcastle/policy-check.mjs .sandcastle/consensus-contract.json .sandcastle/trusted-pr-delivery.sh \
   .sandcastle/implement.md .sandcastle/Dockerfile .sandcastle/.env.example .sandcastle/.gitignore \
   .sandcastle/CODING_STANDARDS.md GLOSSARY.md CLAUDE.md docs/afk-workflow.md \
+  .sandcastle/mcp-config.ts .sandcastle/mcp-config.check.ts \
+  .sandcastle/repo-map.mjs .sandcastle/repo-map.check.mjs .sandcastle/REPO-MAP.md \
+  .sandcastle/profile-network.ts .sandcastle/profile-network.check.ts \
   docs/agents/issue-tracker.md docs/agents/triage-labels.md docs/agents/domain.md \
   .sandcastle/implement-prd/prompt.md .sandcastle/write-prd-pr \
   .sandcastle/implement .sandcastle/write-pr .sandcastle/review .sandcastle/implement-pr \
@@ -413,6 +416,35 @@ grep -qE 'cron: "0 ([0-9]|1[0-9]|2[0-3]) \* \* 1-5"' \
   || { echo "upgrade did not render a valid cron hour" >&2; exit 1; }
 grep -qE '^\s*timeout-minutes: 75\s*$' "$UPGRADE_TARGET/.github/workflows/architecture-review.yml" \
   || { echo "upgrade did not raise the architecture-review job budget" >&2; exit 1; }
+# The 1.6.0 files are staged into a copy, and a staged file is not a delivered
+# one: `profile.ts` gains `import ... from "./mcp-config.js"` in the same step, so
+# a run that stamps 1.6.0 without publishing them leaves a project whose `pnpm afk`
+# dies on a module that cannot be resolved. Asserted on the migrated project, not
+# on the template, because the template was never the problem.
+for f in \
+  .sandcastle/mcp-config.ts .sandcastle/mcp-config.check.ts \
+  .sandcastle/repo-map.mjs .sandcastle/repo-map.check.mjs \
+  .sandcastle/REPO-MAP.md; do
+  [ -e "$UPGRADE_TARGET/$f" ] || { echo "upgrade did not publish $f" >&2; exit 1; }
+done
+grep -q 'mcp-config.js' "$UPGRADE_TARGET/.sandcastle/profile.ts" \
+  || { echo "migrated profile.ts lost its MCP import" >&2; exit 1; }
+grep -qF -- '--mcp-config /home/agent/.afk-mcp.json' "$UPGRADE_TARGET/.sandcastle/Dockerfile" \
+  || { echo "upgrade did not wire the sandbox MCP config into the wrapper" >&2; exit 1; }
+grep -q 'serena-agent' "$UPGRADE_TARGET/.sandcastle/Dockerfile" \
+  || { echo "upgrade did not add the serena layer" >&2; exit 1; }
+# npm 11 skips an unnamed postinstall, and claude-code fetches its native binary
+# from one. A migrated project that rebuilds without this gets a green build
+# around a claude that cannot start.
+grep -qF 'npm install --global --allow-scripts=@anthropic-ai/claude-code' \
+  "$UPGRADE_TARGET/.sandcastle/Dockerfile" \
+  || { echo "upgrade left the npm postinstall unapproved" >&2; exit 1; }
+# The freshness check the 1.6.0 CI step runs must pass against what the migration
+# wrote. Generating the map from the staging copy instead of the project produces
+# one that describes a tree that does not exist, and the project's first push goes
+# red — so the check is run here, where it is the migration's output under test.
+( cd "$UPGRADE_TARGET" && node .sandcastle/repo-map.check.mjs >/dev/null ) \
+  || { echo "upgrade wrote a repository map that is already stale" >&2; exit 1; }
 # A project document is its own source of truth: the migration reports it, never rewrites it.
 grep -q 'afk-workflow.md' <<<"$UPGRADE_OUT" \
   || { echo "upgrade silently ignored project prose naming a retired profile" >&2; exit 1; }

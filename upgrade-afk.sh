@@ -1193,10 +1193,138 @@ if [ "$from_minor" -lt 6 ] && [ "$to_minor" -ge 6 ]; then
   say "== $FROM -> $TEMPLATE_VERSION: sandbox code intelligence + repository map =="
 
   # 1. The generator and its check are new files, not edits.
+  #
+  # Tracked so the report below lists them and the publish loop writes them.
+  # Staging a file is not delivering it: the report and the publish loop are both
+  # driven by a list, so a file that is copied into $WORK and named on neither is
+  # migrated in the stage and discarded at the end of the run. That is not a
+  # missing nicety — `profile.ts` gains `import ... from "./mcp-config.js"` a few
+  # lines below, so the project comes out stamped 1.6.0 holding a module that
+  # cannot be resolved, and `pnpm afk` dies on the import.
+  NEW_FILES=""
   cp "$S/scaffold/.sandcastle/repo-map.mjs" "$WORK/.sandcastle/repo-map.mjs"
   cp "$S/scaffold/.sandcastle/repo-map.check.mjs" "$WORK/.sandcastle/repo-map.check.mjs"
   cp "$S/scaffold/.sandcastle/mcp-config.ts" "$WORK/.sandcastle/mcp-config.ts"
   cp "$S/scaffold/.sandcastle/mcp-config.check.ts" "$WORK/.sandcastle/mcp-config.check.ts"
+  NEW_FILES="$NEW_FILES .sandcastle/repo-map.mjs .sandcastle/repo-map.check.mjs"
+  NEW_FILES="$NEW_FILES .sandcastle/mcp-config.ts .sandcastle/mcp-config.check.ts"
+
+  # 1b. The Dockerfile is a RENDERED artifact that becomes project-owned after
+  #     bootstrap, so it is edited by anchor — never re-rendered, which would
+  #     discard the project's own edits (an enabled Playwright block, a pinned
+  #     base image). The insertion is done by a node script written to the stage:
+  #     the text being inserted contains `${AGENT_UID}`, which a shell heredoc or
+  #     an unquoted replacement would expand into this host's uid.
+  DOCKER="$WORK/.sandcastle/Dockerfile"
+  if grep -qF "serena-agent" "$DOCKER"; then
+    note "Dockerfile: serena layer already present"
+  elif grep -qF "RUN npm install --global @anthropic-ai/claude-code" "$DOCKER"; then
+    cat > "$STAGE/add-serena-layer.mjs" <<'SERENAJS'
+import { readFileSync, writeFileSync } from "node:fs";
+
+const [path] = process.argv.slice(2);
+let src = readFileSync(path, "utf8");
+const anchor = "RUN npm install --global @anthropic-ai/claude-code";
+
+// The uv layer is inserted only when absent: the Node template did not ship one
+// before this version, and the serena install needs it.
+if (!src.includes("astral.sh/uv/install.sh")) {
+  src = src.replace(
+    anchor,
+    [
+      "# uv — serena is installed with uv tool install below.",
+      "RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh \\",
+      "  && rm -rf /root/.cache",
+      "",
+      anchor,
+    ].join("\n"),
+  );
+}
+
+src = src.replace(
+  anchor,
+  [
+    "# Serena MCP server — symbol-level code navigation, baked in so every run",
+    "# does not pay 30-60 s to install it. Paths come from env vars: this RUN sits",
+    "# above the USER line, and a bare uv tool install would land in the root home.",
+    "RUN UV_TOOL_BIN_DIR=/usr/local/bin UV_TOOL_DIR=/home/agent/.local/share/uv/tools \\",
+    "      uv tool install serena-agent==1.7.0 \\",
+    "  && chown -R ${AGENT_UID}:${AGENT_GID} /home/agent/.local \\",
+    "  && serena --version",
+    "",
+    anchor,
+  ].join("\n"),
+);
+
+// npm 11 refuses to run a package's postinstall unless it is named, and
+// claude-code's postinstall is what fetches its platform-native binary. Without
+// it npm only WARNS, the build still exits 0, and the container starts with a
+// claude that reports "claude native binary not installed". The template has
+// carried --allow-scripts since the image was written, but no migration step
+// ever delivered it: a project scaffolded before then rebuilds to that broken
+// image and nothing goes red. Supplied here because this step is already
+// editing the file.
+const npm = "RUN npm install --global @anthropic-ai/claude-code";
+if (src.includes(npm) && !src.includes("--allow-scripts=@anthropic-ai/claude-code")) {
+  src = src.replace(
+    npm,
+    "RUN npm install --global --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code",
+  );
+}
+
+writeFileSync(path, src);
+SERENAJS
+    node "$STAGE/add-serena-layer.mjs" "$DOCKER"
+    note "Dockerfile: serena layer + uv layer added"
+  else
+    echo "Dockerfile: no npm-install anchor found — refusing to guess" >&2
+    exit 1
+  fi
+
+  # The wrapper's exec line gains --mcp-config. Anchored on the settings path the
+  # previous template wrote; a project that rewrote that line is reported.
+  if grep -qF ".afk-mcp.json" "$DOCKER"; then
+    note "Dockerfile: wrapper already passes --mcp-config"
+  elif grep -qF -- "--settings /home/agent/.afk-profile-settings.json" "$DOCKER"; then
+    # shellcheck disable=SC2016  # both strings are literal Dockerfile text
+    subst "$DOCKER" \
+      "--settings /home/agent/.afk-profile-settings.json" \
+      "--settings /home/agent/.afk-profile-settings.json --mcp-config /home/agent/.afk-mcp.json"
+  else
+    echo "Dockerfile: no wrapper --settings anchor found — refusing to guess" >&2
+    exit 1
+  fi
+
+  # 1c. The map itself, generated from the project's own shape. The policy job
+  #     this step also wires fails on a missing or stale map, so a project that
+  #     reaches 1.6.0 without one would go red on its first push.
+  #
+  #     Generated from the *project*, not from $WORK. $WORK is a staging copy of
+  #     `.sandcastle/` and `.github/workflows/` only — the map reads the whole
+  #     tree, plus `docs/`, `GLOSSARY.md` and `package.json` at the root, so a map
+  #     written from there describes a tree that does not exist. The policy job's
+  #     freshness check regenerates from the real project and compares, so that
+  #     map would be committed already stale and fail on the project's first push
+  #     — the exact failure this file is meant to prevent.
+  #
+  #     So: read $TARGET, write $WORK. The generator is run from the project with
+  #     --stdout, which prints the map without creating the file, and the output
+  #     is staged like any other change. That matters beyond tidiness — a refused
+  #     migration must leave the project byte-identical, and a generator that
+  #     wrote into $TARGET during the transform phase would plant an untracked
+  #     file in a project the run then declines to migrate.
+  if [ -e "$TARGET/.sandcastle/REPO-MAP.md" ]; then
+    note "REPO-MAP.md: already present"
+  elif [ -e "$WORK/.sandcastle/repo-map.mjs" ]; then
+    mkdir -p "$WORK/.sandcastle"
+    ( cd "$TARGET" && node "$WORK/.sandcastle/repo-map.mjs" --stdout ) \
+      > "$WORK/.sandcastle/REPO-MAP.md" \
+      || echo "note: could not generate .sandcastle/REPO-MAP.md — run it by hand" >&2
+    if [ -s "$WORK/.sandcastle/REPO-MAP.md" ]; then
+      NEW_FILES="$NEW_FILES .sandcastle/REPO-MAP.md"
+    fi
+  fi
+
 
   # 2. profile.ts gains the MCP import, the write call, and the mounts. All three
   #    are anchored on what the previous template wrote, so a project that has
@@ -1249,7 +1377,6 @@ import { mcpConfigMounts, writeMcpConfig } from "./mcp-config.js";'
   # 3. The five implement prompts gain the map pointer. Anchored on the
   #    read-list sentence the previous template emitted, so a project that
   #    rewrote that sentence is left alone (its author had a reason).
-  MAP_FILES=""
   for rel in \
     .sandcastle/implement.md \
     .sandcastle/implement-prompt.md \
@@ -1275,7 +1402,7 @@ writeFileSync(path, after);
 MAPJS
     node "$STAGE/add-map-pointer.mjs" "$WORK/$rel" || rc=$?
     case ${rc:-0} in
-      0) MAP_FILES="$MAP_FILES $rel" ;;
+      0) NEW_FILES="$NEW_FILES $rel" ;;
       3) : ;;  # anchor absent — a project edit; leave it
       *) echo "$rel: could not rewrite the read-list — refusing to guess" >&2; exit 1 ;;
     esac
@@ -1358,6 +1485,14 @@ fi
 # under-state the run: the comparison above is a fixed list, so a file that only
 # this step touches would be silently migrated.
 for rel in ${GLOSSARY_FILES:-}; do
+  CHANGED=1
+  note "changed: $rel"
+done
+# Files the 1.6.0 step staged. These are paths the project did not have, so the
+# comparison above — a fixed list of files every project already carries — can
+# never see them. Reported for the same reason the glossary files are: the
+# report is how an operator knows what a run touched.
+for rel in ${NEW_FILES:-}; do
   CHANGED=1
   note "changed: $rel"
 done
@@ -1489,6 +1624,13 @@ done
 if ! diff -rq "$TARGET/.github/workflows" "$WORK/.github/workflows" >/dev/null 2>&1; then
   publish_dir ".github/workflows" || { say "could not publish .github/workflows" >&2; exit 1; }
 fi
+# Files the 1.6.0 step staged. Same reason the glossary files are published
+# here: the loop above lists files every project already has, so a path this
+# migration *adds* has no other route to the project. Without this the run
+# discards them at exit while stamping the metadata 1.6.0.
+for rel in ${NEW_FILES:-}; do
+  publish_file "$rel" || { say "could not publish $rel" >&2; exit 1; }
+done
 # The architecture-review runner. Published per file, not as a directory: it
 # sits inside `.sandcastle/`, which is project-owned — replacing that directory
 # wholesale would discard every project edit to the other modules.

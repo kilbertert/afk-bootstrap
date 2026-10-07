@@ -15,7 +15,7 @@
  * Without this, removing the codebase-memory binary would quietly halve the
  * agent's tools and nothing would fail.
  */
-import { readFileSync } from "node:fs";
+import { existsSync, readFileSync } from "node:fs";
 import {
   SANDBOX_CBM_BINARY,
   SANDBOX_MCP_CONFIG,
@@ -35,25 +35,36 @@ function assert(condition: boolean, message: string): void {
 // either side would leave claude reading a file that is not there, and claude
 // treats a missing --mcp-config as "no servers" rather than an error.
 //
-// There is no Dockerfile in this directory: `templates/Dockerfile.<language>` is
-// what bootstrap renders into the project. Both variants carry the wrapper, so
-// both are checked — a fix applied to one language and not the other is exactly
-// the drift a single-file check would miss.
-for (const language of ["node", "python"]) {
-  const dockerfile = readFileSync(new URL(`../../templates/Dockerfile.${language}`, import.meta.url), "utf8");
-  assert(
-    dockerfile.includes(`--mcp-config ${SANDBOX_MCP_CONFIG}`),
-    `templates/Dockerfile.${language} must pass --mcp-config ${SANDBOX_MCP_CONFIG}`,
+// The project's own Dockerfile, which bootstrap rendered from
+// `templates/Dockerfile.<language>` — one file, already specialised to this
+// repo's language, so there is no language loop here.
+//
+// Reading the template instead would break in exactly the projects this check
+// exists to guard: bootstrap copies the rendered Dockerfile into
+// `.sandcastle/` and never copies `templates/`, so `../../templates/...`
+// resolves outside the repository and the check dies with ENOENT — a red CI job
+// in every scaffolded project, for a file the project does not have.
+const dockerfilePath = new URL("./Dockerfile", import.meta.url);
+if (!existsSync(dockerfilePath)) {
+  console.error(
+    ".sandcastle/Dockerfile is missing — bootstrap renders it from templates/; " +
+      "a project without it has not been scaffolded correctly",
   );
-  assert(
-    dockerfile.includes("serena-agent"),
-    `templates/Dockerfile.${language} must install serena — the config names it and nothing else provides it`,
-  );
-  assert(
-    dockerfile.includes("UV_TOOL_BIN_DIR=/usr/local/bin"),
-    `templates/Dockerfile.${language}: serena must land on the PATH every user resolves, not in root's home`,
-  );
+  process.exit(1);
 }
+const dockerfile = readFileSync(dockerfilePath, "utf8");
+assert(
+  dockerfile.includes(`--mcp-config ${SANDBOX_MCP_CONFIG}`),
+  `.sandcastle/Dockerfile must pass --mcp-config ${SANDBOX_MCP_CONFIG}`,
+);
+assert(
+  dockerfile.includes("serena-agent"),
+  ".sandcastle/Dockerfile must install serena — the config names it and nothing else provides it",
+);
+assert(
+  dockerfile.includes("UV_TOOL_BIN_DIR=/usr/local/bin"),
+  ".sandcastle/Dockerfile: serena must land on the PATH every user resolves, not in root's home",
+);
 
 // --- the server set ----------------------------------------------------------
 const servers = mcpServers();

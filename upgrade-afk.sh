@@ -1088,6 +1088,19 @@ step creates the issue from the `title` and `body` you emit. If you also run
   preference: your token has `issues=read` and label writes return 403, so a
   self-published issue also ends up **unlabelled** — the same failure that
   duplicated #178/#177 and #202/#201.'
+  # The skipped rule names an `<output>` the produce pass no longer emits. It is
+  # a rule about reporting, not about the defect, so it reads as harmless — but
+  # it is the same class of instruction as `/to-prd-project`: one naming a
+  # mechanism this step removed. It is anchored rather than left to the two above
+  # because nothing else in the file would carry it.
+  # shellcheck disable=SC2016
+  ARCH_SKIP_OLD='- One PRD per run. If every reasonable candidate is already covered by a
+  prior `source:architecture-review` proposal, emit a `skipped` output and
+  stop.'
+  # shellcheck disable=SC2016
+  ARCH_SKIP_NEW='- One PRD per run. If every reasonable candidate is already covered by a
+  prior `source:architecture-review` proposal, say so plainly and stop — the
+  next pass reports it as `skipped`, so it needs no structured output here.'
   # shellcheck disable=SC2016
   ARCH_EXTRACT_OLD='End your response with a single `<output>` block, exactly as specified in the project skill `improve-codebase-architecture-project`. It has one of two shapes.'
   # shellcheck disable=SC2016
@@ -1114,6 +1127,11 @@ The `title` and `body` you emit are what the workflow will publish as the issue 
     # shape this step has not seen and must not half-migrate.
     subst "$ARCH_PROMPT" "$ARCH_PROMPT_OLD" "$ARCH_PROMPT_NEW"
     subst "$ARCH_PROMPT" "$ARCH_RULE_OLD" "$ARCH_RULE_NEW"
+    # The skipped rule names a `skipped` OUTPUT the produce pass no longer emits.
+    # Same class of instruction as `/to-prd-project`: one naming a mechanism this
+    # step removed. Left half-migrated it reads as harmless, which is why it needs
+    # an anchor of its own rather than relying on the two above.
+    subst "$ARCH_PROMPT" "$ARCH_SKIP_OLD" "$ARCH_SKIP_NEW"
     # Optional, because a project that repaired the two blocks above by hand but
     # kept the old heading would otherwise be refused by a strict anchor. The
     # heading is not the defect; it only reads as one next to the old step 4.
@@ -1174,6 +1192,112 @@ The `title` and `body` you emit are what the workflow will publish as the issue 
       echo "architecture-review/extraction.md: still asks the agent to report an issue it created — refusing to record this project as migrated" >&2
       exit 1
     fi
+  fi
+fi
+
+# ---- step: 1.5.2 -> 1.5.3 — the produce pass writes prose, not `<output>` -----
+# The first revision of the previous step handed publication to the workflow and
+# converged the extract pass, but left the produce prompt asking for an
+# `<output>` block and pointing at the exact schema. `runWithExtraction` runs
+# that phase with NO output definition — its own source says the produce prompt
+# "should contain no JSON-emission instructions" — so the instruction named a
+# mechanism that does not exist there, and a run where every candidate was
+# already covered answered "skipped" in the produce pass and published nothing.
+#
+# This needs a step of its own rather than a wider previous one. `upgrade-afk.sh`
+# returns early when the recorded version equals the template version, so a
+# project that already ran the previous revision is at 1.5.2 and can never reach
+# a 1.5.2 step again — the version is the only thing that can carry the change
+# to it. Both projects migrated before this fix carry exactly that shape.
+#
+# The gates test single-line markers, never the multi-line anchors they guard:
+# `grep -F` matches a newline-containing pattern against EACH LINE, so a
+# multi-line anchor gates on its first line alone, and `SKIP_OLD`/`SKIP_NEW`
+# share theirs — the gate would open on text this step has already replaced,
+# where `subst`, which is exact, fails with "anchor not found".
+#
+# Gated on the version being upgraded TO, like the step above it, not on the one
+# being upgraded FROM. The 1.5.2 step runs for ANY project arriving below 1.5 and
+# installs `PRODUCE_OLD` — the very text this step removes — so a project that
+# starts at 1.2 and lands on 1.5.3 needs both, and a `from_minor` gate would
+# strand exactly those projects: stamped 1.5.3 with the produce prompt still
+# asking for structured output, and never revisited because the recorded version
+# then equals the template version. The anchors are conditional, so a prompt this
+# step has nothing to say about is left alone.
+if [ "$to_minor" -ge 5 ]; then
+  STEP_RAN=1
+  ARCH_PROMPT="$WORK/.sandcastle/architecture-review/prompt.md"
+  # shellcheck disable=SC2016
+  PRODUCE_MARK='in your `<output>` block'
+  # shellcheck disable=SC2016
+  TAIL_MARK='and the exact `<output>`'
+  # shellcheck disable=SC2016
+  SKIP_MARK='emit a `skipped` output and'
+  # shellcheck disable=SC2016
+  PRODUCE_OLD='4. Write it up **in your `<output>` block** — title, full body, one-line
+   summary, and the candidates you considered.'
+  # shellcheck disable=SC2016
+  PRODUCE_NEW='4. Write it up **in prose** — the proposed title, the full PRD body in
+   Markdown, and the candidates you considered. Keep it in your final
+   response; a follow-up pass lifts it into structured output.'
+  # shellcheck disable=SC2016
+  TAIL_OLD='The full process — including the methodology (deletion test, deepening,
+glossary), the loose-duplicate rule, the PRD shape, and the exact `<output>`
+schema — is documented in the project skill
+`improve-codebase-architecture-project`. Follow it.'
+  # shellcheck disable=SC2016
+  TAIL_NEW='The full process — including the methodology (deletion test, deepening,
+glossary), the loose-duplicate rule, and the PRD shape — is documented in the
+project skill `improve-codebase-architecture-project`. Follow it. The extraction
+pass carries the schema; this one just leaves the PRD in prose it can lift.'
+  # shellcheck disable=SC2016
+  SKIP_OLD='- One PRD per run. If every reasonable candidate is already covered by a
+  prior `source:architecture-review` proposal, emit a `skipped` output and
+  stop.'
+  # shellcheck disable=SC2016
+  SKIP_NEW='- One PRD per run. If every reasonable candidate is already covered by a
+  prior `source:architecture-review` proposal, say so plainly and stop — the
+  next pass reports it as `skipped`, so it needs no structured output here.'
+
+  if [ ! -e "$ARCH_PROMPT" ]; then
+    note "architecture-review/prompt.md absent; nothing to converge"
+  elif grep -qF -e "$PRODUCE_MARK" "$ARCH_PROMPT" \
+    || grep -qF -e "$TAIL_MARK" "$ARCH_PROMPT" \
+    || grep -qF -e "$SKIP_MARK" "$ARCH_PROMPT"; then
+    say "== $FROM -> $TEMPLATE_VERSION: the produce pass writes prose, not structured output =="
+    # Each anchor on its own. A project can carry the produce request without the
+    # schema paragraph, or keep the rule that names a `skipped` output — one file
+    # gate on any of them would skip the others.
+    if grep -qF -e "$PRODUCE_MARK" "$ARCH_PROMPT"; then
+      subst "$ARCH_PROMPT" "$PRODUCE_OLD" "$PRODUCE_NEW"
+    fi
+    if grep -qF -e "$SKIP_MARK" "$ARCH_PROMPT"; then
+      subst "$ARCH_PROMPT" "$SKIP_OLD" "$SKIP_NEW"
+    fi
+    if grep -qF -e "$TAIL_MARK" "$ARCH_PROMPT"; then
+      subst "$ARCH_PROMPT" "$TAIL_OLD" "$TAIL_NEW"
+    fi
+    # Deliberately the multi-line-unsafe form: these markers are the first LINE of
+    # phrases this step must not leave behind, so grep matching that line alone
+    # makes the check at least as wide as the anchors rather than narrower. A
+    # project that reworded one of these into different words that still ask the
+    # produce pass for structured output is a shape this step has never seen, and
+    # the version it is about to record is never revisited — refusing is the only
+    # safe answer.
+    # shellcheck disable=SC2016  # the patterns are prompt text; backticks are literal.
+    if grep -qF -e 'in your `<output>` block' -e 'emit a `skipped` output' \
+       "$ARCH_PROMPT"; then
+      echo "architecture-review/prompt.md: still asks the produce pass for structured output — refusing to record this project as migrated" >&2
+      exit 1
+    fi
+    # shellcheck disable=SC2016  # likewise: the tail paragraph names the schema in backticks.
+    if grep -qF -e 'and the exact `<output>`' "$ARCH_PROMPT"; then
+      echo "architecture-review/prompt.md: still points the produce pass at the output schema — refusing to record this project as migrated" >&2
+      exit 1
+    fi
+    note "architecture-review/prompt.md: produce pass returns prose; the extract pass carries the schema"
+  else
+    note "architecture-review/prompt.md: produce pass already writes prose; left as the project wrote it"
   fi
 fi
 

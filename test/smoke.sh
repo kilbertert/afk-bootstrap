@@ -406,6 +406,18 @@ grep -q -- '--cron-hour' <<<"$("$S/upgrade-afk.sh" "$NO_HOUR" 2>&1)" \
   || { echo "refusal did not name the --cron-hour fix" >&2; exit 1; }
 rm -rf "$NO_HOUR"
 
+# A dry run must name everything the real run would write, including the map —
+# which is generated in the publish tail rather than staged with the other new
+# files, so it is the one path a list-driven report can miss. The operator's
+# reason to dry-run is exactly this list.
+DRY_TARGET="$TMP/upgrade-dry-$LANGUAGE"
+mkdir -p "$DRY_TARGET/.github" "$DRY_TARGET/docs"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$DRY_TARGET/"
+DRY_OUT="$("$S/upgrade-afk.sh" "$DRY_TARGET" --cron-hour 13 --dry-run)"
+grep -q 'REPO-MAP.md' <<<"$DRY_OUT" \
+  || { echo "a dry run does not report the repository map it would create" >&2; exit 1; }
+rm -rf "$DRY_TARGET"
+
 UPGRADE_OUT="$("$S/upgrade-afk.sh" "$UPGRADE_TARGET" --cron-hour 13)"
 printf '%s\n' "$UPGRADE_OUT"
 grep -q 'claude-deepseek)' "$UPGRADE_TARGET/.sandcastle/Dockerfile" \

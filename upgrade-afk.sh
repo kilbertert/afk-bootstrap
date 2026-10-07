@@ -1539,6 +1539,15 @@ for rel in ${NEW_FILES:-}; do
   CHANGED=1
   note "changed: $rel"
 done
+# The map is generated in the publish tail rather than staged with NEW_FILES, so
+# it would otherwise be the one file a --dry-run report omits. That matters more
+# for this path than for the others: the operator's whole reason to dry-run is to
+# see what a migration will add, and a map is added to every project that has
+# none. `--dry-run` exits before the publish tail, so this is reporting only.
+if [ "${MAP_NEEDED:-0}" = "1" ]; then
+  CHANGED=1
+  note "changed: .sandcastle/REPO-MAP.md (generated after publish)"
+fi
 if [ "${GLOSSARY_RENAME:-0}" = "1" ]; then
   CHANGED=1
   note "renamed: CONTEXT.md -> GLOSSARY.md"

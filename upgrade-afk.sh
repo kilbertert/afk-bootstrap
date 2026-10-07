@@ -1021,6 +1021,87 @@ if [ "$from_minor" -eq 5 ] && [ "$from_patch" -lt 1 ] && [ "$to_minor" -ge 5 ]; 
   fi
 fi
 
+# ---- step: 1.5.x -> 1.5.2 — architecture review proposes, the workflow publishes
+# Every architecture-review run past the oldest shipped template produced TWO
+# issues: the prompt told the agent to "Publish it via `/to-prd-project`" and to
+# apply the provenance label, while the workflow's own *Publish PRD issue* step
+# built an issue from the same `<output>`. Two writers, one run, two issues
+# seconds apart — measured as #90/#91 and #109/#110 (Health-Flow), #177/#178 and
+# #201/#202 (genesis-evidence), #163-169 (Auto_Test), #323/#325 (AI-Ops).
+#
+# The agent's copy is also the worse one: the skill `/to-prd-project` does not
+# exist in the sandbox, so the agent falls back to a raw `gh issue create` with a
+# token scoped `issues=read` — creation succeeds, the label write 403s, and the
+# duplicate lands **unlabelled**. `check-backlog` throttles on that label, so the
+# unlabelled issue is invisible to the very next run's duplicate check.
+#
+# Two projects (AI-Ops, genesis-evidence) were repaired by hand in their own
+# commits, with their own wording. This step therefore keys on the DEFECT, not on
+# the version: a prompt that no longer names `/to-prd-project` has already been
+# fixed — by hand or by this step — and is left exactly as it is. Rewriting it
+# would discard that repair and import this scaffold's wording over it.
+#
+# Not gated on a patch level: the 1.3.1 budget step once gated on `to_patch` and
+# silently stopped running the moment the template moved past it, stranding every
+# later project on the old behavior. "At or above the version that introduced it"
+# is the condition, and the defect marker inside the file is what decides.
+if [ "$to_minor" -ge 5 ]; then
+  STEP_RAN=1
+  ARCH_PROMPT="$WORK/.sandcastle/architecture-review/prompt.md"
+  # Both blocks are literal prompt text, backticks and all: nothing here is meant
+  # to expand. SC2016 is the warning against single quotes doing that, which is
+  # exactly the intent, so it is disabled rather than worked around — rewriting
+  # these as double-quoted strings to silence it would make the anchors harder to
+  # read against the file they must match byte for byte.
+  # shellcheck disable=SC2016
+  ARCH_PROMPT_OLD='4. Publish it via `/to-prd-project`.
+5. Apply the `source:architecture-review` label to the new issue.'
+  # shellcheck disable=SC2016
+  ARCH_PROMPT_NEW='4. Write it up **in your `<output>` block** — title, full body, one-line
+   summary, and the candidates you considered.
+
+**Do NOT create the issue yourself.** The workflow'"'"'s own *Publish PRD issue*
+step creates the issue from the `title` and `body` you emit. If you also run
+`gh issue create`, the run publishes **twice**.'
+  # shellcheck disable=SC2016
+  ARCH_RULE_OLD='- Read-only on the repo. No commits. No edits to `docs/`, ADRs, or
+  source files. The only mutations allowed are creating the PRD issue (via
+  `/to-prd-project`) and applying the `source:architecture-review` label.'
+  # shellcheck disable=SC2016
+  ARCH_RULE_NEW='- **Read-only.** No commits, no edits to `docs/`, ADRs, or source files, and
+  **no tracker writes** — no `gh issue create`, no `gh issue edit`, no label
+  changes. You *propose*; the workflow *publishes*. This is not a style
+  preference: your token has `issues=read` and label writes return 403, so a
+  self-published issue also ends up **unlabelled** — the same failure that
+  duplicated #178/#177 and #202/#201.'
+
+  if [ ! -e "$ARCH_PROMPT" ]; then
+    note "architecture-review/prompt.md absent; nothing to converge (a 1.1.x project gets the current one)"
+  elif ! grep -qF -e '/to-prd-project' "$ARCH_PROMPT"; then
+    note "architecture-review/prompt.md: already proposes only; left as the project wrote it"
+  else
+    say "== $FROM -> $TEMPLATE_VERSION: architecture review proposes, the workflow publishes =="
+    # `subst` refuses an anchor it cannot find, which is the point: the two blocks
+    # below are the whole defect, and a prompt carrying one but not the other is a
+    # shape this step has not seen and must not half-migrate.
+    subst "$ARCH_PROMPT" "$ARCH_PROMPT_OLD" "$ARCH_PROMPT_NEW"
+    subst "$ARCH_PROMPT" "$ARCH_RULE_OLD" "$ARCH_RULE_NEW"
+    # Optional, because a project that repaired the two blocks above by hand but
+    # kept the old heading would otherwise be refused by a strict anchor. The
+    # heading is not the defect; it only reads as one next to the old step 4.
+    subst_all "$ARCH_PROMPT" "opportunity in this codebase and publish it as a PRD." \
+                             "opportunity in this codebase and report it as a PRD."
+    # If `/to-prd-project` survives anywhere the two replacements did not reach,
+    # the instruction is still live somewhere in the file. Publishing a
+    # half-migrated prompt would restore the double publication this step removes.
+    if grep -qF -e '/to-prd-project' "$ARCH_PROMPT"; then
+      echo "architecture-review/prompt.md: /to-prd-project still present after migration — refusing to publish a half-migrated prompt" >&2
+      exit 1
+    fi
+    note "architecture-review/prompt.md: agent no longer creates the issue or mutates labels"
+  fi
+fi
+
 if [ "$STEP_RAN" = "0" ]; then
   echo "no upgrade step defined from $FROM to $TEMPLATE_VERSION" >&2
   exit 1
@@ -1049,6 +1130,20 @@ for rel in .sandcastle/Dockerfile .sandcastle/profile.ts .sandcastle/main.ts .sa
   CHANGED=1
   note "changed: $rel"
 done
+# The architecture-review runner. The 1.5.2 step edits `prompt.md` in place, and
+# a file this run actually changed would otherwise be missing from the report:
+# the list above is fixed, so an unlisted path is migrated silently. Compared per
+# file for the same reason publishing is — the directory is project-owned, and
+# "the directory differs" would report a project's own extra module as changed.
+if [ -d "$WORK/.sandcastle/architecture-review" ]; then
+  for f in "$WORK/.sandcastle/architecture-review"/*; do
+    [ -f "$f" ] || continue
+    rel=".sandcastle/architecture-review/${f##*/}"
+    cmp -s "$TARGET/$rel" "$f" 2>/dev/null && continue
+    CHANGED=1
+    note "changed: $rel"
+  done
+fi
 if ! diff -rq "$TARGET/.github/workflows" "$WORK/.github/workflows" >/dev/null 2>&1; then
   CHANGED=1
   note "changed: .github/workflows/"

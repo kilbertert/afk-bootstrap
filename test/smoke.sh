@@ -205,7 +205,7 @@ fi
 node -e '
   const fs = require("fs");
   const metadata = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.5.1" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
+  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.5.2" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
   // The assigned schedule hour must be recorded, or the next project on this
   // host has nothing to consult and collides by default — the defect that
   // made every project architecture review run on the same minute.
@@ -394,7 +394,7 @@ grep -q 'claude-deepseek' "$UPGRADE_TARGET/.sandcastle/main.ts" \
 node -e '
   const fs = require("fs");
   const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-  if (m.afk_template_version !== "1.5.1") process.exit(1);
+  if (m.afk_template_version !== "1.5.2") process.exit(1);
   // Cumulative migration: a 1.1.x project must come out of ONE run with both
   // the 1.2.0 provider migration and the 1.3.2 schedule migration applied, and
   // the assigned hour recorded. A step gated on from_minor alone would leave a
@@ -847,6 +847,91 @@ for f in extraction.md prompt.md; do
   [ -f "$HAND_PORTED/.sandcastle/architecture-review/$f" ] \
     || { echo "migration did not add the missing $f alongside a hand-ported one" >&2; exit 1; }
 done
+
+# ---- architecture review proposes; the workflow publishes -------------------
+# Every architecture-review run past the oldest template opened TWO issues: the
+# shipped prompt told the agent to publish via `/to-prd-project` and apply the
+# provenance label, while the workflow's own *Publish PRD issue* step built an
+# issue from the same `<output>`. Two writers, one run. The agent's copy is also
+# the unlabelled one — the skill does not exist in the sandbox, so it falls back
+# to `gh issue create` with an `issues=read` token, and the label write 403s.
+#
+# The fixture reproduces that exact prompt, so the migration is exercised against
+# real shipped output rather than a reconstruction of it.
+ARCHPROMPT="$TMP/archprompt-$LANGUAGE"
+mkdir -p "$ARCHPROMPT/.github/workflows" "$ARCHPROMPT/.sandcastle/architecture-review"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$ARCHPROMPT/"
+node -e '
+  const fs = require("fs"), f = process.argv[1] + "/.afk-bootstrap.json";
+  const m = JSON.parse(fs.readFileSync(f, "utf8"));
+  // 1.5.0 post-dates the 1.5.1 network-check step, so this run exercises the
+  // prompt step alone and not a stack of unrelated migrations.
+  m.afk_template_version = "1.5.0"; m.cron_hour = 13;
+  fs.writeFileSync(f, JSON.stringify(m, null, 2) + "\n");
+' "$ARCHPROMPT"
+cp "$S/scaffold/.sandcastle/profile.ts" "$ARCHPROMPT/.sandcastle/profile.ts"
+cp "$S/scaffold/.sandcastle/architecture-review/extraction.md" \
+   "$ARCHPROMPT/.sandcastle/architecture-review/extraction.md"
+cp "$S/scaffold/.github/workflows/architecture-review.yml" "$ARCHPROMPT/.github/workflows/"
+node -e '
+  const fs = require("fs"), p = process.argv[1] + "/.github/workflows/architecture-review.yml";
+  fs.writeFileSync(p, fs.readFileSync(p, "utf8")
+    .split("__AFK_CRON_HOUR__").join("13")
+    .replace("timeout-minutes: 75", "timeout-minutes: 45"));
+' "$ARCHPROMPT"
+# The fixture is the prompt this template actually SHIPPED (captured before the
+# fix), not a hand-written approximation of it. An approximation drifts from the
+# real text and then tests an anchor the migration would never match — the
+# false-green that makes a migration look verified when it is not.
+cp "$S/test/fixtures/architecture-review-buggy/prompt.md" \
+   "$ARCHPROMPT/.sandcastle/architecture-review/prompt.md"
+# The scaffold must no longer ship that text, or this step has nothing to fix.
+# shellcheck disable=SC2016  # the pattern is prompt text; backticks are literal.
+if grep -qF -e '4. Publish it via `/to-prd-project`.' \
+   "$S/scaffold/.sandcastle/architecture-review/prompt.md"; then
+  echo "the scaffold still ships the double-publication prompt" >&2; exit 1
+fi
+ARCHPROMPT_OUT="$("$S/upgrade-afk.sh" "$ARCHPROMPT" 2>&1)" \
+  || { echo "upgrade refused a project needing the prompt step" >&2; exit 1; }
+if grep -qF -e '/to-prd-project' "$ARCHPROMPT/.sandcastle/architecture-review/prompt.md"; then
+  echo "the migration left the agent publishing its own issue" >&2; exit 1
+fi
+grep -qF 'Do NOT create the issue yourself' \
+  "$ARCHPROMPT/.sandcastle/architecture-review/prompt.md" \
+  || { echo "the migrated prompt does not hand publication back to the workflow" >&2; exit 1; }
+grep -qF 'report it as a PRD' "$ARCHPROMPT/.sandcastle/architecture-review/prompt.md" \
+  || { echo "the migrated prompt still says the agent publishes" >&2; exit 1; }
+grep -qF 'changed: .sandcastle/architecture-review/prompt.md' <<<"$ARCHPROMPT_OUT" \
+  || { echo "the migration edited the prompt without reporting it" >&2; exit 1; }
+grep -qE '^\s*timeout-minutes: 75\s*$' "$ARCHPROMPT/.github/workflows/architecture-review.yml" \
+  || { echo "the prompt step did not carry the earlier budget step with it" >&2; exit 1; }
+
+# A project that fixed the prompt BY HAND keeps its own wording. AI-Ops and
+# genesis-evidence both did, in their own commits with their own rationale.
+# Rewriting them would discard that repair and, worse, would re-import this
+# scaffold's wording over a prompt already carrying the fix.
+HANDFIX="$TMP/handfix-$LANGUAGE"
+mkdir -p "$HANDFIX/.github/workflows" "$HANDFIX/.sandcastle/architecture-review"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$HANDFIX/"
+node -e '
+  const fs = require("fs"), f = process.argv[1] + "/.afk-bootstrap.json";
+  const m = JSON.parse(fs.readFileSync(f, "utf8"));
+  m.afk_template_version = "1.5.0"; m.cron_hour = 13;
+  fs.writeFileSync(f, JSON.stringify(m, null, 2) + "\n");
+' "$HANDFIX"
+cp "$S/scaffold/.sandcastle/profile.ts" "$HANDFIX/.sandcastle/profile.ts"
+cp "$S/scaffold/.github/workflows/architecture-review.yml" "$HANDFIX/.github/workflows/"
+node -e '
+  const fs = require("fs"), p = process.argv[1] + "/.github/workflows/architecture-review.yml";
+  fs.writeFileSync(p, fs.readFileSync(p, "utf8").split("__AFK_CRON_HOUR__").join("13"));
+' "$HANDFIX"
+printf '# TASK\n\nReport it as structured output — you do not create the issue.\n' \
+  > "$HANDFIX/.sandcastle/architecture-review/prompt.md"
+"$S/upgrade-afk.sh" "$HANDFIX" >/dev/null \
+  || { echo "upgrade refused a project whose prompt was repaired by hand" >&2; exit 1; }
+grep -qF 'Report it as structured output' \
+  "$HANDFIX/.sandcastle/architecture-review/prompt.md" \
+  || { echo "the migration overwrote a hand-repaired prompt" >&2; exit 1; }
 
 # A project whose cron this template did NOT write keeps its own schedule, but
 # the hour it already occupies must still be recorded. Without that the record

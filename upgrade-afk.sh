@@ -300,6 +300,11 @@ cp "$TARGET/.afk-bootstrap.json" "$WORK/.afk-bootstrap.json"
 # would silently restore the original files. Each step that finds prose appends.
 PROSE=""
 
+# Set by the 1.6.0 step when the project has no repository map. The map is
+# generated after publication, not during the transform phase — see the note at
+# that step for why the finished tree is the only correct input.
+MAP_NEEDED=0
+
 STEP_RAN=0
 # `-lt 2`: a project already at 1.2.0 has had the provider migration. Re-running
 # it is not merely wasted — the step refuses a profile.ts it cannot recognise as
@@ -1296,6 +1301,307 @@ pass carries the schema; this one just leaves the PRD in prose it can lift.'
   fi
 fi
 
+# ---- step: 1.5.x -> 1.6.0 — the sandbox gets code intelligence --------------
+# Two changes with one purpose: stop the agent spending its budget rediscovering
+# the repository. Measured on a real run (health-flow #114): 36 of 62 tool calls
+# were `cat`/`ls`/`grep`/`sed` looking for entry points, test layout and docs.
+#
+#   1. The sandbox image gains `serena` (LSP symbols) and a mounted
+#      `codebase-memory-mcp` (the repository graph), injected by the claude
+#      wrapper via --mcp-config.
+#   2. `.sandcastle/REPO-MAP.md` answers "where does what live" in one read, and
+#      the implement prompts tell the agent to read it first.
+#
+# The image must be rebuilt for (1) — the Dockerfile gains a layer, and a wrapper
+# that passes a config file the old image does not read. Until then the new
+# prompts simply point at servers that are not there, which claude skips
+# silently; that degrades rather than breaks, and the rebuild instruction below
+# names the order.
+if [ "$from_minor" -lt 6 ] && [ "$to_minor" -ge 6 ]; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: sandbox code intelligence + repository map =="
+
+  # 1. The generator and its check are new files, not edits.
+  #
+  # Tracked so the report below lists them and the publish loop writes them.
+  # Staging a file is not delivering it: the report and the publish loop are both
+  # driven by a list, so a file that is copied into $WORK and named on neither is
+  # migrated in the stage and discarded at the end of the run. That is not a
+  # missing nicety — `profile.ts` gains `import ... from "./mcp-config.js"` a few
+  # lines below, so the project comes out stamped 1.6.0 holding a module that
+  # cannot be resolved, and `pnpm afk` dies on the import.
+  NEW_FILES=""
+  cp "$S/scaffold/.sandcastle/repo-map.mjs" "$WORK/.sandcastle/repo-map.mjs"
+  cp "$S/scaffold/.sandcastle/repo-map.check.mjs" "$WORK/.sandcastle/repo-map.check.mjs"
+  cp "$S/scaffold/.sandcastle/mcp-config.ts" "$WORK/.sandcastle/mcp-config.ts"
+  cp "$S/scaffold/.sandcastle/mcp-config.check.ts" "$WORK/.sandcastle/mcp-config.check.ts"
+  NEW_FILES="$NEW_FILES .sandcastle/repo-map.mjs .sandcastle/repo-map.check.mjs"
+  NEW_FILES="$NEW_FILES .sandcastle/mcp-config.ts .sandcastle/mcp-config.check.ts"
+
+  # 1b. The Dockerfile is a RENDERED artifact that becomes project-owned after
+  #     bootstrap, so it is edited by anchor — never re-rendered, which would
+  #     discard the project's own edits (an enabled Playwright block, a pinned
+  #     base image). The insertion is done by a node script written to the stage:
+  #     the text being inserted contains `${AGENT_UID}`, which a shell heredoc or
+  #     an unquoted replacement would expand into this host's uid.
+  DOCKER="$WORK/.sandcastle/Dockerfile"
+  if grep -qF "serena-agent" "$DOCKER"; then
+    note "Dockerfile: serena layer already present"
+  elif grep -qF "RUN npm install --global @anthropic-ai/claude-code" "$DOCKER"; then
+    cat > "$STAGE/add-serena-layer.mjs" <<'SERENAJS'
+import { readFileSync, writeFileSync } from "node:fs";
+
+const [path] = process.argv.slice(2);
+let src = readFileSync(path, "utf8");
+const anchor = "RUN npm install --global @anthropic-ai/claude-code";
+
+// The uv layer is inserted only when absent: the Node template did not ship one
+// before this version, and the serena install needs it.
+if (!src.includes("astral.sh/uv/install.sh")) {
+  src = src.replace(
+    anchor,
+    [
+      "# uv — serena is installed with uv tool install below.",
+      "RUN curl -LsSf https://astral.sh/uv/install.sh | env UV_INSTALL_DIR=/usr/local/bin sh \\",
+      "  && rm -rf /root/.cache",
+      "",
+      anchor,
+    ].join("\n"),
+  );
+}
+
+src = src.replace(
+  anchor,
+  [
+    "# Serena MCP server — symbol-level code navigation, baked in so every run",
+    "# does not pay 30-60 s to install it. Paths come from env vars: this RUN sits",
+    "# above the USER line, and a bare uv tool install would land in the root home.",
+    "RUN UV_TOOL_BIN_DIR=/usr/local/bin UV_TOOL_DIR=/home/agent/.local/share/uv/tools \\",
+    "      uv tool install serena-agent==1.7.0 \\",
+    "  && chown -R ${AGENT_UID}:${AGENT_GID} /home/agent/.local \\",
+    "  && serena --version",
+    "",
+    anchor,
+  ].join("\n"),
+);
+
+// npm 11 refuses to run a package's postinstall unless it is named, and
+// claude-code's postinstall is what fetches its platform-native binary. Without
+// it npm only WARNS, the build still exits 0, and the container starts with a
+// claude that reports "claude native binary not installed". The template has
+// carried --allow-scripts since the image was written, but no migration step
+// ever delivered it: a project scaffolded before then rebuilds to that broken
+// image and nothing goes red. Supplied here because this step is already
+// editing the file.
+const npm = "RUN npm install --global @anthropic-ai/claude-code";
+if (src.includes(npm) && !src.includes("--allow-scripts=@anthropic-ai/claude-code")) {
+  src = src.replace(
+    npm,
+    "RUN npm install --global --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code",
+  );
+}
+
+writeFileSync(path, src);
+SERENAJS
+    node "$STAGE/add-serena-layer.mjs" "$DOCKER"
+    note "Dockerfile: serena layer + uv layer added"
+  else
+    echo "Dockerfile: no npm-install anchor found — refusing to guess" >&2
+    exit 1
+  fi
+
+  # The wrapper's exec line gains --mcp-config. Anchored on the settings path the
+  # previous template wrote; a project that rewrote that line is reported.
+  if grep -qF ".afk-mcp.json" "$DOCKER"; then
+    note "Dockerfile: wrapper already passes --mcp-config"
+  elif grep -qF -- "--settings /home/agent/.afk-profile-settings.json" "$DOCKER"; then
+    # shellcheck disable=SC2016  # both strings are literal Dockerfile text
+    subst "$DOCKER" \
+      "--settings /home/agent/.afk-profile-settings.json" \
+      "--settings /home/agent/.afk-profile-settings.json --mcp-config /home/agent/.afk-mcp.json"
+  else
+    echo "Dockerfile: no wrapper --settings anchor found — refusing to guess" >&2
+    exit 1
+  fi
+
+  # The `claude` arm of the wrapper gained --mcp-config too, and the anchor above
+  # cannot reach it: that arm is the *only* one with no --settings flag, which is
+  # also why the profile mounts it is paired with are no longer conditional. The
+  # two halves are one change — a mount the wrapper never reads is a server the
+  # agent never gets, and the reverse. A project that rewrote the arm is refused
+  # rather than half-migrated, because an unread mount is exactly the silent
+  # degradation this step exists to remove.
+  CLAUDE_ARM="  '  claude) exec /usr/local/bin/claude-real \"\$@\" ;;' \\"
+  CLAUDE_ARM_NEW="  '  claude) exec /usr/local/bin/claude-real --mcp-config /home/agent/.afk-mcp.json \"\$@\" ;;' \\"
+  if grep -qF -- "$CLAUDE_ARM_NEW" "$DOCKER"; then
+    note "Dockerfile: claude arm already passes --mcp-config"
+  elif grep -qF -- "$CLAUDE_ARM" "$DOCKER"; then
+    subst "$DOCKER" "$CLAUDE_ARM" "$CLAUDE_ARM_NEW"
+  else
+    echo "Dockerfile: no claude dispatch arm found — refusing to guess" >&2
+    exit 1
+  fi
+
+  # 1c. The map is *not* generated here. It has to describe the published tree,
+  #     and the glossary above renames a root document in the stage — so a map
+  #     built now would list CONTEXT.md while the publication writes GLOSSARY.md,
+  #     and the freshness check this step wires would fail on the first push.
+  #     Generating from a shadow copy instead does not work either: the generator
+  #     skips symlinked entries, so a shadow built by linking the real tree loses
+  #     `docs/` from the map's tree section. It is generated in the publish phase
+  #     below, where $TARGET *is* the finished project, and remembered here.
+  if [ -e "$TARGET/.sandcastle/REPO-MAP.md" ]; then
+    note "REPO-MAP.md: already present"
+  elif [ -e "$WORK/.sandcastle/repo-map.mjs" ]; then
+    MAP_NEEDED=1
+  fi
+
+  # 2. profile.ts gains the MCP import, the write call, and the mounts. All three
+  #    are anchored on what the previous template wrote, so a project that has
+  #    customised this file is reported rather than silently rewritten.
+  PROF="$WORK/.sandcastle/profile.ts"
+  if grep -qF "mcp-config.js" "$PROF"; then
+    note "profile.ts: MCP wiring already present"
+  elif grep -qF 'import { sandboxNetworkOptions } from "./profile-network.js";' "$PROF"; then
+    subst "$PROF" \
+      'import { sandboxNetworkOptions } from "./profile-network.js";' \
+      'import { sandboxNetworkOptions } from "./profile-network.js";
+import { mcpConfigMounts, writeMcpConfig } from "./mcp-config.js";'
+    subst "$PROF" \
+      '): { agent: AgentProvider; sandbox: SandboxProvider } {' \
+      '): { agent: AgentProvider; sandbox: SandboxProvider } {
+  // Materialise the MCP config before the sandbox is created — the mount below
+  // needs a file to point at, and writing it per run is what keeps it true to
+  // what this host actually has.
+  writeMcpConfig();'
+    # The mounts literal 1.5.x wrote is replaced whole. It was a conditional
+    # one-element list; it becomes an unconditional list, so the `claude` profile
+    # — the one that resolves no settings file — still receives the MCP pair.
+    # Anchored on the exact three lines 1.5.x emitted, so a project that has
+    # rewritten them is refused rather than half-migrated.
+    node -e '
+      const fs = require("fs");
+      const [path] = process.argv.slice(1);
+      const src = fs.readFileSync(path, "utf8");
+      const anchor = [
+        "      ...(settingsPath",
+        "        ? { mounts: [{ hostPath: settingsPath, sandboxPath: \"/home/agent/.afk-profile-settings.json\", readonly: true }] }",
+        "        : {}),",
+      ].join("\n");
+      if (!src.includes(anchor)) {
+        console.error("profile.ts: mount literal not found — refusing to guess");
+        process.exit(1);
+      }
+      const replacement = [
+        "      // The mounts are unconditional. The MCP pair is independent of the",
+        "      // endpoint: the graph is mounted from the host and serena is in the image,",
+        "      // both regardless of how the agent authenticates. Gating them on",
+        "      // settingsPath (as this started out) made the setting a proxy for",
+        "      // \"is this a non-default profile\" — and the claude profile is the one",
+        "      // that resolves no settings file, so the default profile was exactly the",
+        "      // one that got no mounts, no config file, and therefore no servers. The",
+        "      // wrapper arm also passes no --mcp-config, so nothing else",
+        "      // supplied them: not a wrong path, just absent.",
+        "      mounts: [",
+        "        // Present only when the profile resolves an endpoint, because without",
+        "        // one there is no file to mount — the wrapper claude arm uses the",
+        "        // Anthropic default and reads no settings.",
+        "        ...(settingsPath",
+        "          ? [{ hostPath: settingsPath, sandboxPath: \"/home/agent/.afk-profile-settings.json\", readonly: true }]",
+        "          : []),",
+        "        ...mcpConfigMounts(),",
+        "      ],",
+      ].join("\n");
+      fs.writeFileSync(path, src.replace(anchor, replacement));
+    ' "$PROF"
+    note "profile.ts: MCP config wiring added"
+  else
+    say ""
+    say "profile.ts does not carry the 1.5.x network import this step anchors on."
+    say "Migrate it by hand: import mcpConfigMounts/writeMcpConfig from"
+    say "./mcp-config.js, call writeMcpConfig() at the top of claudeProfile, and"
+    say "spread mcpConfigMounts() into the docker() mounts."
+    exit 1
+  fi
+
+  # 3. The five implement prompts gain the map pointer. Anchored on the
+  #    read-list sentence the previous template emitted, so a project that
+  #    rewrote that sentence is left alone (its author had a reason).
+  #
+  #    Two anchors, not one, because the sentence differs per prompt: four of the
+  #    five open `Read \`GLOSSARY` (implement.md, implement-prompt.md,
+  #    implement/prompt.md, implement-pr/prompt.md), while the PRD prompt
+  #    (`.sandcastle/implement-prd/prompt.md`) opens `Read the relevant files
+  #    under \`docs/\`` — it is the one that lists docs before the glossary. A
+  #    single anchor matched four of the five and reported the loop as done: the
+  #    prompt that runs every *PRD* agent was left without the map pointer, and
+  #    the miss is silent by design (`rc=3` means "the author rewrote it"), so
+  #    nothing anywhere said so. Each prompt is anchored on what it carries.
+  for rel in \
+    .sandcastle/implement.md \
+    .sandcastle/implement-prompt.md \
+    .sandcastle/implement/prompt.md \
+    .sandcastle/implement-pr/prompt.md \
+    .sandcastle/implement-prd/prompt.md ; do
+    [ -e "$WORK/$rel" ] || continue
+    grep -qF "REPO-MAP.md" "$WORK/$rel" && continue
+    # Node rather than perl: the replacement text contains backticks, and perl
+    # treats those in a replacement as command substitution — the first attempt
+    # at this produced an empty string instead of the new sentence. The script is
+    # written to a file so shellcheck does not read the backticks as SC2016.
+    cat > "$STAGE/add-map-pointer.mjs" <<'MAPJS'
+import { readFileSync, writeFileSync } from "node:fs";
+const [path] = process.argv.slice(2);
+// Each pair is (what the previous template wrote, what it becomes). The first
+// prefix that matches wins; a prompt carrying none of them is one this step has
+// not seen, and the caller reports it rather than claiming the migration ran.
+const ANCHORS = [
+  ["Read `GLOSSARY", "Read `.sandcastle/REPO-MAP.md` first (where things live), then `GLOSSARY"],
+  ["Read the relevant files under `docs/`", "Read `.sandcastle/REPO-MAP.md` first (where things live), then the relevant files under `docs/`"],
+];
+const before = readFileSync(path, "utf8");
+for (const [from, to] of ANCHORS) {
+  if (!before.includes(from)) continue;
+  writeFileSync(path, before.replace(from, to));
+  process.exit(0);
+}
+process.exit(3);
+MAPJS
+    node "$STAGE/add-map-pointer.mjs" "$WORK/$rel" || rc=$?
+    case ${rc:-0} in
+      0) NEW_FILES="$NEW_FILES $rel" ;;
+      3) : ;;  # anchor absent — a project edit; leave it
+      *) echo "$rel: could not rewrite the read-list — refusing to guess" >&2; exit 1 ;;
+    esac
+    rc=0
+  done
+
+  # 4. The CI job gains the three new checks. Anchored on the check 1.5.1 added.
+  POLICY="$WORK/.github/workflows/afk-policy.yml"
+  if [ ! -e "$POLICY" ]; then
+    note "afk-policy.yml absent; the scaffold supplies it"
+  elif grep -qF "mcp-config.check.ts" "$POLICY"; then
+    note "afk-policy.yml: code-intelligence checks already wired"
+  else
+    A1="        run: npx --yes tsx .sandcastle/profile-network.check.ts"
+    A2="$A1
+      - name: Verify sandbox MCP config
+        run: npx --yes tsx .sandcastle/mcp-config.check.ts
+      # A stale map is read with the same confidence as the code, so it is
+      # checked rather than trusted. --check regenerates to stdout and compares —
+      # it never writes the file it is judging.
+      - name: Verify the repository map is current
+        run: node .sandcastle/repo-map.check.mjs"
+    if grep -qF "$A1" "$POLICY"; then
+      subst "$POLICY" "$A1" "$A2"
+    else
+      echo "afk-policy.yml: no anchor for the network check — refusing to guess" >&2
+      exit 1
+    fi
+  fi
+fi
+
+
 if [ "$STEP_RAN" = "0" ]; then
   echo "no upgrade step defined from $FROM to $TEMPLATE_VERSION" >&2
   exit 1
@@ -1349,6 +1655,23 @@ for rel in ${GLOSSARY_FILES:-}; do
   CHANGED=1
   note "changed: $rel"
 done
+# Files the 1.6.0 step staged. These are paths the project did not have, so the
+# comparison above — a fixed list of files every project already carries — can
+# never see them. Reported for the same reason the glossary files are: the
+# report is how an operator knows what a run touched.
+for rel in ${NEW_FILES:-}; do
+  CHANGED=1
+  note "changed: $rel"
+done
+# The map is generated in the publish tail rather than staged with NEW_FILES, so
+# it would otherwise be the one file a --dry-run report omits. That matters more
+# for this path than for the others: the operator's whole reason to dry-run is to
+# see what a migration will add, and a map is added to every project that has
+# none. `--dry-run` exits before the publish tail, so this is reporting only.
+if [ "${MAP_NEEDED:-0}" = "1" ]; then
+  CHANGED=1
+  note "changed: .sandcastle/REPO-MAP.md (generated after publish)"
+fi
 if [ "${GLOSSARY_RENAME:-0}" = "1" ]; then
   CHANGED=1
   note "renamed: CONTEXT.md -> GLOSSARY.md"
@@ -1477,6 +1800,13 @@ done
 if ! diff -rq "$TARGET/.github/workflows" "$WORK/.github/workflows" >/dev/null 2>&1; then
   publish_dir ".github/workflows" || { say "could not publish .github/workflows" >&2; exit 1; }
 fi
+# Files the 1.6.0 step staged. Same reason the glossary files are published
+# here: the loop above lists files every project already has, so a path this
+# migration *adds* has no other route to the project. Without this the run
+# discards them at exit while stamping the metadata 1.6.0.
+for rel in ${NEW_FILES:-}; do
+  publish_file "$rel" || { say "could not publish $rel" >&2; exit 1; }
+done
 # The architecture-review runner. Published per file, not as a directory: it
 # sits inside `.sandcastle/`, which is project-owned — replacing that directory
 # wholesale would discard every project edit to the other modules.
@@ -1500,6 +1830,27 @@ if [ "${GLOSSARY_RENAME:-0}" = "1" ]; then
   publish_delete "CONTEXT.md" || { say "could not remove CONTEXT.md" >&2; exit 1; }
 fi
 publish_file ".afk-bootstrap.json" || { say "could not publish .afk-bootstrap.json" >&2; exit 1; }
+
+# The repository map, now that $TARGET is the finished project. It is the last
+# write for two reasons: it is the only artifact whose content depends on every
+# other change having landed, and until it exists the freshness check the 1.6.0
+# step wires has nothing to compare — so a project that reached 1.6.0 without a
+# map would go red on its first push.
+#
+# This is the one write that happens *after* the metadata, so it is not covered
+# by the rollback above: a failure here leaves a correctly migrated project with
+# a missing map rather than a half-migrated one, which is the safe direction.
+# The check is not silent about it either — the policy job regenerates and fails
+# until someone runs `node .sandcastle/repo-map.mjs`.
+if [ "${MAP_NEEDED:-0}" = "1" ]; then
+  # Not inside the `if` above: `say` is this script's reporter, and the failure
+  # branch has to leave the run successful rather than abort it.
+  if ( cd "$TARGET" && node .sandcastle/repo-map.mjs ); then
+    note "generated: .sandcastle/REPO-MAP.md"
+  else
+    echo "note: could not generate .sandcastle/REPO-MAP.md — run it by hand" >&2
+  fi
+fi
 
 # Every write is done; disarm the rollback rather than restoring over it.
 PUBLISHED_FILES=""

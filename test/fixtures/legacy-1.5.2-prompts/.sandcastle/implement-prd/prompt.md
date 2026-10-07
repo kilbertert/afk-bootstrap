@@ -24,12 +24,9 @@ Do not touch work that belongs to a different sub-issue.
 
 # CONTEXT
 
-Read `.sandcastle/REPO-MAP.md` first (where things live), then `GLOSSARY.md` and the relevant
-files under `docs/`, apply `.sandcastle/CODING_STANDARDS.md`, and any ADRs under `docs/adr/` before starting.
+Read the relevant files under `docs/` and any ADRs under `docs/adr/` before starting.
 Explore the repo and fill your context with the parts relevant to this
 sub-issue — especially test files that touch the area you'll change.
-Run the Economy ladder before choosing an implementation; stop at the first
-option that fully satisfies this sub-issue and the parent PRD contract.
 
 # EXECUTION
 
@@ -40,8 +37,7 @@ Use red-green-refactor where applicable.
 3. REPEAT until the sub-issue is done
 4. REFACTOR
 
-Before committing, run `npm run check`, then
-`node .sandcastle/policy-check.mjs commit`.
+Before committing, run `npm run typecheck` and `npm test`.
 
 If the repo has a project verification skill — a directory matching
 `.claude/skills/verify-*/` — and your change alters behavior a user can see,

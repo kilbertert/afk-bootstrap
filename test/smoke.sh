@@ -81,6 +81,9 @@ for f in \
   .sandcastle/policy-check.mjs .sandcastle/consensus-contract.json .sandcastle/trusted-pr-delivery.sh \
   .sandcastle/implement.md .sandcastle/Dockerfile .sandcastle/.env.example .sandcastle/.gitignore \
   .sandcastle/CODING_STANDARDS.md GLOSSARY.md CLAUDE.md docs/afk-workflow.md \
+  .sandcastle/mcp-config.ts .sandcastle/mcp-config.check.ts \
+  .sandcastle/repo-map.mjs .sandcastle/repo-map.check.mjs .sandcastle/REPO-MAP.md \
+  .sandcastle/profile-network.ts .sandcastle/profile-network.check.ts \
   docs/agents/issue-tracker.md docs/agents/triage-labels.md docs/agents/domain.md \
   .sandcastle/implement-prd/prompt.md .sandcastle/write-prd-pr \
   .sandcastle/implement .sandcastle/write-pr .sandcastle/review .sandcastle/implement-pr \
@@ -131,6 +134,13 @@ node -e '
 ' "$TARGET/package.json" || { echo "scaffold names a test script with no runner" >&2; exit 1; }
 
 grep -q '# Existing glossary' "$TARGET/GLOSSARY.md" || { echo "existing glossary was overwritten" >&2; exit 1; }
+# A fresh scaffold must pass its own map freshness check. The map lists the
+# package scripts and the files at the repository root, so generating it before
+# `package.json` is merged leaves it describing a tree the scaffold then changes
+# — and the policy job regenerates from the finished repository and compares, so
+# an untouched new project would go red on its first push.
+( cd "$TARGET" && node .sandcastle/repo-map.check.mjs >/dev/null ) \
+  || { echo "a fresh scaffold ships a stale REPO-MAP.md" >&2; exit 1; }
 if grep -q '{{PROJECT_NAME}}' "$WORKTREE_TARGET/GLOSSARY.md"; then
   echo "generated glossary contains an unrendered project name" >&2
   exit 1
@@ -140,6 +150,14 @@ grep -q "# fake-$LANGUAGE-project" "$WORKTREE_TARGET/GLOSSARY.md" \
 grep -q '# Existing workflow' "$TARGET/docs/afk-workflow.md" || { echo "existing workflow was overwritten" >&2; exit 1; }
 grep -q '# Existing domain docs' "$TARGET/docs/agents/domain.md" || { echo "existing domain docs were overwritten" >&2; exit 1; }
 grep -q '# Existing ADR' "$TARGET/docs/adr/0001-existing.md" || { echo "existing ADR was overwritten" >&2; exit 1; }
+# The map's tree section lists these. A map generated from a shadow tree that
+# reaches the real project through symlinks omits them — the generator skips
+# symlinked entries — so the map is generated from the finished tree instead, and
+# this is what says so.
+grep -q 'docs/' "$TARGET/.sandcastle/REPO-MAP.md" \
+  || { echo "repository map omits docs/ — generated from something other than the project" >&2; exit 1; }
+grep -q 'docs/agents/' "$TARGET/.sandcastle/REPO-MAP.md" \
+  || { echo "repository map tree does not descend into the project" >&2; exit 1; }
 grep -q 'GRILLING_COMPLETE' "$CODEX_INSTRUCTIONS" || { echo "Codex planning phase gate missing" >&2; exit 1; }
 grep -q 'explicitly invoke' "$CODEX_INSTRUCTIONS" || { echo "Codex explicit phase invocation gate missing" >&2; exit 1; }
 grep -q 'GRILLING_COMPLETE' "$TARGET/CLAUDE.md" || { echo "Claude Code planning phase gate missing" >&2; exit 1; }
@@ -205,7 +223,7 @@ fi
 node -e '
   const fs = require("fs");
   const metadata = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.5.3" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
+  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.6.0" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
   // The assigned schedule hour must be recorded, or the next project on this
   // host has nothing to consult and collides by default — the defect that
   // made every project architecture review run on the same minute.
@@ -367,6 +385,14 @@ fi
 UPGRADE_TARGET="$TMP/upgrade-$LANGUAGE"
 mkdir -p "$UPGRADE_TARGET/.github" "$UPGRADE_TARGET/docs"
 cp -R "$S/test/fixtures/legacy-1.1.x/." "$UPGRADE_TARGET/"
+# The 1.5.2 prompts, so the map-pointer migration is exercised against real
+# previous output. This matters more than it looks: the pointers are added by
+# anchored replacement, the two sentences differ per prompt, and a missed anchor
+# is *silent* (the loop reads it as "the author rewrote this line and left it
+# alone"). Without a fixture that carries all five shapes, a step that migrates
+# four of them passes green.
+cp -R "$S/test/fixtures/legacy-1.5.2-prompts/.sandcastle" "$UPGRADE_TARGET/"
+cp "$S/test/fixtures/legacy-1.5.2-prompts/implement.md" "$UPGRADE_TARGET/.sandcastle/implement.md"
 
 # A project with no schedule to carry over and no --cron-hour must be refused,
 # not silently defaulted: a default is what put every project on one hour.
@@ -379,6 +405,18 @@ fi
 grep -q -- '--cron-hour' <<<"$("$S/upgrade-afk.sh" "$NO_HOUR" 2>&1)" \
   || { echo "refusal did not name the --cron-hour fix" >&2; exit 1; }
 rm -rf "$NO_HOUR"
+
+# A dry run must name everything the real run would write, including the map —
+# which is generated in the publish tail rather than staged with the other new
+# files, so it is the one path a list-driven report can miss. The operator's
+# reason to dry-run is exactly this list.
+DRY_TARGET="$TMP/upgrade-dry-$LANGUAGE"
+mkdir -p "$DRY_TARGET/.github" "$DRY_TARGET/docs"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$DRY_TARGET/"
+DRY_OUT="$("$S/upgrade-afk.sh" "$DRY_TARGET" --cron-hour 13 --dry-run)"
+grep -q 'REPO-MAP.md' <<<"$DRY_OUT" \
+  || { echo "a dry run does not report the repository map it would create" >&2; exit 1; }
+rm -rf "$DRY_TARGET"
 
 UPGRADE_OUT="$("$S/upgrade-afk.sh" "$UPGRADE_TARGET" --cron-hour 13)"
 printf '%s\n' "$UPGRADE_OUT"
@@ -394,7 +432,7 @@ grep -q 'claude-deepseek' "$UPGRADE_TARGET/.sandcastle/main.ts" \
 node -e '
   const fs = require("fs");
   const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-  if (m.afk_template_version !== "1.5.3") process.exit(1);
+  if (m.afk_template_version !== "1.6.0") process.exit(1);
   // Cumulative migration: a 1.1.x project must come out of ONE run with both
   // the 1.2.0 provider migration and the 1.3.2 schedule migration applied, and
   // the assigned hour recorded. A step gated on from_minor alone would leave a
@@ -413,6 +451,76 @@ grep -qE 'cron: "0 ([0-9]|1[0-9]|2[0-3]) \* \* 1-5"' \
   || { echo "upgrade did not render a valid cron hour" >&2; exit 1; }
 grep -qE '^\s*timeout-minutes: 75\s*$' "$UPGRADE_TARGET/.github/workflows/architecture-review.yml" \
   || { echo "upgrade did not raise the architecture-review job budget" >&2; exit 1; }
+# The 1.6.0 files are staged into a copy, and a staged file is not a delivered
+# one: `profile.ts` gains `import ... from "./mcp-config.js"` in the same step, so
+# a run that stamps 1.6.0 without publishing them leaves a project whose `pnpm afk`
+# dies on a module that cannot be resolved. Asserted on the migrated project, not
+# on the template, because the template was never the problem.
+for f in \
+  .sandcastle/mcp-config.ts .sandcastle/mcp-config.check.ts \
+  .sandcastle/repo-map.mjs .sandcastle/repo-map.check.mjs \
+  .sandcastle/REPO-MAP.md; do
+  [ -e "$UPGRADE_TARGET/$f" ] || { echo "upgrade did not publish $f" >&2; exit 1; }
+done
+grep -q 'mcp-config.js' "$UPGRADE_TARGET/.sandcastle/profile.ts" \
+  || { echo "migrated profile.ts lost its MCP import" >&2; exit 1; }
+grep -qF -- '--mcp-config /home/agent/.afk-mcp.json' "$UPGRADE_TARGET/.sandcastle/Dockerfile" \
+  || { echo "upgrade did not wire the sandbox MCP config into the wrapper" >&2; exit 1; }
+grep -q 'serena-agent' "$UPGRADE_TARGET/.sandcastle/Dockerfile" \
+  || { echo "upgrade did not add the serena layer" >&2; exit 1; }
+# npm 11 skips an unnamed postinstall, and claude-code fetches its native binary
+# from one. A migrated project that rebuilds without this gets a green build
+# around a claude that cannot start.
+grep -qF 'npm install --global --allow-scripts=@anthropic-ai/claude-code' \
+  "$UPGRADE_TARGET/.sandcastle/Dockerfile" \
+  || { echo "upgrade left the npm postinstall unapproved" >&2; exit 1; }
+# The freshness check the 1.6.0 CI step wires must pass against what the migration
+# wrote. The map is generated after publication, from the finished project, so it
+# is run here — the migration's own output is what is under test.
+( cd "$UPGRADE_TARGET" && node .sandcastle/repo-map.check.mjs >/dev/null ) \
+  || { echo "upgrade wrote a repository map that is already stale" >&2; exit 1; }
+# The same, on the path that renames a root document. A pre-1.4 project holds
+# CONTEXT.md; the map must come out describing GLOSSARY.md, because that is what
+# the tree will hold. Generating before the rename publishes leaves the map
+# naming a root file that no longer exists.
+RENAME_TARGET="$TMP/upgrade-rename-$LANGUAGE"
+mkdir -p "$RENAME_TARGET/.github" "$RENAME_TARGET/docs"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$RENAME_TARGET/"
+printf '# project glossary\n\nterms\n' > "$RENAME_TARGET/CONTEXT.md"
+"$S/upgrade-afk.sh" "$RENAME_TARGET" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project holding CONTEXT.md" >&2; exit 1; }
+[ ! -e "$RENAME_TARGET/CONTEXT.md" ] || { echo "upgrade left CONTEXT.md in place" >&2; exit 1; }
+grep -q 'GLOSSARY.md' "$RENAME_TARGET/.sandcastle/REPO-MAP.md" \
+  || { echo "repository map does not name the renamed glossary" >&2; exit 1; }
+if grep -q 'CONTEXT.md' "$RENAME_TARGET/.sandcastle/REPO-MAP.md"; then
+  echo "repository map still names CONTEXT.md after the rename" >&2; exit 1
+fi
+( cd "$RENAME_TARGET" && node .sandcastle/repo-map.check.mjs >/dev/null ) \
+  || { echo "the rename path writes a stale repository map" >&2; exit 1; }
+# All five implementation prompts gain the pointer, including the two whose
+# read list starts somewhere other than `Read `GLOSSARY` — the PRD prompt lists
+# docs first. A single anchor migrates four and reports success for five.
+for prompt in \
+  .sandcastle/implement.md \
+  .sandcastle/implement-prompt.md \
+  .sandcastle/implement/prompt.md \
+  .sandcastle/implement-pr/prompt.md \
+  .sandcastle/implement-prd/prompt.md; do
+  grep -q 'REPO-MAP.md' "$UPGRADE_TARGET/$prompt" \
+    || { echo "upgrade left $prompt without the map pointer" >&2; exit 1; }
+done
+# The `claude` dispatch arm is the only one with no --settings flag, so the
+# substitution anchored on that flag cannot reach it — and that arm is paired
+# with the mounts that are no longer conditional. A mount the wrapper does not
+# read is a server the agent does not get.
+grep -qF 'claude) exec /usr/local/bin/claude-real --mcp-config /home/agent/.afk-mcp.json' \
+  "$UPGRADE_TARGET/.sandcastle/Dockerfile" \
+  || { echo "upgrade left the claude arm without --mcp-config" >&2; exit 1; }
+grep -qF '...mcpConfigMounts(),' "$UPGRADE_TARGET/.sandcastle/profile.ts" \
+  || { echo "upgrade left the MCP mounts out of profile.ts" >&2; exit 1; }
+if grep -q '? { mounts: \[{ hostPath: settingsPath' "$UPGRADE_TARGET/.sandcastle/profile.ts"; then
+  echo "migrated profile.ts still gates the mounts on settingsPath" >&2; exit 1
+fi
 # A project document is its own source of truth: the migration reports it, never rewrites it.
 grep -q 'afk-workflow.md' <<<"$UPGRADE_OUT" \
   || { echo "upgrade silently ignored project prose naming a retired profile" >&2; exit 1; }
@@ -1126,19 +1234,23 @@ cp "$S/test/fixtures/architecture-review-buggy/extraction.md" \
    "$PRE15/.sandcastle/architecture-review/extraction.md"
 "$S/upgrade-afk.sh" "$PRE15" >/dev/null \
   || { echo "upgrade refused a project below 1.5" >&2; exit 1; }
+# Asserted against TEMPLATE_VERSION rather than a literal. A literal is a trap
+# that fires on the next bump, not on the change that broke anything: this step's
+# job is "the run records the version it actually produced", and the version it
+# produced is whatever the run was for.
 node -e '
   const fs = require("fs");
   const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-  if (m.afk_template_version !== "1.5.3") {
+  if (m.afk_template_version !== process.argv[2]) {
     console.error("a pre-1.5 project did not reach the template version: " + m.afk_template_version);
     process.exit(1);
   }
-' "$PRE15/.afk-bootstrap.json" \
+' "$PRE15/.afk-bootstrap.json" "$(tr -d '[:space:]' < "$S/TEMPLATE_VERSION")" \
   || { echo "a pre-1.5 project was not stamped with the template version" >&2; exit 1; }
 # shellcheck disable=SC2016  # the patterns are prompt text; backticks are literal.
 if grep -qF -e 'in your `<output>` block' -e 'and the exact `<output>`' \
    "$PRE15/.sandcastle/architecture-review/prompt.md"; then
-  echo "a pre-1.5 project was stamped 1.5.3 with a produce prompt still asking for structured output" >&2; exit 1
+  echo "a pre-1.5 project was stamped current with a produce prompt still asking for structured output" >&2; exit 1
 fi
 grep -qF 'in prose' "$PRE15/.sandcastle/architecture-review/prompt.md" \
   || { echo "the prose step did not reach a project upgraded from below 1.5" >&2; exit 1; }

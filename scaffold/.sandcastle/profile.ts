@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { claudeCode, type AgentProvider, type SandboxProvider } from "@ai-hero/sandcastle";
 import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 import { sandboxNetworkOptions } from "./profile-network.js";
+import { mcpConfigMounts, writeMcpConfig } from "./mcp-config.js";
 
 // Endpoints are supplied as host settings files mounted read-only into the
 // sandbox, never baked into the image. A baked key lands in an image layer
@@ -23,6 +24,10 @@ export function claudeProfile(
   profile = process.env.AFK_PROFILE,
   env?: Record<string, string>,
 ): { agent: AgentProvider; sandbox: SandboxProvider } {
+  // Materialise the MCP config before the sandbox is created — the mount below
+  // needs a file to point at, and writing it per run is what keeps it true to
+  // what this host actually has.
+  writeMcpConfig();
   if (profile && !(profile in profiles)) {
     throw new Error(`Unsupported profile; use ${Object.keys(profiles).join(", ")}.`);
   }
@@ -57,16 +62,43 @@ export function claudeProfile(
       // on the default bridge. The options come from `profile-network.ts` so
       // `profile-network.check.ts` asserts the exact object this call splats —
       // the helper's return value alone would leave a broken wiring green.
-      // Host networking is required only by profiles whose endpoint is the
-      // host-loopback relay: a default-bridge container cannot reach the host's
-      // 127.0.0.1. Every other profile talks to a public HTTPS origin and stays
-      // on the default bridge. The options come from `profile-network.ts` so
-      // `profile-network.check.ts` asserts the exact object this call splats —
-      // the helper's return value alone would leave a broken wiring green.
       ...sandboxNetworkOptions(profile),
-      ...(settingsPath
-        ? { mounts: [{ hostPath: settingsPath, sandboxPath: "/home/agent/.afk-profile-settings.json", readonly: true }] }
-        : {}),
+      // The MCP servers the agent gets. Two, deliberately, and they are the
+      // read-only code-intelligence pair: `serena` (LSP symbols, baked into the
+      // image) and `codebase-memory-mcp` (the repository graph, mounted from the
+      // host — a 258 MB static binary, so mounting beats growing every project's
+      // image, and an upgrade takes effect without a rebuild).
+      //
+      // NOT bundled, on purpose:
+      //   * team-memory — it holds other projects' memory. An agent working an
+      //     issue in this repository must not be able to read it.
+      //   * google-scholar — needs a Serper API key, and nothing in an
+      //     implementation task needs to search the open web.
+      // If you add a server here, ask what it can reach that the agent cannot.
+      //
+      // A server whose command is missing is dropped from the file rather than
+      // declared with a path that may not exist: claude silently skips a server
+      // it cannot start (verified — the session still exits 0), so a dead path
+      // would degrade the agent's tools with no signal anywhere. mcp-config.ts
+      // owns that decision; mcp-config.check.ts asserts it.
+      // The mounts are unconditional. The MCP pair is independent of the
+      // endpoint: the graph is mounted from the host and serena is in the image,
+      // both regardless of how the agent authenticates. Gating them on
+      // `settingsPath` (as this started out) made the setting a proxy for
+      // "is this a non-default profile" — and the `claude` profile is the one
+      // that resolves no settings file, so the default profile was exactly the
+      // one that got no mounts, no config file, and therefore no servers. The
+      // wrapper's `claude` arm also passes no --mcp-config, so nothing else
+      // supplied them: not a wrong path, just absent.
+      mounts: [
+        // Present only when the profile resolves an endpoint, because without
+        // one there is no file to mount — the wrapper's `claude` arm uses the
+        // Anthropic default and reads no settings.
+        ...(settingsPath
+          ? [{ hostPath: settingsPath, sandboxPath: "/home/agent/.afk-profile-settings.json", readonly: true }]
+          : []),
+        ...mcpConfigMounts(),
+      ],
     }),
   };
 }

@@ -941,6 +941,106 @@ grep -qF 'changed: .sandcastle/architecture-review/extraction.md' <<<"$ARCHPROMP
 grep -qE '^\s*timeout-minutes: 75\s*$' "$ARCHPROMPT/.github/workflows/architecture-review.yml" \
   || { echo "the prompt step did not carry the earlier budget step with it" >&2; exit 1; }
 
+# A project that fixed the prompt BY HAND keeps its own wording. AI-Ops and
+# genesis-evidence both did, in their own commits with their own rationale.
+# Rewriting them would discard that repair and, worse, would re-import this
+# scaffold's wording over a prompt already carrying the fix.
+HANDFIX="$TMP/handfix-$LANGUAGE"
+mkdir -p "$HANDFIX/.github/workflows" "$HANDFIX/.sandcastle/architecture-review"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$HANDFIX/"
+node -e '
+  const fs = require("fs"), f = process.argv[1] + "/.afk-bootstrap.json";
+  const m = JSON.parse(fs.readFileSync(f, "utf8"));
+  m.afk_template_version = "1.5.0"; m.cron_hour = 13;
+  fs.writeFileSync(f, JSON.stringify(m, null, 2) + "\n");
+' "$HANDFIX"
+cp "$S/scaffold/.sandcastle/profile.ts" "$HANDFIX/.sandcastle/profile.ts"
+cp "$S/scaffold/.github/workflows/architecture-review.yml" "$HANDFIX/.github/workflows/"
+node -e '
+  const fs = require("fs"), p = process.argv[1] + "/.github/workflows/architecture-review.yml";
+  fs.writeFileSync(p, fs.readFileSync(p, "utf8").split("__AFK_CRON_HOUR__").join("13"));
+' "$HANDFIX"
+printf '# TASK\n\nReport it as structured output — you do not create the issue.\n' \
+  > "$HANDFIX/.sandcastle/architecture-review/prompt.md"
+printf '# EMIT\n\n"title": "PRD title (the workflow creates the issue from this)"\n' \
+  > "$HANDFIX/.sandcastle/architecture-review/extraction.md"
+"$S/upgrade-afk.sh" "$HANDFIX" >/dev/null \
+  || { echo "upgrade refused a project whose prompt was repaired by hand" >&2; exit 1; }
+grep -qF 'Report it as structured output' \
+  "$HANDFIX/.sandcastle/architecture-review/prompt.md" \
+  || { echo "the migration overwrote a hand-repaired prompt" >&2; exit 1; }
+grep -qF 'the workflow creates the issue from this' \
+  "$HANDFIX/.sandcastle/architecture-review/extraction.md" \
+  || { echo "the migration overwrote a hand-repaired extract prompt" >&2; exit 1; }
+
+# A project that reworded ONE of the two examples and left the other. Gating the
+# whole file on a single anchor would call this repaired and skip it, leaving the
+# surviving "matches the issue you created" in place — Devin Review's example on
+# #57. Each anchor migrates on its own.
+PARTIAL="$TMP/partial-extract-$LANGUAGE"
+mkdir -p "$PARTIAL/.github/workflows" "$PARTIAL/.sandcastle/architecture-review"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$PARTIAL/"
+node -e '
+  const fs = require("fs"), f = process.argv[1] + "/.afk-bootstrap.json";
+  const m = JSON.parse(fs.readFileSync(f, "utf8"));
+  m.afk_template_version = "1.5.0"; m.cron_hour = 13;
+  fs.writeFileSync(f, JSON.stringify(m, null, 2) + "\n");
+' "$PARTIAL"
+cp "$S/scaffold/.sandcastle/profile.ts" "$PARTIAL/.sandcastle/profile.ts"
+cp "$S/scaffold/.github/workflows/architecture-review.yml" "$PARTIAL/.github/workflows/"
+node -e '
+  const fs = require("fs"), p = process.argv[1] + "/.github/workflows/architecture-review.yml";
+  fs.writeFileSync(p, fs.readFileSync(p, "utf8").split("__AFK_CRON_HOUR__").join("13"));
+' "$PARTIAL"
+# Prompt already repair-free, so only the extraction half of the step is under
+# test here.
+printf '# TASK\n\nReport it as structured output — you do not create the issue.\n' \
+  > "$PARTIAL/.sandcastle/architecture-review/prompt.md"
+sed 's/"body": "The PRD body you published.",/"body": "The PRD body for the workflow to publish.",/' \
+  "$S/test/fixtures/architecture-review-buggy/extraction.md" \
+  > "$PARTIAL/.sandcastle/architecture-review/extraction.md"
+grep -qF '"title": "PRD title (matches the issue you created)"' \
+  "$PARTIAL/.sandcastle/architecture-review/extraction.md" \
+  || { echo "the partial fixture lost the legacy title example" >&2; exit 1; }
+"$S/upgrade-afk.sh" "$PARTIAL" >/dev/null \
+  || { echo "upgrade refused the partial fixture" >&2; exit 1; }
+if grep -qF 'the issue you created' \
+   "$PARTIAL/.sandcastle/architecture-review/extraction.md"; then
+  echo "a reworded body example hid the legacy title instruction" >&2; exit 1
+fi
+grep -qF 'The PRD body for the workflow to publish.' \
+  "$PARTIAL/.sandcastle/architecture-review/extraction.md" \
+  || { echo "the migration overwrote the project's reworded body example" >&2; exit 1; }
+
+# An example reworded into words the exact anchors do not match, still naming an
+# issue the agent created. Neither anchor fires, both halves read as "already
+# migrated", and the file would be stamped with the new version — unreachable by
+# any later run. The step must refuse instead of recording a repair it did not do.
+RESIDUAL="$TMP/residual-extract-$LANGUAGE"
+mkdir -p "$RESIDUAL/.github/workflows" "$RESIDUAL/.sandcastle/architecture-review"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$RESIDUAL/"
+node -e '
+  const fs = require("fs"), f = process.argv[1] + "/.afk-bootstrap.json";
+  const m = JSON.parse(fs.readFileSync(f, "utf8"));
+  m.afk_template_version = "1.5.0"; m.cron_hour = 13;
+  fs.writeFileSync(f, JSON.stringify(m, null, 2) + "\n");
+' "$RESIDUAL"
+cp "$S/scaffold/.sandcastle/profile.ts" "$RESIDUAL/.sandcastle/profile.ts"
+cp "$S/scaffold/.github/workflows/architecture-review.yml" "$RESIDUAL/.github/workflows/"
+node -e '
+  const fs = require("fs"), p = process.argv[1] + "/.github/workflows/architecture-review.yml";
+  fs.writeFileSync(p, fs.readFileSync(p, "utf8").split("__AFK_CRON_HOUR__").join("13"));
+' "$RESIDUAL"
+printf '# TASK\n\nReport it as structured output — you do not create the issue.\n' \
+  > "$RESIDUAL/.sandcastle/architecture-review/prompt.md"
+sed -e 's/"title": "PRD title (matches the issue you created)"/"title": "Title of the issue you created"/' \
+    -e 's/"body": "The PRD body you published.",/"body": "The PRD body for the workflow to publish.",/' \
+  "$S/test/fixtures/architecture-review-buggy/extraction.md" \
+  > "$RESIDUAL/.sandcastle/architecture-review/extraction.md"
+if "$S/upgrade-afk.sh" "$RESIDUAL" >/dev/null 2>&1; then
+  echo "the migration stamped a project whose extract pass still names the agent's issue" >&2; exit 1
+fi
+
 # A project whose cron this template did NOT write keeps its own schedule, but
 # the hour it already occupies must still be recorded. Without that the record
 # says the project holds no hour, and the next project on this host reads that

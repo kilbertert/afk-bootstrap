@@ -205,7 +205,7 @@ fi
 node -e '
   const fs = require("fs");
   const metadata = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.5.2" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
+  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.5.3" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
   // The assigned schedule hour must be recorded, or the next project on this
   // host has nothing to consult and collides by default — the defect that
   // made every project architecture review run on the same minute.
@@ -394,7 +394,7 @@ grep -q 'claude-deepseek' "$UPGRADE_TARGET/.sandcastle/main.ts" \
 node -e '
   const fs = require("fs");
   const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-  if (m.afk_template_version !== "1.5.2") process.exit(1);
+  if (m.afk_template_version !== "1.5.3") process.exit(1);
   // Cumulative migration: a 1.1.x project must come out of ONE run with both
   // the 1.2.0 provider migration and the 1.3.2 schedule migration applied, and
   // the assigned hour recorded. A step gated on from_minor alone would leave a
@@ -898,6 +898,15 @@ if grep -qF -e 'the issue you created' \
    "$S/scaffold/.sandcastle/architecture-review/extraction.md"; then
   echo "the scaffold's extract pass still asks for the issue the agent created" >&2; exit 1
 fi
+# And the produce prompt must not ask for `<output>` either: sandcastle's
+# `runWithExtraction` runs that phase with no output definition, and its own docs
+# say the produce prompt "should contain no JSON-emission instructions". Asking
+# for both blocks is the duplication the wrapper exists to remove.
+# shellcheck disable=SC2016  # the pattern is prompt text; backticks are literal.
+if grep -qF -e 'in your `<output>` block' \
+   "$S/scaffold/.sandcastle/architecture-review/prompt.md"; then
+  echo "the scaffold's produce prompt still asks for an <output> block" >&2; exit 1
+fi
 ARCHPROMPT_OUT="$("$S/upgrade-afk.sh" "$ARCHPROMPT" 2>&1)" \
   || { echo "upgrade refused a project needing the prompt step" >&2; exit 1; }
 if grep -qF -e '/to-prd-project' "$ARCHPROMPT/.sandcastle/architecture-review/prompt.md"; then
@@ -908,6 +917,21 @@ grep -qF 'Do NOT create the issue yourself' \
   || { echo "the migrated prompt does not hand publication back to the workflow" >&2; exit 1; }
 grep -qF 'report it as a PRD' "$ARCHPROMPT/.sandcastle/architecture-review/prompt.md" \
   || { echo "the migrated prompt still says the agent publishes" >&2; exit 1; }
+# shellcheck disable=SC2016  # the pattern is prompt text; backticks are literal.
+if grep -qF -e 'emit a `skipped` output and' \
+   "$ARCHPROMPT/.sandcastle/architecture-review/prompt.md"; then
+  echo "the migrated prompt still asks the produce pass for structured output" >&2; exit 1
+fi
+# The tail paragraph is the other half of the same instruction: step 4 can be
+# converged while the paragraph below still sends the produce pass to the exact
+# schema. #57 rewrote step 4 and left this, which is why it is asserted here.
+# shellcheck disable=SC2016
+if grep -qF -e 'and the exact `<output>` schema' \
+   "$ARCHPROMPT/.sandcastle/architecture-review/prompt.md"; then
+  echo "the migrated prompt still sends the produce pass to the output schema" >&2; exit 1
+fi
+grep -qF 'The extraction' "$ARCHPROMPT/.sandcastle/architecture-review/prompt.md" \
+  || { echo "the migrated prompt does not hand the schema to the extraction pass" >&2; exit 1; }
 grep -qF 'changed: .sandcastle/architecture-review/prompt.md' <<<"$ARCHPROMPT_OUT" \
   || { echo "the migration edited the prompt without reporting it" >&2; exit 1; }
 if grep -qF -e 'the issue you created' \
@@ -1021,6 +1045,53 @@ sed -e 's/"title": "PRD title (matches the issue you created)"/"title": "Title o
 if "$S/upgrade-afk.sh" "$RESIDUAL" >/dev/null 2>&1; then
   echo "the migration stamped a project whose extract pass still names the agent's issue" >&2; exit 1
 fi
+
+# A project that ran the PREVIOUS revision of the 1.5.2 step. It records 1.5.2 —
+# the version that revision stamped — and its prompt already hands publication to
+# the workflow (the `/to-prd-project` marker is gone) while step 4 and the tail
+# still ask the produce pass for `<output>`. That is the gap #57 left, and the
+# version it records is why a wider 1.5.2 step can never reach it: the script
+# returns early once the recorded version equals the template version, so the
+# 1.5.3 step is the only carrier.
+HALFFIX="$TMP/halffix-$LANGUAGE"
+mkdir -p "$HALFFIX/.github/workflows" "$HALFFIX/.sandcastle/architecture-review"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$HALFFIX/"
+node -e '
+  const fs = require("fs"), f = process.argv[1] + "/.afk-bootstrap.json";
+  const m = JSON.parse(fs.readFileSync(f, "utf8"));
+  m.afk_template_version = "1.5.2"; m.cron_hour = 13;
+  fs.writeFileSync(f, JSON.stringify(m, null, 2) + "\n");
+' "$HALFFIX"
+cp "$S/scaffold/.sandcastle/profile.ts" "$HALFFIX/.sandcastle/profile.ts"
+cp "$S/scaffold/.github/workflows/architecture-review.yml" "$HALFFIX/.github/workflows/"
+node -e '
+  const fs = require("fs"), p = process.argv[1] + "/.github/workflows/architecture-review.yml";
+  fs.writeFileSync(p, fs.readFileSync(p, "utf8").split("__AFK_CRON_HOUR__").join("13"));
+' "$HALFFIX"
+# The text that revision actually shipped, kept as a fixture captured from git
+# rather than retyped. A hand-written approximation is the false green this
+# fixture exists to avoid.
+cp "$S/test/fixtures/architecture-review-1.5.2-prev/prompt.md" \
+   "$HALFFIX/.sandcastle/architecture-review/prompt.md"
+cp "$S/test/fixtures/architecture-review-1.5.2-prev/extraction.md" \
+   "$HALFFIX/.sandcastle/architecture-review/extraction.md"
+# shellcheck disable=SC2016  # the pattern is prompt text; backticks are literal.
+grep -qF -e 'in your `<output>` block' "$HALFFIX/.sandcastle/architecture-review/prompt.md" \
+  || { echo "the half-fixed fixture does not carry the produce-pass output request" >&2; exit 1; }
+"$S/upgrade-afk.sh" "$HALFFIX" >/dev/null \
+  || { echo "upgrade refused a project holding the previous revision of this step" >&2; exit 1; }
+# shellcheck disable=SC2016
+if grep -qF -e 'in your `<output>` block' \
+   "$HALFFIX/.sandcastle/architecture-review/prompt.md"; then
+  echo "a project already stamped 1.5.2 kept the produce-pass output request" >&2; exit 1
+fi
+# shellcheck disable=SC2016
+if grep -qF -e 'and the exact `<output>` schema' \
+   "$HALFFIX/.sandcastle/architecture-review/prompt.md"; then
+  echo "a project already stamped 1.5.2 kept the schema paragraph" >&2; exit 1
+fi
+grep -qF 'in prose' "$HALFFIX/.sandcastle/architecture-review/prompt.md" \
+  || { echo "the produce-pass prose edit did not reach an already-1.5.2 project" >&2; exit 1; }
 
 # A project whose cron this template did NOT write keeps its own schedule, but
 # the hour it already occupies must still be recorded. Without that the record

@@ -300,6 +300,11 @@ cp "$TARGET/.afk-bootstrap.json" "$WORK/.afk-bootstrap.json"
 # would silently restore the original files. Each step that finds prose appends.
 PROSE=""
 
+# Set by the 1.6.0 step when the project has no repository map. The map is
+# generated after publication, not during the transform phase — see the note at
+# that step for why the finished tree is the only correct input.
+MAP_NEEDED=0
+
 STEP_RAN=0
 # `-lt 2`: a project already at 1.2.0 has had the provider migration. Re-running
 # it is not merely wasted — the step refuses a profile.ts it cannot recognise as
@@ -1313,36 +1318,19 @@ SERENAJS
     exit 1
   fi
 
-  # 1c. The map itself, generated from the project's own shape. The policy job
-  #     this step also wires fails on a missing or stale map, so a project that
-  #     reaches 1.6.0 without one would go red on its first push.
-  #
-  #     Generated from the *project*, not from $WORK. $WORK is a staging copy of
-  #     `.sandcastle/` and `.github/workflows/` only — the map reads the whole
-  #     tree, plus `docs/`, `GLOSSARY.md` and `package.json` at the root, so a map
-  #     written from there describes a tree that does not exist. The policy job's
-  #     freshness check regenerates from the real project and compares, so that
-  #     map would be committed already stale and fail on the project's first push
-  #     — the exact failure this file is meant to prevent.
-  #
-  #     So: read $TARGET, write $WORK. The generator is run from the project with
-  #     --stdout, which prints the map without creating the file, and the output
-  #     is staged like any other change. That matters beyond tidiness — a refused
-  #     migration must leave the project byte-identical, and a generator that
-  #     wrote into $TARGET during the transform phase would plant an untracked
-  #     file in a project the run then declines to migrate.
+  # 1c. The map is *not* generated here. It has to describe the published tree,
+  #     and the glossary above renames a root document in the stage — so a map
+  #     built now would list CONTEXT.md while the publication writes GLOSSARY.md,
+  #     and the freshness check this step wires would fail on the first push.
+  #     Generating from a shadow copy instead does not work either: the generator
+  #     skips symlinked entries, so a shadow built by linking the real tree loses
+  #     `docs/` from the map's tree section. It is generated in the publish phase
+  #     below, where $TARGET *is* the finished project, and remembered here.
   if [ -e "$TARGET/.sandcastle/REPO-MAP.md" ]; then
     note "REPO-MAP.md: already present"
   elif [ -e "$WORK/.sandcastle/repo-map.mjs" ]; then
-    mkdir -p "$WORK/.sandcastle"
-    ( cd "$TARGET" && node "$WORK/.sandcastle/repo-map.mjs" --stdout ) \
-      > "$WORK/.sandcastle/REPO-MAP.md" \
-      || echo "note: could not generate .sandcastle/REPO-MAP.md — run it by hand" >&2
-    if [ -s "$WORK/.sandcastle/REPO-MAP.md" ]; then
-      NEW_FILES="$NEW_FILES .sandcastle/REPO-MAP.md"
-    fi
+    MAP_NEEDED=1
   fi
-
 
   # 2. profile.ts gains the MCP import, the write call, and the mounts. All three
   #    are anchored on what the previous template wrote, so a project that has
@@ -1709,6 +1697,27 @@ if [ "${GLOSSARY_RENAME:-0}" = "1" ]; then
   publish_delete "CONTEXT.md" || { say "could not remove CONTEXT.md" >&2; exit 1; }
 fi
 publish_file ".afk-bootstrap.json" || { say "could not publish .afk-bootstrap.json" >&2; exit 1; }
+
+# The repository map, now that $TARGET is the finished project. It is the last
+# write for two reasons: it is the only artifact whose content depends on every
+# other change having landed, and until it exists the freshness check the 1.6.0
+# step wires has nothing to compare — so a project that reached 1.6.0 without a
+# map would go red on its first push.
+#
+# This is the one write that happens *after* the metadata, so it is not covered
+# by the rollback above: a failure here leaves a correctly migrated project with
+# a missing map rather than a half-migrated one, which is the safe direction.
+# The check is not silent about it either — the policy job regenerates and fails
+# until someone runs `node .sandcastle/repo-map.mjs`.
+if [ "${MAP_NEEDED:-0}" = "1" ]; then
+  # Not inside the `if` above: `say` is this script's reporter, and the failure
+  # branch has to leave the run successful rather than abort it.
+  if ( cd "$TARGET" && node .sandcastle/repo-map.mjs ); then
+    note "generated: .sandcastle/REPO-MAP.md"
+  else
+    echo "note: could not generate .sandcastle/REPO-MAP.md — run it by hand" >&2
+  fi
+fi
 
 # Every write is done; disarm the rollback rather than restoring over it.
 PUBLISHED_FILES=""

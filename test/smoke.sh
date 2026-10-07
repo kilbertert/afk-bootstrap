@@ -150,6 +150,14 @@ grep -q "# fake-$LANGUAGE-project" "$WORKTREE_TARGET/GLOSSARY.md" \
 grep -q '# Existing workflow' "$TARGET/docs/afk-workflow.md" || { echo "existing workflow was overwritten" >&2; exit 1; }
 grep -q '# Existing domain docs' "$TARGET/docs/agents/domain.md" || { echo "existing domain docs were overwritten" >&2; exit 1; }
 grep -q '# Existing ADR' "$TARGET/docs/adr/0001-existing.md" || { echo "existing ADR was overwritten" >&2; exit 1; }
+# The map's tree section lists these. A map generated from a shadow tree that
+# reaches the real project through symlinks omits them — the generator skips
+# symlinked entries — so the map is generated from the finished tree instead, and
+# this is what says so.
+grep -q 'docs/' "$TARGET/.sandcastle/REPO-MAP.md" \
+  || { echo "repository map omits docs/ — generated from something other than the project" >&2; exit 1; }
+grep -q 'docs/agents/' "$TARGET/.sandcastle/REPO-MAP.md" \
+  || { echo "repository map tree does not descend into the project" >&2; exit 1; }
 grep -q 'GRILLING_COMPLETE' "$CODEX_INSTRUCTIONS" || { echo "Codex planning phase gate missing" >&2; exit 1; }
 grep -q 'explicitly invoke' "$CODEX_INSTRUCTIONS" || { echo "Codex explicit phase invocation gate missing" >&2; exit 1; }
 grep -q 'GRILLING_COMPLETE' "$TARGET/CLAUDE.md" || { echo "Claude Code planning phase gate missing" >&2; exit 1; }
@@ -454,12 +462,29 @@ grep -q 'serena-agent' "$UPGRADE_TARGET/.sandcastle/Dockerfile" \
 grep -qF 'npm install --global --allow-scripts=@anthropic-ai/claude-code' \
   "$UPGRADE_TARGET/.sandcastle/Dockerfile" \
   || { echo "upgrade left the npm postinstall unapproved" >&2; exit 1; }
-# The freshness check the 1.6.0 CI step runs must pass against what the migration
-# wrote. Generating the map from the staging copy instead of the project produces
-# one that describes a tree that does not exist, and the project's first push goes
-# red — so the check is run here, where it is the migration's output under test.
+# The freshness check the 1.6.0 CI step wires must pass against what the migration
+# wrote. The map is generated after publication, from the finished project, so it
+# is run here — the migration's own output is what is under test.
 ( cd "$UPGRADE_TARGET" && node .sandcastle/repo-map.check.mjs >/dev/null ) \
   || { echo "upgrade wrote a repository map that is already stale" >&2; exit 1; }
+# The same, on the path that renames a root document. A pre-1.4 project holds
+# CONTEXT.md; the map must come out describing GLOSSARY.md, because that is what
+# the tree will hold. Generating before the rename publishes leaves the map
+# naming a root file that no longer exists.
+RENAME_TARGET="$TMP/upgrade-rename-$LANGUAGE"
+mkdir -p "$RENAME_TARGET/.github" "$RENAME_TARGET/docs"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$RENAME_TARGET/"
+printf '# project glossary\n\nterms\n' > "$RENAME_TARGET/CONTEXT.md"
+"$S/upgrade-afk.sh" "$RENAME_TARGET" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project holding CONTEXT.md" >&2; exit 1; }
+[ ! -e "$RENAME_TARGET/CONTEXT.md" ] || { echo "upgrade left CONTEXT.md in place" >&2; exit 1; }
+grep -q 'GLOSSARY.md' "$RENAME_TARGET/.sandcastle/REPO-MAP.md" \
+  || { echo "repository map does not name the renamed glossary" >&2; exit 1; }
+if grep -q 'CONTEXT.md' "$RENAME_TARGET/.sandcastle/REPO-MAP.md"; then
+  echo "repository map still names CONTEXT.md after the rename" >&2; exit 1
+fi
+( cd "$RENAME_TARGET" && node .sandcastle/repo-map.check.mjs >/dev/null ) \
+  || { echo "the rename path writes a stale repository map" >&2; exit 1; }
 # All five implementation prompts gain the pointer, including the two whose
 # read list starts somewhere other than `Read `GLOSSARY` — the PRD prompt lists
 # docs first. A single anchor migrates four and reports success for five.

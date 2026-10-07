@@ -1093,6 +1093,56 @@ fi
 grep -qF 'in prose' "$HALFFIX/.sandcastle/architecture-review/prompt.md" \
   || { echo "the produce-pass prose edit did not reach an already-1.5.2 project" >&2; exit 1; }
 
+# A project still BELOW 1.5. Its run applies the publication step (which inserts
+# this scaffold's step 4, asking the produce pass for `<output>`) and the prose
+# step in the SAME invocation. Gating the prose step on the version being
+# upgraded FROM would strand exactly this project: stamped 1.5.3, with the prompt
+# the publication step just installed still requesting structured output, and
+# never revisited because the recorded version then equals the template version.
+# The gate is therefore on the version being upgraded TO, and this fixture is the
+# one that fails if it ever narrows again.
+PRE15="$TMP/pre15-$LANGUAGE"
+mkdir -p "$PRE15/.github/workflows" "$PRE15/.sandcastle/architecture-review"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$PRE15/"
+node -e '
+  const fs = require("fs"), f = process.argv[1] + "/.afk-bootstrap.json";
+  const m = JSON.parse(fs.readFileSync(f, "utf8"));
+  // 1.4.0: below the publication step, below the prose step, and old enough that
+  // several unrelated migrations run first — the shape a real project arrives in.
+  m.afk_template_version = "1.4.0"; m.cron_hour = 13;
+  fs.writeFileSync(f, JSON.stringify(m, null, 2) + "\n");
+' "$PRE15"
+cp "$S/scaffold/.sandcastle/profile.ts" "$PRE15/.sandcastle/profile.ts"
+cp "$S/scaffold/.github/workflows/architecture-review.yml" "$PRE15/.github/workflows/"
+node -e '
+  const fs = require("fs"), p = process.argv[1] + "/.github/workflows/architecture-review.yml";
+  fs.writeFileSync(p, fs.readFileSync(p, "utf8").split("__AFK_CRON_HOUR__").join("13"));
+' "$PRE15"
+# The prompt this template actually shipped before the fix — the one the
+# publication step's anchors were written against.
+cp "$S/test/fixtures/architecture-review-buggy/prompt.md" \
+   "$PRE15/.sandcastle/architecture-review/prompt.md"
+cp "$S/test/fixtures/architecture-review-buggy/extraction.md" \
+   "$PRE15/.sandcastle/architecture-review/extraction.md"
+"$S/upgrade-afk.sh" "$PRE15" >/dev/null \
+  || { echo "upgrade refused a project below 1.5" >&2; exit 1; }
+node -e '
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  if (m.afk_template_version !== "1.5.3") {
+    console.error("a pre-1.5 project did not reach the template version: " + m.afk_template_version);
+    process.exit(1);
+  }
+' "$PRE15/.afk-bootstrap.json" \
+  || { echo "a pre-1.5 project was not stamped with the template version" >&2; exit 1; }
+# shellcheck disable=SC2016  # the patterns are prompt text; backticks are literal.
+if grep -qF -e 'in your `<output>` block' -e 'and the exact `<output>`' \
+   "$PRE15/.sandcastle/architecture-review/prompt.md"; then
+  echo "a pre-1.5 project was stamped 1.5.3 with a produce prompt still asking for structured output" >&2; exit 1
+fi
+grep -qF 'in prose' "$PRE15/.sandcastle/architecture-review/prompt.md" \
+  || { echo "the prose step did not reach a project upgraded from below 1.5" >&2; exit 1; }
+
 # A project whose cron this template did NOT write keeps its own schedule, but
 # the hour it already occupies must still be recorded. Without that the record
 # says the project holds no hour, and the next project on this host reads that

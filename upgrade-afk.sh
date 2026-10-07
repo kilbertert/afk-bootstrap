@@ -1210,7 +1210,16 @@ fi
 # multi-line anchor gates on its first line alone, and `SKIP_OLD`/`SKIP_NEW`
 # share theirs — the gate would open on text this step has already replaced,
 # where `subst`, which is exact, fails with "anchor not found".
-if [ "$from_minor" -eq 5 ] && [ "$from_patch" -lt 3 ] && [ "$to_minor" -ge 5 ]; then
+#
+# Gated on the version being upgraded TO, like the step above it, not on the one
+# being upgraded FROM. The 1.5.2 step runs for ANY project arriving below 1.5 and
+# installs `PRODUCE_OLD` — the very text this step removes — so a project that
+# starts at 1.2 and lands on 1.5.3 needs both, and a `from_minor` gate would
+# strand exactly those projects: stamped 1.5.3 with the produce prompt still
+# asking for structured output, and never revisited because the recorded version
+# then equals the template version. The anchors are conditional, so a prompt this
+# step has nothing to say about is left alone.
+if [ "$to_minor" -ge 5 ]; then
   STEP_RAN=1
   ARCH_PROMPT="$WORK/.sandcastle/architecture-review/prompt.md"
   # shellcheck disable=SC2016

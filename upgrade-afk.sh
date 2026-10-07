@@ -1066,8 +1066,9 @@ if [ "$to_minor" -ge 5 ]; then
   ARCH_PROMPT_OLD='4. Publish it via `/to-prd-project`.
 5. Apply the `source:architecture-review` label to the new issue.'
   # shellcheck disable=SC2016
-  ARCH_PROMPT_NEW='4. Write it up **in your `<output>` block** — title, full body, one-line
-   summary, and the candidates you considered.
+  ARCH_PROMPT_NEW='4. Write it up **in prose** — the proposed title, the full PRD body in
+   Markdown, and the candidates you considered. Keep it in your final
+   response; the next pass lifts it into structured output.
 
 **Do NOT create the issue yourself.** The workflow'"'"'s own *Publish PRD issue*
 step creates the issue from the `title` and `body` you emit. If you also run
@@ -1083,6 +1084,19 @@ step creates the issue from the `title` and `body` you emit. If you also run
   preference: your token has `issues=read` and label writes return 403, so a
   self-published issue also ends up **unlabelled** — the same failure that
   duplicated #178/#177 and #202/#201.'
+  # The skipped rule names an `<output>` the produce pass no longer emits. It is
+  # a rule about reporting, not about the defect, so it reads as harmless — but
+  # it is the same class of instruction as `/to-prd-project`: one that names a
+  # mechanism this step removed. Leaving it half-migrated is what the check below
+  # refuses for the other anchors.
+  # shellcheck disable=SC2016
+  ARCH_SKIP_OLD='- One PRD per run. If every reasonable candidate is already covered by a
+  prior `source:architecture-review` proposal, emit a `skipped` output and
+  stop.'
+  # shellcheck disable=SC2016
+  ARCH_SKIP_NEW='- One PRD per run. If every reasonable candidate is already covered by a
+  prior `source:architecture-review` proposal, say so plainly and stop — the
+  next pass reports it as `skipped`, so it needs no structured output here.'
   # shellcheck disable=SC2016
   ARCH_EXTRACT_OLD='End your response with a single `<output>` block, exactly as specified in the project skill `improve-codebase-architecture-project`. It has one of two shapes.'
   # shellcheck disable=SC2016
@@ -1109,6 +1123,7 @@ The `title` and `body` you emit are what the workflow will publish as the issue 
     # shape this step has not seen and must not half-migrate.
     subst "$ARCH_PROMPT" "$ARCH_PROMPT_OLD" "$ARCH_PROMPT_NEW"
     subst "$ARCH_PROMPT" "$ARCH_RULE_OLD" "$ARCH_RULE_NEW"
+    subst "$ARCH_PROMPT" "$ARCH_SKIP_OLD" "$ARCH_SKIP_NEW"
     # Optional, because a project that repaired the two blocks above by hand but
     # kept the old heading would otherwise be refused by a strict anchor. The
     # heading is not the defect; it only reads as one next to the old step 4.

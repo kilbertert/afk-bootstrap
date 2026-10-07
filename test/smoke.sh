@@ -898,6 +898,15 @@ if grep -qF -e 'the issue you created' \
    "$S/scaffold/.sandcastle/architecture-review/extraction.md"; then
   echo "the scaffold's extract pass still asks for the issue the agent created" >&2; exit 1
 fi
+# And the produce prompt must not ask for `<output>` either: sandcastle's
+# `runWithExtraction` runs that phase with no output definition, and its own docs
+# say the produce prompt "should contain no JSON-emission instructions". Asking
+# for both blocks is the duplication the wrapper exists to remove.
+# shellcheck disable=SC2016  # the pattern is prompt text; backticks are literal.
+if grep -qF -e 'in your `<output>` block' \
+   "$S/scaffold/.sandcastle/architecture-review/prompt.md"; then
+  echo "the scaffold's produce prompt still asks for an <output> block" >&2; exit 1
+fi
 ARCHPROMPT_OUT="$("$S/upgrade-afk.sh" "$ARCHPROMPT" 2>&1)" \
   || { echo "upgrade refused a project needing the prompt step" >&2; exit 1; }
 if grep -qF -e '/to-prd-project' "$ARCHPROMPT/.sandcastle/architecture-review/prompt.md"; then
@@ -908,6 +917,16 @@ grep -qF 'Do NOT create the issue yourself' \
   || { echo "the migrated prompt does not hand publication back to the workflow" >&2; exit 1; }
 grep -qF 'report it as a PRD' "$ARCHPROMPT/.sandcastle/architecture-review/prompt.md" \
   || { echo "the migrated prompt still says the agent publishes" >&2; exit 1; }
+# shellcheck disable=SC2016  # the pattern is prompt text; backticks are literal.
+if grep -qF -e 'emit a `skipped` output and' \
+   "$ARCHPROMPT/.sandcastle/architecture-review/prompt.md"; then
+  echo "the migrated prompt still asks the produce pass for structured output" >&2; exit 1
+fi
+# shellcheck disable=SC2016
+if grep -qF -e 'in your `<output>` block' \
+   "$ARCHPROMPT/.sandcastle/architecture-review/prompt.md"; then
+  echo "the migrated prompt still asks the produce pass for an <output> block" >&2; exit 1
+fi
 grep -qF 'changed: .sandcastle/architecture-review/prompt.md' <<<"$ARCHPROMPT_OUT" \
   || { echo "the migration edited the prompt without reporting it" >&2; exit 1; }
 if grep -qF -e 'the issue you created' \

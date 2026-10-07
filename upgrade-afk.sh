@@ -1172,6 +1172,142 @@ The `title` and `body` you emit are what the workflow will publish as the issue 
   fi
 fi
 
+# ---- step: 1.5.x -> 1.6.0 — the sandbox gets code intelligence --------------
+# Two changes with one purpose: stop the agent spending its budget rediscovering
+# the repository. Measured on a real run (health-flow #114): 36 of 62 tool calls
+# were `cat`/`ls`/`grep`/`sed` looking for entry points, test layout and docs.
+#
+#   1. The sandbox image gains `serena` (LSP symbols) and a mounted
+#      `codebase-memory-mcp` (the repository graph), injected by the claude
+#      wrapper via --mcp-config.
+#   2. `.sandcastle/REPO-MAP.md` answers "where does what live" in one read, and
+#      the implement prompts tell the agent to read it first.
+#
+# The image must be rebuilt for (1) — the Dockerfile gains a layer, and a wrapper
+# that passes a config file the old image does not read. Until then the new
+# prompts simply point at servers that are not there, which claude skips
+# silently; that degrades rather than breaks, and the rebuild instruction below
+# names the order.
+if [ "$from_minor" -lt 6 ] && [ "$to_minor" -ge 6 ]; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: sandbox code intelligence + repository map =="
+
+  # 1. The generator and its check are new files, not edits.
+  cp "$S/scaffold/.sandcastle/repo-map.mjs" "$WORK/.sandcastle/repo-map.mjs"
+  cp "$S/scaffold/.sandcastle/repo-map.check.mjs" "$WORK/.sandcastle/repo-map.check.mjs"
+  cp "$S/scaffold/.sandcastle/mcp-config.ts" "$WORK/.sandcastle/mcp-config.ts"
+  cp "$S/scaffold/.sandcastle/mcp-config.check.ts" "$WORK/.sandcastle/mcp-config.check.ts"
+
+  # 2. profile.ts gains the MCP import, the write call, and the mounts. All three
+  #    are anchored on what the previous template wrote, so a project that has
+  #    customised this file is reported rather than silently rewritten.
+  PROF="$WORK/.sandcastle/profile.ts"
+  if grep -qF "mcp-config.js" "$PROF"; then
+    note "profile.ts: MCP wiring already present"
+  elif grep -qF 'import { sandboxNetworkOptions } from "./profile-network.js";' "$PROF"; then
+    subst "$PROF" \
+      'import { sandboxNetworkOptions } from "./profile-network.js";' \
+      'import { sandboxNetworkOptions } from "./profile-network.js";
+import { mcpConfigMounts, writeMcpConfig } from "./mcp-config.js";'
+    subst "$PROF" \
+      '): { agent: AgentProvider; sandbox: SandboxProvider } {' \
+      '): { agent: AgentProvider; sandbox: SandboxProvider } {
+  // Materialise the MCP config before the sandbox is created — the mount below
+  // needs a file to point at, and writing it per run is what keeps it true to
+  // what this host actually has.
+  writeMcpConfig();'
+    # The mounts object grows from a one-element literal to a list. Anchored on
+    # the exact line 1.5.x wrote.
+    node -e '
+      const fs = require("fs");
+      const [path] = process.argv.slice(1);
+      const lines = fs.readFileSync(path, "utf8").split("\n");
+      const i = lines.findIndex((l) => l.includes("? { mounts: [{ hostPath: settingsPath,"));
+      if (i < 0) {
+        console.error("profile.ts: mount literal not found — refusing to guess");
+        process.exit(1);
+      }
+      lines[i] = "        ? {";
+      lines.splice(i + 1, 0,
+        "            mounts: [",
+        "              { hostPath: settingsPath, sandboxPath: \"/home/agent/.afk-profile-settings.json\", readonly: true },",
+        "              ...mcpConfigMounts(),",
+        "            ],",
+        "          }");
+      fs.writeFileSync(path, lines.join("\n"));
+    ' "$PROF"
+    note "profile.ts: MCP config wiring added"
+  else
+    say ""
+    say "profile.ts does not carry the 1.5.x network import this step anchors on."
+    say "Migrate it by hand: import mcpConfigMounts/writeMcpConfig from"
+    say "./mcp-config.js, call writeMcpConfig() at the top of claudeProfile, and"
+    say "spread mcpConfigMounts() into the docker() mounts."
+    exit 1
+  fi
+
+  # 3. The five implement prompts gain the map pointer. Anchored on the
+  #    read-list sentence the previous template emitted, so a project that
+  #    rewrote that sentence is left alone (its author had a reason).
+  MAP_FILES=""
+  for rel in \
+    .sandcastle/implement.md \
+    .sandcastle/implement-prompt.md \
+    .sandcastle/implement/prompt.md \
+    .sandcastle/implement-pr/prompt.md \
+    .sandcastle/implement-prd/prompt.md ; do
+    [ -e "$WORK/$rel" ] || continue
+    grep -qF "REPO-MAP.md" "$WORK/$rel" && continue
+    # Node rather than perl: the replacement text contains backticks, and perl
+    # treats those in a replacement as command substitution — the first attempt
+    # at this produced an empty string instead of the new sentence. The script is
+    # written to a file so shellcheck does not read the backticks as SC2016.
+    cat > "$STAGE/add-map-pointer.mjs" <<'MAPJS'
+import { readFileSync, writeFileSync } from "node:fs";
+const [path] = process.argv.slice(2);
+const before = readFileSync(path, "utf8");
+const after = before.replace(
+  "Read `GLOSSARY",
+  "Read `.sandcastle/REPO-MAP.md` first (where things live), then `GLOSSARY",
+);
+if (after === before) process.exit(3);
+writeFileSync(path, after);
+MAPJS
+    node "$STAGE/add-map-pointer.mjs" "$WORK/$rel" || rc=$?
+    case ${rc:-0} in
+      0) MAP_FILES="$MAP_FILES $rel" ;;
+      3) : ;;  # anchor absent — a project edit; leave it
+      *) echo "$rel: could not rewrite the read-list — refusing to guess" >&2; exit 1 ;;
+    esac
+    rc=0
+  done
+
+  # 4. The CI job gains the three new checks. Anchored on the check 1.5.1 added.
+  POLICY="$WORK/.github/workflows/afk-policy.yml"
+  if [ ! -e "$POLICY" ]; then
+    note "afk-policy.yml absent; the scaffold supplies it"
+  elif grep -qF "mcp-config.check.ts" "$POLICY"; then
+    note "afk-policy.yml: code-intelligence checks already wired"
+  else
+    A1="        run: npx --yes tsx .sandcastle/profile-network.check.ts"
+    A2="$A1
+      - name: Verify sandbox MCP config
+        run: npx --yes tsx .sandcastle/mcp-config.check.ts
+      # A stale map is read with the same confidence as the code, so it is
+      # checked rather than trusted. --check regenerates to stdout and compares —
+      # it never writes the file it is judging.
+      - name: Verify the repository map is current
+        run: node .sandcastle/repo-map.check.mjs"
+    if grep -qF "$A1" "$POLICY"; then
+      subst "$POLICY" "$A1" "$A2"
+    else
+      echo "afk-policy.yml: no anchor for the network check — refusing to guess" >&2
+      exit 1
+    fi
+  fi
+fi
+
+
 if [ "$STEP_RAN" = "0" ]; then
   echo "no upgrade step defined from $FROM to $TEMPLATE_VERSION" >&2
   exit 1

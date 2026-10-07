@@ -29,7 +29,29 @@ RUN groupmod -o -g ${AGENT_GID} node \
   && usermod -o -u ${AGENT_UID} -g ${AGENT_GID} -d /home/agent -m -l agent node \
   && mkdir -p /home/agent/.codex && chown -R ${AGENT_UID}:${AGENT_GID} /home/agent/.codex
 
-RUN npm install --global @anthropic-ai/claude-code \
+# Serena MCP server — symbol-level code navigation (LSP-backed). Baked in
+# rather than installed per run: it is ~107 MB and takes 30-60 s to install, and
+# pinning it keeps every project's AFK run on the same version.
+#
+# Paths come from env vars, not flags: `uv tool install` has no --home or
+# --install-dir option (verified against uv 0.12), and this RUN sits above the
+# `USER` line — a bare install would land in /root/.local/bin, where the agent
+# cannot read it. UV_TOOL_BIN_DIR puts the shim in a directory everyone
+# resolves; UV_TOOL_DIR keeps the venv under the agent's home so the chown
+# below can hand the whole tree over.
+RUN UV_TOOL_BIN_DIR=/usr/local/bin UV_TOOL_DIR=/home/agent/.local/share/uv/tools \
+      uv tool install serena-agent==1.7.0 \
+  && chown -R ${AGENT_UID}:${AGENT_GID} /home/agent/.local \
+  && serena --version
+
+# --allow-scripts is required, not decorative: npm 11 refuses to run a package's
+# postinstall unless it is named, and claude-code's postinstall (install.cjs) is
+# what fetches its platform-native binary. Without it npm only WARNS, the build
+# still exits 0, and the container starts with a claude that reports
+# "claude native binary not installed" — a green build around a broken image.
+# (Measured: the same Dockerfile produced a working build once and a broken one
+# the next time, so the failure is intermittent and cannot be waited out.)
+RUN npm install --global --allow-scripts=@anthropic-ai/claude-code @anthropic-ai/claude-code \
   && npm install --global @openai/codex@0.146.1 \
   && mv /usr/local/bin/claude /usr/local/bin/claude-real \
   && printf '%s\n' \
@@ -37,7 +59,7 @@ RUN npm install --global @anthropic-ai/claude-code \
     'set -eu' \
     'case "${AFK_PROFILE:-claude}" in' \
     '  claude) exec /usr/local/bin/claude-real "$@" ;;' \
-    '  claude-deepseek) args=(); while [ "$#" -gt 0 ]; do if [ "$1" = "--model" ]; then shift 2; else args+=("$1"); shift; fi; done; exec env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_BASE_URL -u ANTHROPIC_MODEL -u ANTHROPIC_REASONING_MODEL -u ANTHROPIC_DEFAULT_OPUS_MODEL -u ANTHROPIC_DEFAULT_SONNET_MODEL -u ANTHROPIC_DEFAULT_HAIKU_MODEL CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1 /usr/local/bin/claude-real --settings /home/agent/.afk-profile-settings.json "${args[@]}" ;;' \
+    '  claude-deepseek) args=(); while [ "$#" -gt 0 ]; do if [ "$1" = "--model" ]; then shift 2; else args+=("$1"); shift; fi; done; exec env -u ANTHROPIC_API_KEY -u ANTHROPIC_AUTH_TOKEN -u ANTHROPIC_BASE_URL -u ANTHROPIC_MODEL -u ANTHROPIC_REASONING_MODEL -u ANTHROPIC_DEFAULT_OPUS_MODEL -u ANTHROPIC_DEFAULT_SONNET_MODEL -u ANTHROPIC_DEFAULT_HAIKU_MODEL CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT=1 /usr/local/bin/claude-real --settings /home/agent/.afk-profile-settings.json --mcp-config /home/agent/.afk-mcp.json "${args[@]}" ;;' \
     '  *) echo "unsupported AFK_PROFILE" >&2; exit 2 ;;' \
     'esac' > /usr/local/bin/claude \
   && chmod 755 /usr/local/bin/claude \

@@ -24,6 +24,7 @@ Do not touch work that belongs to a different sub-issue.
 
 # CONTEXT
 
+Read `.sandcastle/REPO-MAP.md` first (where things live).
 Read the relevant files under `docs/` and any ADRs under `docs/adr/` before starting.
 Explore the repo and fill your context with the parts relevant to this
 sub-issue — especially test files that touch the area you'll change.

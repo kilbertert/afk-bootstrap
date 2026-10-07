@@ -205,7 +205,7 @@ fi
 node -e '
   const fs = require("fs");
   const metadata = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.5.2" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
+  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.6.0" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
   // The assigned schedule hour must be recorded, or the next project on this
   // host has nothing to consult and collides by default — the defect that
   // made every project architecture review run on the same minute.
@@ -394,7 +394,7 @@ grep -q 'claude-deepseek' "$UPGRADE_TARGET/.sandcastle/main.ts" \
 node -e '
   const fs = require("fs");
   const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-  if (m.afk_template_version !== "1.5.2") process.exit(1);
+  if (m.afk_template_version !== "1.6.0") process.exit(1);
   // Cumulative migration: a 1.1.x project must come out of ONE run with both
   // the 1.2.0 provider migration and the 1.3.2 schedule migration applied, and
   // the assigned hour recorded. A step gated on from_minor alone would leave a

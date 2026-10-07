@@ -987,6 +987,40 @@ import { sandboxNetworkOptions } from "./profile-network.js";'
   done
 fi
 
+# ---- step: 1.5.0 -> 1.5.1 — CI actually runs the network check ---------------
+# 1.5.0 added `profile-network.check.ts` but wired it into the *scaffold*
+# workflow only. A project bootstrapped before 1.5.0 — or one that reached 1.5.0
+# from an older version — never receives that workflow edit, because the scaffold
+# is copied once at bootstrap and no upgrade step patched this file. The project
+# therefore holds a check that nothing runs, which is the same as not having it:
+# a typo widening the sandbox's reach fails nothing.
+#
+# Gated on the patch level within 1.5.x, so it runs exactly once for a project at
+# 1.5.0 and is a no-op for anything already carrying the step.
+if [ "$from_minor" -eq 5 ] && [ "$from_patch" -lt 1 ] && [ "$to_minor" -ge 5 ]; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: CI runs the sandbox network check =="
+  POLICY="$WORK/.github/workflows/afk-policy.yml"
+  ANCHOR="        run: node .sandcastle/policy-check.mjs workflows"
+  ADDITION="$ANCHOR
+      # The profile-network check decides whether the agent sandbox keeps Docker
+      # bridge isolation. Without it in CI, a typo in the loopback-profile set
+      # silently widens the sandbox's reach — or silently breaks the relay
+      # profile — and nothing fails. It was a runnable check with no runner.
+      - name: Verify sandbox network isolation
+        run: npx --yes tsx .sandcastle/profile-network.check.ts"
+  if [ ! -e "$POLICY" ]; then
+    note "afk-policy.yml absent; nothing to wire (the scaffold supplies it)"
+  elif grep -qF "profile-network.check.ts" "$POLICY"; then
+    note "afk-policy.yml: network check already wired"
+  elif grep -qF "$ANCHOR" "$POLICY"; then
+    subst "$POLICY" "$ANCHOR" "$ADDITION"
+  else
+    echo "afk-policy.yml: no anchor for the workflow-boundary step — refusing to guess" >&2
+    exit 1
+  fi
+fi
+
 if [ "$STEP_RAN" = "0" ]; then
   echo "no upgrade step defined from $FROM to $TEMPLATE_VERSION" >&2
   exit 1
@@ -1008,6 +1042,9 @@ node -e '
 # drift from what the steps actually did.
 CHANGED=0
 for rel in .sandcastle/Dockerfile .sandcastle/profile.ts .sandcastle/main.ts .sandcastle/profile-network.ts .sandcastle/profile-network.check.ts .afk-bootstrap.json; do
+  # Only report a file this run actually staged: the network modules arrive in
+  # 1.5.0, so a run that only executes the 1.5.1 CI step has none to compare.
+  [ -e "$WORK/$rel" ] || continue
   cmp -s "$TARGET/$rel" "$WORK/$rel" && continue
   CHANGED=1
   note "changed: $rel"
@@ -1142,6 +1179,10 @@ publish_delete() {
 # Metadata goes last: until every content file is in place it should keep
 # describing the version the tree actually is.
 for rel in .sandcastle/Dockerfile .sandcastle/profile.ts .sandcastle/main.ts .sandcastle/profile-network.ts .sandcastle/profile-network.check.ts; do
+  # Skip anything this run did not stage. A 1.5.0 -> 1.5.1 run only wires CI and
+  # never touches these modules; publishing a path with no staged source fails
+  # the whole publish and rolls the project back.
+  [ -e "$WORK/$rel" ] || continue
   publish_file "$rel" || { say "could not publish $rel" >&2; exit 1; }
 done
 if ! diff -rq "$TARGET/.github/workflows" "$WORK/.github/workflows" >/dev/null 2>&1; then

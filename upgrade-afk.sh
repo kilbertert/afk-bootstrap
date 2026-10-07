@@ -1035,6 +1035,14 @@ fi
 # duplicate lands **unlabelled**. `check-backlog` throttles on that label, so the
 # unlabelled issue is invisible to the very next run's duplicate check.
 #
+# The fix has to reach BOTH prompts of the two-phase run. `extraction.md` is the
+# second pass, and it described `title` as "the issue you created" and `body` as
+# "the PRD body you published". Removing the instruction to publish, without
+# fixing that, leaves the extract pass asking the agent to report an issue that
+# now does not exist — and `status: skipped` is a legal answer to a question
+# about something absent, so a drafted PRD would be discarded as "nothing to
+# publish". The two files are one change.
+#
 # Two projects (AI-Ops, genesis-evidence) were repaired by hand in their own
 # commits, with their own wording. This step therefore keys on the DEFECT, not on
 # the version: a prompt that no longer names `/to-prd-project` has already been
@@ -1048,6 +1056,7 @@ fi
 if [ "$to_minor" -ge 5 ]; then
   STEP_RAN=1
   ARCH_PROMPT="$WORK/.sandcastle/architecture-review/prompt.md"
+  ARCH_EXTRACT="$WORK/.sandcastle/architecture-review/extraction.md"
   # Both blocks are literal prompt text, backticks and all: nothing here is meant
   # to expand. SC2016 is the warning against single quotes doing that, which is
   # exactly the intent, so it is disabled rather than worked around — rewriting
@@ -1074,6 +1083,20 @@ step creates the issue from the `title` and `body` you emit. If you also run
   preference: your token has `issues=read` and label writes return 403, so a
   self-published issue also ends up **unlabelled** — the same failure that
   duplicated #178/#177 and #202/#201.'
+  # shellcheck disable=SC2016
+  ARCH_EXTRACT_OLD='End your response with a single `<output>` block, exactly as specified in the project skill `improve-codebase-architecture-project`. It has one of two shapes.'
+  # shellcheck disable=SC2016
+  ARCH_EXTRACT_NEW='End your response with a single `<output>` block, exactly as specified in the project skill `improve-codebase-architecture-project`. It has one of two shapes.
+
+The `title` and `body` you emit are what the workflow will publish as the issue — you do not create it yourself. Report the PRD you drafted, not one you opened.'
+  # shellcheck disable=SC2016
+  ARCH_EXTRACT_TITLE_OLD='"title": "PRD title (matches the issue you created)"'
+  # shellcheck disable=SC2016
+  ARCH_EXTRACT_TITLE_NEW='"title": "PRD title — this becomes the issue title"'
+  # shellcheck disable=SC2016
+  ARCH_EXTRACT_BODY_OLD='"body": "The PRD body you published.",'
+  # shellcheck disable=SC2016
+  ARCH_EXTRACT_BODY_NEW='"body": "The full PRD body — this becomes the issue body.",'
 
   if [ ! -e "$ARCH_PROMPT" ]; then
     note "architecture-review/prompt.md absent; nothing to converge (a 1.1.x project gets the current one)"
@@ -1099,6 +1122,21 @@ step creates the issue from the `title` and `body` you emit. If you also run
       exit 1
     fi
     note "architecture-review/prompt.md: agent no longer creates the issue or mutates labels"
+  fi
+
+  # The extraction pass, converged independently of the prompt. The same shape of
+  # gate: absent means nothing to fix; an extraction prompt that no longer says
+  # the agent published the issue has already been repaired and is left as it is.
+  if [ ! -e "$ARCH_EXTRACT" ]; then
+    note "architecture-review/extraction.md absent; nothing to converge (a 1.1.x project gets the current one)"
+  elif ! grep -qF -e 'The PRD body you published.' "$ARCH_EXTRACT"; then
+    note "architecture-review/extraction.md: already describes the workflow as publisher; left as the project wrote it"
+  else
+    say "== $FROM -> $TEMPLATE_VERSION: the extract pass stops asking for the issue the agent created =="
+    subst "$ARCH_EXTRACT" "$ARCH_EXTRACT_OLD" "$ARCH_EXTRACT_NEW"
+    subst "$ARCH_EXTRACT" "$ARCH_EXTRACT_TITLE_OLD" "$ARCH_EXTRACT_TITLE_NEW"
+    subst "$ARCH_EXTRACT" "$ARCH_EXTRACT_BODY_OLD" "$ARCH_EXTRACT_BODY_NEW"
+    note "architecture-review/extraction.md: title/body now read as what the workflow publishes"
   fi
 fi
 

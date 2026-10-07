@@ -870,8 +870,6 @@ node -e '
   fs.writeFileSync(f, JSON.stringify(m, null, 2) + "\n");
 ' "$ARCHPROMPT"
 cp "$S/scaffold/.sandcastle/profile.ts" "$ARCHPROMPT/.sandcastle/profile.ts"
-cp "$S/scaffold/.sandcastle/architecture-review/extraction.md" \
-   "$ARCHPROMPT/.sandcastle/architecture-review/extraction.md"
 cp "$S/scaffold/.github/workflows/architecture-review.yml" "$ARCHPROMPT/.github/workflows/"
 node -e '
   const fs = require("fs"), p = process.argv[1] + "/.github/workflows/architecture-review.yml";
@@ -885,11 +883,20 @@ node -e '
 # false-green that makes a migration look verified when it is not.
 cp "$S/test/fixtures/architecture-review-buggy/prompt.md" \
    "$ARCHPROMPT/.sandcastle/architecture-review/prompt.md"
+# The second half of the same defect: the extract pass asked the agent to report
+# the issue it had created. Fixing only the prompt leaves the extract pass asking
+# about an issue that no longer exists, and `skipped` is a legal answer.
+cp "$S/test/fixtures/architecture-review-buggy/extraction.md" \
+   "$ARCHPROMPT/.sandcastle/architecture-review/extraction.md"
 # The scaffold must no longer ship that text, or this step has nothing to fix.
 # shellcheck disable=SC2016  # the pattern is prompt text; backticks are literal.
 if grep -qF -e '4. Publish it via `/to-prd-project`.' \
    "$S/scaffold/.sandcastle/architecture-review/prompt.md"; then
   echo "the scaffold still ships the double-publication prompt" >&2; exit 1
+fi
+if grep -qF -e 'the issue you created' \
+   "$S/scaffold/.sandcastle/architecture-review/extraction.md"; then
+  echo "the scaffold's extract pass still asks for the issue the agent created" >&2; exit 1
 fi
 ARCHPROMPT_OUT="$("$S/upgrade-afk.sh" "$ARCHPROMPT" 2>&1)" \
   || { echo "upgrade refused a project needing the prompt step" >&2; exit 1; }
@@ -903,6 +910,15 @@ grep -qF 'report it as a PRD' "$ARCHPROMPT/.sandcastle/architecture-review/promp
   || { echo "the migrated prompt still says the agent publishes" >&2; exit 1; }
 grep -qF 'changed: .sandcastle/architecture-review/prompt.md' <<<"$ARCHPROMPT_OUT" \
   || { echo "the migration edited the prompt without reporting it" >&2; exit 1; }
+if grep -qF -e 'the issue you created' \
+   "$ARCHPROMPT/.sandcastle/architecture-review/extraction.md"; then
+  echo "the extract pass still asks for the issue the agent was told not to create" >&2; exit 1
+fi
+grep -qF 'this becomes the issue title' \
+  "$ARCHPROMPT/.sandcastle/architecture-review/extraction.md" \
+  || { echo "the extract pass does not describe the workflow as the publisher" >&2; exit 1; }
+grep -qF 'changed: .sandcastle/architecture-review/extraction.md' <<<"$ARCHPROMPT_OUT" \
+  || { echo "the migration edited the extract prompt without reporting it" >&2; exit 1; }
 grep -qE '^\s*timeout-minutes: 75\s*$' "$ARCHPROMPT/.github/workflows/architecture-review.yml" \
   || { echo "the prompt step did not carry the earlier budget step with it" >&2; exit 1; }
 
@@ -927,11 +943,16 @@ node -e '
 ' "$HANDFIX"
 printf '# TASK\n\nReport it as structured output — you do not create the issue.\n' \
   > "$HANDFIX/.sandcastle/architecture-review/prompt.md"
+printf '# EMIT\n\n"title": "PRD title (the workflow creates the issue from this)"\n' \
+  > "$HANDFIX/.sandcastle/architecture-review/extraction.md"
 "$S/upgrade-afk.sh" "$HANDFIX" >/dev/null \
   || { echo "upgrade refused a project whose prompt was repaired by hand" >&2; exit 1; }
 grep -qF 'Report it as structured output' \
   "$HANDFIX/.sandcastle/architecture-review/prompt.md" \
   || { echo "the migration overwrote a hand-repaired prompt" >&2; exit 1; }
+grep -qF 'the workflow creates the issue from this' \
+  "$HANDFIX/.sandcastle/architecture-review/extraction.md" \
+  || { echo "the migration overwrote a hand-repaired extract prompt" >&2; exit 1; }
 
 # A project whose cron this template did NOT write keeps its own schedule, but
 # the hour it already occupies must still be recorded. Without that the record

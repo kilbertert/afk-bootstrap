@@ -502,6 +502,34 @@ grep -q 'repo-map.mjs --self-check' "$P161MAP/.github/workflows/afk-policy.yml" 
 ( cd "$P161MAP" && node .sandcastle/repo-map.mjs --self-check >/dev/null ) \
   || { echo "the migrated generator fails its own self-check" >&2; exit 1; }
 
+# The 1.6.1 -> 1.6.2 step: the entry-point filter was an allowlist of five script
+# names, so a project whose main CLI is called something else was told by the map
+# that it does not exist. Pinned from the reference so a project that edited its
+# generator is reported instead of overwritten.
+P162="$TMP/upgrade-161-$LANGUAGE"
+mkdir -p "$P162/.github/workflows" "$P162/docs" "$P162/.sandcastle"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$P162/"
+cp "$S/references/repo-map.mjs.1.6.1" "$P162/.sandcastle/repo-map.mjs"
+cp "$S/scaffold/.sandcastle/repo-map.check.mjs" "$P162/.sandcastle/repo-map.check.mjs"
+printf '{"scripts":{"easy":"tsx src/cli/easy.ts","test":"vitest run"}}\n' > "$P162/package.json"
+mkdir -p "$P162/tests/unit"
+: > "$P162/tests/unit/test_alpha.py"
+node -e '
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  m.afk_template_version = "1.6.1";
+  m.templateVersion = 1;
+  fs.writeFileSync(process.argv[1], JSON.stringify(m, null, 2) + "\n");
+' "$P162/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$P162" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project at 1.6.1" >&2; exit 1; }
+grep -q 'script "easy"' "$P162/.sandcastle/REPO-MAP.md" \
+  || { echo "the regenerated map still hides a non-allowlisted entry point" >&2; exit 1; }
+grep -q 'test file(s, recursive)' "$P162/.sandcastle/REPO-MAP.md" \
+  || { echo "the regenerated map does not count tests below the top level" >&2; exit 1; }
+( cd "$P162" && node .sandcastle/repo-map.check.mjs >/dev/null ) \
+  || { echo "the 1.6.2 map is stale on arrival" >&2; exit 1; }
+
 UPGRADE_OUT="$("$S/upgrade-afk.sh" "$UPGRADE_TARGET" --cron-hour 13)"
 printf '%s\n' "$UPGRADE_OUT"
 grep -q 'claude-deepseek)' "$UPGRADE_TARGET/.sandcastle/Dockerfile" \

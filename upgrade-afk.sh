@@ -1699,6 +1699,58 @@ if [ "$from_minor" -eq 6 ] && [ "$from_patch" -lt 1 ] && [ "$to_minor" -ge 6 ]; 
 fi
 
 
+# ---- step: 1.6.1 -> 1.6.2 — the repository map lists the entry points it was
+#      hiding, and counts tests where they live --------------------------------
+# Three findings from one review, all of the same shape: the map *looks* complete
+# and is wrong. That is the failure this whole file exists to prevent, because the
+# implement prompts tell the agent to read the map first and trust it.
+#
+#   1. The entry-point filter was an allowlist of five script names
+#      (dev/start/serve/afk/ralph). Auto_Test calls its main user CLI `easy`; it
+#      was not on the list, so the map said the project had no such command. The
+#      filter now keeps every script that runs a file, and drops only the ones
+#      that delegate or invoke a tool — those are not files a reader can open.
+#   2. The test count read only the top level of each test directory, so a project
+#      whose tests sit in `tests/unit/` was reported as having none. It is
+#      recursive now, and counts test-named files rather than every file, because
+#      `conftest.py` is not a test.
+#   3. Two review threads asked whether the map's dependency on the *filesystem*
+#      rather than on tracked files is intended. It is, and the generated header
+#      now says so — the reasoning belongs where the reader is, not only in this
+#      migration.
+#
+# 1.6.1 already restages repo-map.mjs for a project arriving from 1.6.0; a project
+# already at 1.6.1 needs this step for the same file. Both regenerate the map.
+if [ "$from_minor" -eq 6 ] && [ "$from_patch" -lt 2 ] && [ "$to_minor" -ge 6 ]; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: repository map entry points and test counts =="
+
+  REL=.sandcastle/repo-map.mjs
+  SRC="$S/scaffold/$REL"
+  [ -e "$SRC" ] || { echo "migration reference missing: $SRC" >&2; exit 1; }
+  REF="$S/references/repo-map.mjs.1.6.1"
+  if [ -e "$WORK/$REL" ] && cmp -s "$WORK/$REL" "$REF"; then
+    cp "$SRC" "$WORK/$REL"
+    NEW_FILES="$NEW_FILES $REL"
+    note "restaged: $REL"
+  elif grep -qF "readPyprojectScripts" "$WORK/$REL" 2>/dev/null; then
+    # Already carries a generator this step did not write — the project's own, or
+    # a newer one. Reported, not replaced: the same rule profile.ts follows.
+    say ""
+    say "$REL is not the 1.6.1 shape — leaving it as the project has it."
+    say "Re-apply by hand if you want the wider entry-point filter and the"
+    say "recursive test count; the rest of this step is independent of it."
+  fi
+
+  # The map is regenerated either way: its content changed even for a project
+  # whose generator did not, because the entry-point set and the test counts are
+  # outputs, and a stale map fails the freshness check this scaffold wires.
+  if [ -e "$WORK/$REL" ]; then
+    MAP_NEEDED=1
+  fi
+fi
+
+
 if [ "$STEP_RAN" = "0" ]; then
   echo "no upgrade step defined from $FROM to $TEMPLATE_VERSION" >&2
   exit 1

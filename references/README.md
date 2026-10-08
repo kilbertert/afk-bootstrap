@@ -27,3 +27,8 @@ edits instead of overwriting it.
   an allowlist of five script names and the test count still stopped at the top
   level of each test directory. The 1.6.2 step replaces a project's copy only when
   it matches this byte for byte.
+
+- `repo-map.mjs.1.6.3` — the map generator as 1.6.3 shipped it: entry points and
+  test counts were correct, but the file set behind the map still came from a
+  filesystem walk. The 1.6.4 step replaces a project's copy only when it matches
+  this byte for byte.

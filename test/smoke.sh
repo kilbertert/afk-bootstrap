@@ -558,6 +558,52 @@ for wf in agent-implement agent-implement-prd; do
   grep -q 'repo-map.mjs' "$P163/.github/workflows/$wf.yml" \
     || { echo "1.6.3 did not wire map regeneration into $wf.yml" >&2; exit 1; }
 done
+
+# The 1.6.3 -> 1.6.4 step: the map's file set moved from a filesystem walk to
+# git's view of the repository. The fixture is a real git repository, because
+# that is the whole point — the previous generator answered a different question
+# here than it did in CI, and a non-repo fixture could not show it.
+P164="$TMP/upgrade-163-repo-$LANGUAGE"
+rm -rf "$P164"
+mkdir -p "$P164/.github/workflows" "$P164/docs" "$P164/.sandcastle" "$P164/src" "$P164/build-output-xyz"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$P164/"
+cp "$S/references/repo-map.mjs.1.6.3" "$P164/.sandcastle/repo-map.mjs"
+cp "$S/scaffold/.sandcastle/repo-map.check.mjs" "$P164/.sandcastle/repo-map.check.mjs"
+printf 'build-output-xyz/\n' > "$P164/.gitignore"
+printf 'export const x = 1;\n' > "$P164/src/app.ts"
+printf 'artifact\n' > "$P164/build-output-xyz/built.bin"
+node -e '
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  m.afk_template_version = "1.6.3";
+  m.templateVersion = 1;
+  fs.writeFileSync(process.argv[1], JSON.stringify(m, null, 2) + "\n");
+' "$P164/.afk-bootstrap.json"
+# On a task branch, not the default one: the host's commit guard refuses a commit
+# on a default branch, and this fixture is a real repository so the guard applies.
+( cd "$P164" && git init -q -b main && git config user.email t@e.com && git config user.name t \
+  && git checkout -q -b chore/fixture && git add -A && git commit -qm "chore: fixture at 1.6.3" )
+"$S/upgrade-afk.sh" "$P164" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project at 1.6.3" >&2; exit 1; }
+grep -q 'trackedPaths' "$P164/.sandcastle/repo-map.mjs" \
+  || { echo "1.6.4 did not restage the map generator" >&2; exit 1; }
+# The ignored directory must be absent and the tracked file present — that pair is
+# the rule the step exists to install, and it is asserted on the *map*, not on the
+# generator, so a generator that is right but unwired fails here.
+if grep -q 'build-output-xyz' "$P164/.sandcastle/REPO-MAP.md" \
+   && sed -n '/## Tree/,$p' "$P164/.sandcastle/REPO-MAP.md" | grep -q 'build-output-xyz'; then
+  echo "the regenerated map lists an ignored directory" >&2; exit 1
+fi
+sed -n '/## Tree/,$p' "$P164/.sandcastle/REPO-MAP.md" | grep -q 'app.ts' \
+  || { echo "the regenerated map omits a tracked file" >&2; exit 1; }
+# And a file written but not yet committed is inside it: that is why the set is
+# "tracked plus untracked-and-not-ignored" rather than "tracked".
+printf 'export const y = 2;\n' > "$P164/src/just-written.ts"
+( cd "$P164" && node .sandcastle/repo-map.mjs )
+grep -q 'just-written.ts' "$P164/.sandcastle/REPO-MAP.md" \
+  || { echo "an uncommitted new file is missing from the map" >&2; exit 1; }
+( cd "$P164" && node .sandcastle/repo-map.check.mjs >/dev/null ) \
+  || { echo "the 1.6.4 map is stale on arrival" >&2; exit 1; }
 # It has to be valid YAML at a step boundary. An insertion that lands a level too
 # deep parses the `-` as a continuation key and the workflow fails to load — the
 # run never starts, which is the silent outcome this whole step exists to remove.

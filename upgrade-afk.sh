@@ -1822,6 +1822,46 @@ REGENJS
 fi
 
 
+# ---- step: 1.6.3 -> 1.6.4 — the repository map is defined by git, not by disk --
+# The file set behind the map changed from a filesystem walk to git's view of the
+# repository, so every project's map content changes. See
+# `docs/adr/0001-repository-map-file-set.md` for why.
+#
+# The step is the same shape as 1.6.2's: replace the generator only when it still
+# matches the previous revision byte for byte, and regenerate the map either way.
+# A project that taught its generator something local keeps it and is told how to
+# port the change; a project whose map is simply out of date gets it back.
+if [ "$from_minor" -eq 6 ] && [ "$from_patch" -lt 4 ] && [ "$to_minor" -ge 6 ]; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: repository map file set comes from git =="
+
+  REL=.sandcastle/repo-map.mjs
+  SRC="$S/scaffold/$REL"
+  [ -e "$SRC" ] || { echo "migration reference missing: $SRC" >&2; exit 1; }
+  REF="$S/references/repo-map.mjs.1.6.3"
+  if [ -e "$WORK/$REL" ] && cmp -s "$WORK/$REL" "$REF"; then
+    cp "$SRC" "$WORK/$REL"
+    NEW_FILES="$NEW_FILES $REL"
+    note "restaged: $REL"
+  elif grep -qF "trackedPaths" "$WORK/$REL" 2>/dev/null; then
+    note "$REL already reads the file set from git"
+  else
+    say ""
+    say "$REL is not the 1.6.3 shape — leaving it as the project has it."
+    say "To port it: build the file set from"
+    say "  git ls-files --cached --others --exclude-standard"
+    say "and filter the directory walk, the entry-point checks and the docs count"
+    say "by it. See docs/adr/0001-repository-map-file-set.md in the template."
+  fi
+
+  # The map is regenerated in every case: the content changed even for a project
+  # whose generator did not, because the file set is an input to every section.
+  if [ -e "$WORK/$REL" ]; then
+    MAP_NEEDED=1
+  fi
+fi
+
+
 if [ "$STEP_RAN" = "0" ]; then
   echo "no upgrade step defined from $FROM to $TEMPLATE_VERSION" >&2
   exit 1

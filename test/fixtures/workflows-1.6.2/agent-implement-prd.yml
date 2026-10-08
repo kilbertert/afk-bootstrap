@@ -228,13 +228,6 @@ jobs:
           OUTPUT_DIR: ${{ runner.temp }}
         run: npm exec tsx .sandcastle/implement-prd/implement-prd.ts
 
-      # Same reason as in agent-implement.yml: the map reports the filesystem,
-      # and the agent just changed it. The PRD loop adds a sub-issue at a time, so
-      # without this each one leaves the branch failing the freshness check.
-      - name: Regenerate the repository map
-        if: steps.shape.outputs.mode == 'run' && success()
-        run: node .sandcastle/repo-map.mjs
-
       - name: Verify AFK policy before push
         if: steps.shape.outputs.mode == 'run' && success()
         run: node .sandcastle/policy-check.mjs delivery

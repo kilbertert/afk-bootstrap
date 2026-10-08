@@ -1751,6 +1751,77 @@ if [ "$from_minor" -eq 6 ] && [ "$from_patch" -lt 2 ] && [ "$to_minor" -ge 6 ]; 
 fi
 
 
+# ---- step: 1.6.2 -> 1.6.3 — the AFK run regenerates the map before it pushes ---
+# The map reports the filesystem, and an implementation run changes the
+# filesystem. So a branch produced by an AFK run was born failing the policy
+# job's freshness check whenever the change added or moved anything the map
+# names — measured on health-flow #168, whose run added a service module and a
+# test file and went red on a job it could not fix from the PR.
+#
+# The generator already ran locally after the migration, which is why the PR
+# looked clean: it was correct at the commit the operator wrote, and wrong at the
+# first commit an agent wrote. The implement prompts do tell the agent to
+# regenerate the map when the shape changes; this makes that hold when the
+# instruction is missed, and the generator runs in well under a second.
+if [ "$from_minor" -eq 6 ] && [ "$from_patch" -lt 3 ] && [ "$to_minor" -ge 6 ]; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: AFK runs regenerate the repository map =="
+
+  # Both workflows that run an agent, anchored on the step that invokes it. A
+  # project that reorganised these files is reported rather than rewritten.
+  for pair in \
+    ".github/workflows/agent-implement.yml|        run: npm exec tsx .sandcastle/implement/implement.ts" \
+    ".github/workflows/agent-implement-prd.yml|        run: npm exec tsx .sandcastle/implement-prd/implement-prd.ts"; do
+    WF="${pair%%|*}"
+    ANCHOR="${pair#*|}"
+    [ -e "$WORK/$WF" ] || { note "$WF absent; skipped"; continue; }
+    if grep -qF "repo-map.mjs" "$WORK/$WF"; then
+      note "$WF: map regeneration already wired"
+      continue
+    fi
+    if ! grep -qF "$ANCHOR" "$WORK/$WF"; then
+      say "$WF has no agent step this migration recognises."
+      say "Add a 'node .sandcastle/repo-map.mjs' step after the agent runs and"
+      say "before the branch is pushed, by hand."
+      continue
+    fi
+    # Node, not `subst`: the inserted text is multi-line, and the anchor's
+    # leading whitespace matters — a shell substitution would have to quote it.
+    cat > "$STAGE/add-map-regen.mjs" <<'REGENJS'
+import { readFileSync, writeFileSync } from "node:fs";
+const [path, anchor, guard] = process.argv.slice(2);
+const src = readFileSync(path, "utf8");
+if (!src.includes(anchor)) process.exit(3);
+// The new step's indentation is derived from the anchor's, not hardcoded: the
+// anchor is a `run:` key (8 spaces), and a step list entry sits two shallower.
+// Getting this wrong produces YAML that parses the `-` as a continuation key
+// and fails at workflow load — i.e. the run never starts, which is exactly the
+// silent failure this step exists to prevent.
+const keyIndent = /^(\s*)/.exec(src.split("\n").find((l) => l.includes(anchor.trim())))[1];
+const stepIndent = keyIndent.slice(0, -2);
+const inserted = [
+  "",
+  `${stepIndent}# The map reports the filesystem, and the agent just changed it. Without`,
+  `${stepIndent}# this the branch is born failing the policy job's freshness check.`,
+  `${stepIndent}- name: Regenerate the repository map`,
+  `${keyIndent}if: ${guard}`,
+  `${keyIndent}run: node .sandcastle/repo-map.mjs`,
+].join("\n");
+writeFileSync(path, src.replace(anchor, anchor + inserted));
+REGENJS
+    case "$WF" in
+      *implement-prd*)
+        node "$STAGE/add-map-regen.mjs" "$WORK/$WF" "$ANCHOR" "steps.shape.outputs.mode == 'run' && success()" \
+          || { echo "$WF: could not insert the map step — refusing to guess" >&2; exit 1; } ;;
+      *)
+        node "$STAGE/add-map-regen.mjs" "$WORK/$WF" "$ANCHOR" "steps.shape.outputs.proceed == 'true' && steps.preflight.outputs.refused != 'true' && success()" \
+          || { echo "$WF: could not insert the map step — refusing to guess" >&2; exit 1; } ;;
+    esac
+    note "$WF: map regeneration wired"
+  done
+fi
+
+
 if [ "$STEP_RAN" = "0" ]; then
   echo "no upgrade step defined from $FROM to $TEMPLATE_VERSION" >&2
   exit 1

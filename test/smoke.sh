@@ -539,8 +539,12 @@ grep -q 'test file(s, recursive)' "$P162/.sandcastle/REPO-MAP.md" \
 P163="$TMP/upgrade-162-$LANGUAGE"
 mkdir -p "$P163/.github/workflows" "$P163/docs" "$P163/.sandcastle"
 cp -R "$S/test/fixtures/legacy-1.1.x/." "$P163/"
-git -C "$S" show "main:scaffold/.github/workflows/agent-implement.yml" > "$P163/.github/workflows/agent-implement.yml"
-git -C "$S" show "main:scaffold/.github/workflows/agent-implement-prd.yml" > "$P163/.github/workflows/agent-implement-prd.yml"
+# From the fixture, not from a ref: CI checks out a detached HEAD with no local
+# `main`, so `git show main:...` fails there. Pinned output also means the step is
+# exercised against what the template actually shipped rather than against
+# whatever the working tree happens to hold.
+cp "$S/test/fixtures/workflows-1.6.2/agent-implement.yml" "$P163/.github/workflows/agent-implement.yml"
+cp "$S/test/fixtures/workflows-1.6.2/agent-implement-prd.yml" "$P163/.github/workflows/agent-implement-prd.yml"
 node -e '
   const fs = require("fs");
   const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));

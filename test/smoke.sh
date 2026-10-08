@@ -223,12 +223,12 @@ fi
 node -e '
   const fs = require("fs");
   const metadata = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== "1.6.0" || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
+  if (metadata.templateVersion !== 1 || metadata.afk_template_version !== process.argv[4] || metadata.consensus_version !== "1.0.0" || metadata.consensus_compatibility !== ">=1.0.0 <2.0.0" || metadata.language !== process.argv[2] || metadata.repository !== process.argv[3]) process.exit(1);
   // The assigned schedule hour must be recorded, or the next project on this
   // host has nothing to consult and collides by default — the defect that
   // made every project architecture review run on the same minute.
   if (typeof metadata.cron_hour !== "number" || metadata.cron_hour < 0 || metadata.cron_hour > 23) process.exit(1);
-' "$TARGET/.afk-bootstrap.json" "$LANGUAGE" "$REPO" || { echo "template metadata invalid" >&2; exit 1; }
+' "$TARGET/.afk-bootstrap.json" "$LANGUAGE" "$REPO" "$(tr -d '[:space:]' < "$S/TEMPLATE_VERSION")" || { echo "template metadata invalid" >&2; exit 1; }
 
 # The record and the workflow must agree. Bootstrap copies with --no-clobber, so
 # a project that already has architecture-review.yml keeps it — and in that case
@@ -418,6 +418,90 @@ grep -q 'REPO-MAP.md' <<<"$DRY_OUT" \
   || { echo "a dry run does not report the repository map it would create" >&2; exit 1; }
 rm -rf "$DRY_TARGET"
 
+# The 1.6.0 -> 1.6.1 step, on a project already at 1.6.0. It cannot be exercised
+# by the cumulative migration above: that path runs the 1.6.0 step, which installs
+# the current modules directly, so the 1.6.1 step finds nothing to do and would
+# pass green even if it were broken. The fixture therefore pins the 1.6.0 modules
+# from the reference copy, which is what the step compares against — a project
+# that edited them must be reported, not overwritten.
+P161="$TMP/upgrade-160-$LANGUAGE"
+mkdir -p "$P161/.github" "$P161/docs" "$P161/.sandcastle"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$P161/"
+cp "$S/references/mcp-config.ts.1.6.0" "$P161/.sandcastle/mcp-config.ts"
+cp "$S/references/mcp-config.check.ts.1.6.0" "$P161/.sandcastle/mcp-config.check.ts"
+node -e '
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  m.afk_template_version = "1.6.0";
+  m.templateVersion = 1;
+  fs.writeFileSync(process.argv[1], JSON.stringify(m, null, 2) + "\n");
+' "$P161/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$P161" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project at 1.6.0" >&2; exit 1; }
+grep -q 'renameSync(tmp, path)' "$P161/.sandcastle/mcp-config.ts" \
+  || { echo "1.6.1 left the config written in place" >&2; exit 1; }
+grep -q 'canExecute' "$P161/.sandcastle/mcp-config.ts" \
+  || { echo "1.6.1 left the binary test as a readability check" >&2; exit 1; }
+# A project that edited the module keeps its edit and is told to port the fix by
+# hand. Replacing it would delete whatever the project needed and record a clean
+# migration over it.
+P161EDITED="$TMP/upgrade-160-edited-$LANGUAGE"
+mkdir -p "$P161EDITED/.github" "$P161EDITED/docs" "$P161EDITED/.sandcastle"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$P161EDITED/"
+sed 's|^    serena: {|    serena: { // project tweak|' \
+  "$S/references/mcp-config.ts.1.6.0" > "$P161EDITED/.sandcastle/mcp-config.ts"
+cp "$S/references/mcp-config.check.ts.1.6.0" "$P161EDITED/.sandcastle/mcp-config.check.ts"
+node -e '
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  m.afk_template_version = "1.6.0";
+  m.templateVersion = 1;
+  fs.writeFileSync(process.argv[1], JSON.stringify(m, null, 2) + "\n");
+' "$P161EDITED/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$P161EDITED" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project with an edited mcp-config.ts" >&2; exit 1; }
+grep -q 'project tweak' "$P161EDITED/.sandcastle/mcp-config.ts" \
+  || { echo "1.6.1 overwrote a project-edited mcp-config.ts" >&2; exit 1; }
+
+# The generator grew a pyproject.toml parser, and a map that omits a project's
+# console scripts is stale even though its file is current. So this step also
+# restages repo-map.mjs and regenerates the map, and wires the parser's own
+# self-check into CI — the one check a fresh scaffold cannot perform, because a
+# fresh scaffold has no console scripts to omit.
+P161MAP="$TMP/upgrade-160-map-$LANGUAGE"
+mkdir -p "$P161MAP/.github/workflows" "$P161MAP/docs" "$P161MAP/.sandcastle"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$P161MAP/"
+cp "$S/references/repo-map.mjs.1.6.0" "$P161MAP/.sandcastle/repo-map.mjs"
+cp "$S/scaffold/.sandcastle/repo-map.check.mjs" "$P161MAP/.sandcastle/repo-map.check.mjs"
+cp "$S/scaffold/.github/workflows/afk-policy.yml" "$P161MAP/.github/workflows/"
+# Strip the self-check step, so the migration has to add it back.
+python3 - "$P161MAP/.github/workflows/afk-policy.yml" <<'STRIP'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1])
+s = p.read_text()
+start = s.index("      # The generator's own parser")
+end = s.index("node .sandcastle/repo-map.mjs --self-check") + len("node .sandcastle/repo-map.mjs --self-check\n")
+p.write_text(s[:start] + s[end:])
+STRIP
+printf '[project.scripts]\napi = "pkg.api:main"\n' > "$P161MAP/pyproject.toml"
+node -e '
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  m.afk_template_version = "1.6.0";
+  m.templateVersion = 1;
+  fs.writeFileSync(process.argv[1], JSON.stringify(m, null, 2) + "\n");
+' "$P161MAP/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$P161MAP" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a 1.6.0 project carrying a map" >&2; exit 1; }
+grep -q 'project.scripts' "$P161MAP/.sandcastle/repo-map.mjs" \
+  || { echo "1.6.1 did not restage the map generator" >&2; exit 1; }
+grep -q 'pkg.api:main' "$P161MAP/.sandcastle/REPO-MAP.md" \
+  || { echo "the regenerated map omits the project's console script" >&2; exit 1; }
+grep -q 'repo-map.mjs --self-check' "$P161MAP/.github/workflows/afk-policy.yml" \
+  || { echo "1.6.1 did not wire the generator self-check into CI" >&2; exit 1; }
+( cd "$P161MAP" && node .sandcastle/repo-map.mjs --self-check >/dev/null ) \
+  || { echo "the migrated generator fails its own self-check" >&2; exit 1; }
+
 UPGRADE_OUT="$("$S/upgrade-afk.sh" "$UPGRADE_TARGET" --cron-hour 13)"
 printf '%s\n' "$UPGRADE_OUT"
 grep -q 'claude-deepseek)' "$UPGRADE_TARGET/.sandcastle/Dockerfile" \
@@ -432,13 +516,13 @@ grep -q 'claude-deepseek' "$UPGRADE_TARGET/.sandcastle/main.ts" \
 node -e '
   const fs = require("fs");
   const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-  if (m.afk_template_version !== "1.6.0") process.exit(1);
+  if (m.afk_template_version !== process.argv[2]) process.exit(1);
   // Cumulative migration: a 1.1.x project must come out of ONE run with both
   // the 1.2.0 provider migration and the 1.3.2 schedule migration applied, and
   // the assigned hour recorded. A step gated on from_minor alone would leave a
   // 1.1.x project at 1.2.0 output while the metadata claimed 1.3.2.
   if (typeof m.cron_hour !== "number" || m.cron_hour < 0 || m.cron_hour > 23) process.exit(1);
-' "$UPGRADE_TARGET/.afk-bootstrap.json" || { echo "upgrade did not record the new version and hour" >&2; exit 1; }
+' "$UPGRADE_TARGET/.afk-bootstrap.json" "$(tr -d '[:space:]' < "$S/TEMPLATE_VERSION")" || { echo "upgrade did not record the new version and hour" >&2; exit 1; }
 # The schedule must come out rendered, and the job budget raised: leaving either
 # behind reproduces the two defects this step exists to remove — an invalid cron
 # that silently disables the workflow, or a 20m budget that cancels a 19m review
@@ -462,6 +546,14 @@ for f in \
   .sandcastle/REPO-MAP.md; do
   [ -e "$UPGRADE_TARGET/$f" ] || { echo "upgrade did not publish $f" >&2; exit 1; }
 done
+# The modules shipped must be the current revision, not whatever the template
+# had when the step was written. Both defects were silent — the agent loses
+# servers and nothing goes red — so the shape is asserted rather than assumed:
+# the config is written by rename, and the binary must be executable.
+grep -q 'renameSync(tmp, path)' "$UPGRADE_TARGET/.sandcastle/mcp-config.ts" \
+  || { echo "migrated mcp-config.ts does not write the config atomically" >&2; exit 1; }
+grep -q 'canExecute' "$UPGRADE_TARGET/.sandcastle/mcp-config.ts" \
+  || { echo "migrated mcp-config.ts does not require the binary to be executable" >&2; exit 1; }
 grep -q 'mcp-config.js' "$UPGRADE_TARGET/.sandcastle/profile.ts" \
   || { echo "migrated profile.ts lost its MCP import" >&2; exit 1; }
 grep -qF -- '--mcp-config /home/agent/.afk-mcp.json' "$UPGRADE_TARGET/.sandcastle/Dockerfile" \

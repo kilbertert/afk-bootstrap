@@ -305,6 +305,13 @@ PROSE=""
 # that step for why the finished tree is the only correct input.
 MAP_NEEDED=0
 
+# Paths a step added or replaced that are not on the fixed lists the report and
+# the publish loop walk. Declared here, not inside a step: 1.6.0 and 1.6.1 both
+# contribute, and a run that enters at 1.6.0 executes only the second — an
+# unset variable under `set -u` would abort it after the transform phase and
+# before the publish, so the rollback trap would silently restore the originals.
+NEW_FILES=""
+
 STEP_RAN=0
 # `-lt 2`: a project already at 1.2.0 has had the provider migration. Re-running
 # it is not merely wasted — the step refuses a profile.ts it cannot recognise as
@@ -1597,6 +1604,96 @@ MAPJS
     else
       echo "afk-policy.yml: no anchor for the network check — refusing to guess" >&2
       exit 1
+    fi
+  fi
+fi
+
+# ---- step: 1.6.0 -> 1.6.1 — the MCP config is written atomically, and the
+#      codebase-memory binary must be executable ------------------------------
+# Two defects in the 1.6.0 modules, both silent in the same way: the agent loses
+# half its tools and nothing reports it.
+#
+#   1. `writeMcpConfig` truncated the shared file before writing it. The planner
+#      starts several implementations at once and every one of them calls
+#      `claudeProfile`, so a sandbox that was already starting could read the
+#      mount mid-rewrite. claude treats a config it cannot parse as "no servers"
+#      rather than as an error, so the run silently lost both. It is written by
+#      rename now. Measured on this host: an in-place write produced ~16000
+#      unparseable reads in 400 ms, the rename none.
+#   2. The availability test was `R_OK`, which a readable non-executable file
+#      passes. claude cannot launch such a command and skips that server without
+#      saying so. It is a regular, executable file now.
+#
+# Both files are replaced wholesale rather than edited by anchor: they are this
+# scaffold's own modules, not project-owned inputs, and an anchored edit of a
+# function body would have to guess at whatever a project did to it. The
+# comparison is against the 1.6.0 shape this step was written for — both
+# revisions export the same names, so a presence marker would prove nothing.
+if [ "$from_minor" -eq 6 ] && [ "$from_patch" -lt 1 ] && [ "$to_minor" -ge 6 ]; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: MCP config written atomically; binary must be executable =="
+
+  RESTAGE=""
+  for rel in .sandcastle/mcp-config.ts .sandcastle/mcp-config.check.ts .sandcastle/repo-map.mjs; do
+    SRC="$S/scaffold/$rel"
+    [ -e "$SRC" ] || { echo "migration reference missing: $SRC" >&2; exit 1; }
+    if [ -e "$WORK/$rel" ] && cmp -s "$WORK/$rel" "$S/references/$(basename "$rel").1.6.0"; then
+      cp "$SRC" "$WORK/$rel"
+      RESTAGE="$RESTAGE $rel"
+    else
+      say "$rel is not the 1.6.0 shape — leaving it as the project has it."
+      say "Re-apply the two changes by hand: writeMcpConfig must write a temp file"
+      say "and rename it over the target, and the availability test must require a"
+      say "regular executable (isFile + X_OK), not merely a readable path."
+    fi
+  done
+
+  # The map is regenerated unconditionally at this version, because the generator
+  # changed: `entryPoints` now reads `[project.scripts]`, so every project that
+  # ships console commands has a map whose content is out of date even though its
+  # file is current. Leaving it would fail the freshness check this scaffold's own
+  # CI runs, on the project's next push, for a reason the project did not cause.
+  if [ -e "$WORK/.sandcastle/repo-map.mjs" ]; then
+    MAP_NEEDED=1
+  fi
+
+  # NEW_FILES drives both the change report and the publish loop; a path that is
+  # restaged without being named there is migrated in the stage and discarded at
+  # exit — the 1.6.0 defect this same file records.
+  for rel in $RESTAGE; do
+    note "restaged: $rel"
+    NEW_FILES="$NEW_FILES $rel"
+  done
+
+  # The generator gained a parser for pyproject.toml's console scripts, and a
+  # self-check for it. A project that already runs the map freshness check has no
+  # line that exercises the parser: a fresh scaffold carries no console scripts,
+  # so the map is empty there and correct — the defect is only visible in the
+  # Python projects this step is largely aimed at. Anchored on the map step the
+  # 1.6.0 wiring installed; a project that reordered its CI is reported.
+  POLICY="$WORK/.github/workflows/afk-policy.yml"
+  if [ ! -e "$POLICY" ]; then
+    note "afk-policy.yml absent; the scaffold supplies it"
+  elif grep -qF "repository-map generator self-check" "$POLICY"; then
+    note "afk-policy.yml: generator self-check already wired"
+  else
+    P1="      - name: Verify the repository map is current
+        run: node .sandcastle/repo-map.check.mjs"
+    P2="$P1
+      # The generator's own parser, not the map it produced: a regex that matches
+      # nothing yields a map that looks complete and omits the answer, and a fresh
+      # scaffold cannot catch that because a fresh scaffold has no console scripts
+      # to omit. Deliberately NOT wired into repo-map.check.mjs — the map check
+      # must use the shipping code path or it would validate one thing and ship
+      # another.
+      - name: Repository-map generator self-check
+        run: node .sandcastle/repo-map.mjs --self-check"
+    if grep -qF "$P1" "$POLICY"; then
+      subst "$POLICY" "$P1" "$P2"
+      note "afk-policy.yml: generator self-check added"
+    else
+      say "afk-policy.yml has no map-freshness step to anchor on."
+      say "Add a CI step running 'node .sandcastle/repo-map.mjs --self-check' by hand."
     fi
   fi
 fi

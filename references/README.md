@@ -21,3 +21,9 @@ edits instead of overwriting it.
 - `repo-map.mjs.1.6.0` — the map generator before it read `pyproject.toml`. The
   1.6.1 step restages it only when a project's copy still matches this, so a
   project that taught its generator about something local keeps that.
+
+- `repo-map.mjs.1.6.1` — the map generator as 1.6.1 shipped it: `pyproject.toml`
+  console scripts were read, but the `package.json` entry-point filter was still
+  an allowlist of five script names and the test count still stopped at the top
+  level of each test directory. The 1.6.2 step replaces a project's copy only when
+  it matches this byte for byte.

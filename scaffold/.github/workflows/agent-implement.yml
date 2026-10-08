@@ -193,6 +193,16 @@ jobs:
           OUTPUT_DIR: ${{ runner.temp }}
         run: npm exec tsx .sandcastle/implement/implement.ts
 
+      # The map lists the filesystem as it stands, and the agent just changed it.
+      # Without this the branch is born failing the policy job's freshness check,
+      # whenever the change adds or moves something the map names — a new module,
+      # a new test file. The agent is told to regenerate the map when the shape
+      # changes; this is what makes that instruction hold when it is missed, and
+      # it is cheap: the generator runs in well under a second.
+      - name: Regenerate the repository map
+        if: steps.shape.outputs.proceed == 'true' && steps.preflight.outputs.refused != 'true' && success()
+        run: node .sandcastle/repo-map.mjs
+
       - name: Verify AFK policy before push
         if: steps.shape.outputs.proceed == 'true' && steps.preflight.outputs.refused != 'true' && success()
         run: node .sandcastle/policy-check.mjs delivery

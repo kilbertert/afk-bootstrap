@@ -530,6 +530,46 @@ grep -q 'test file(s, recursive)' "$P162/.sandcastle/REPO-MAP.md" \
 ( cd "$P162" && node .sandcastle/repo-map.check.mjs >/dev/null ) \
   || { echo "the 1.6.2 map is stale on arrival" >&2; exit 1; }
 
+# The 1.6.2 -> 1.6.3 step. The map reports the filesystem and an AFK run changes
+# it, so a branch produced by a run was born failing the freshness check this
+# scaffold wires — measured on health-flow #168, whose run added a service module
+# and a test file. The step inserts a regeneration between the agent and the push.
+# The workflows below are the real 1.6.2 shape taken from git, not a
+# reconstruction: the anchor and its indentation are the whole insertion.
+P163="$TMP/upgrade-162-$LANGUAGE"
+mkdir -p "$P163/.github/workflows" "$P163/docs" "$P163/.sandcastle"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$P163/"
+git -C "$S" show "main:scaffold/.github/workflows/agent-implement.yml" > "$P163/.github/workflows/agent-implement.yml"
+git -C "$S" show "main:scaffold/.github/workflows/agent-implement-prd.yml" > "$P163/.github/workflows/agent-implement-prd.yml"
+node -e '
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  m.afk_template_version = "1.6.2";
+  m.templateVersion = 1;
+  fs.writeFileSync(process.argv[1], JSON.stringify(m, null, 2) + "\n");
+' "$P163/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$P163" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project at 1.6.2" >&2; exit 1; }
+for wf in agent-implement agent-implement-prd; do
+  grep -q 'repo-map.mjs' "$P163/.github/workflows/$wf.yml" \
+    || { echo "1.6.3 did not wire map regeneration into $wf.yml" >&2; exit 1; }
+done
+# It has to be valid YAML at a step boundary. An insertion that lands a level too
+# deep parses the `-` as a continuation key and the workflow fails to load — the
+# run never starts, which is the silent outcome this whole step exists to remove.
+python3 - "$P163" <<'YAMLCHECK' || { echo "the inserted step does not parse as a workflow step" >&2; exit 1; }
+import sys, pathlib, yaml
+root = pathlib.Path(sys.argv[1]) / ".github" / "workflows"
+for name in ("agent-implement", "agent-implement-prd"):
+    doc = yaml.safe_load((root / f"{name}.yml").read_text())
+    for job in doc["jobs"].values():
+        names = [s.get("name", "") for s in job.get("steps", [])]
+        if "Regenerate the repository map" in names:
+            break
+    else:
+        sys.exit(f"{name}.yml: the regeneration step is not a step")
+YAMLCHECK
+
 UPGRADE_OUT="$("$S/upgrade-afk.sh" "$UPGRADE_TARGET" --cron-hour 13)"
 printf '%s\n' "$UPGRADE_OUT"
 grep -q 'claude-deepseek)' "$UPGRADE_TARGET/.sandcastle/Dockerfile" \

@@ -463,6 +463,45 @@ node -e '
 grep -q 'project tweak' "$P161EDITED/.sandcastle/mcp-config.ts" \
   || { echo "1.6.1 overwrote a project-edited mcp-config.ts" >&2; exit 1; }
 
+# The generator grew a pyproject.toml parser, and a map that omits a project's
+# console scripts is stale even though its file is current. So this step also
+# restages repo-map.mjs and regenerates the map, and wires the parser's own
+# self-check into CI — the one check a fresh scaffold cannot perform, because a
+# fresh scaffold has no console scripts to omit.
+P161MAP="$TMP/upgrade-160-map-$LANGUAGE"
+mkdir -p "$P161MAP/.github/workflows" "$P161MAP/docs" "$P161MAP/.sandcastle"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$P161MAP/"
+cp "$S/references/repo-map.mjs.1.6.0" "$P161MAP/.sandcastle/repo-map.mjs"
+cp "$S/scaffold/.sandcastle/repo-map.check.mjs" "$P161MAP/.sandcastle/repo-map.check.mjs"
+cp "$S/scaffold/.github/workflows/afk-policy.yml" "$P161MAP/.github/workflows/"
+# Strip the self-check step, so the migration has to add it back.
+python3 - "$P161MAP/.github/workflows/afk-policy.yml" <<'STRIP'
+import sys, pathlib
+p = pathlib.Path(sys.argv[1])
+s = p.read_text()
+start = s.index("      # The generator's own parser")
+end = s.index("node .sandcastle/repo-map.mjs --self-check") + len("node .sandcastle/repo-map.mjs --self-check\n")
+p.write_text(s[:start] + s[end:])
+STRIP
+printf '[project.scripts]\napi = "pkg.api:main"\n' > "$P161MAP/pyproject.toml"
+node -e '
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  m.afk_template_version = "1.6.0";
+  m.templateVersion = 1;
+  fs.writeFileSync(process.argv[1], JSON.stringify(m, null, 2) + "\n");
+' "$P161MAP/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$P161MAP" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a 1.6.0 project carrying a map" >&2; exit 1; }
+grep -q 'project.scripts' "$P161MAP/.sandcastle/repo-map.mjs" \
+  || { echo "1.6.1 did not restage the map generator" >&2; exit 1; }
+grep -q 'pkg.api:main' "$P161MAP/.sandcastle/REPO-MAP.md" \
+  || { echo "the regenerated map omits the project's console script" >&2; exit 1; }
+grep -q 'repo-map.mjs --self-check' "$P161MAP/.github/workflows/afk-policy.yml" \
+  || { echo "1.6.1 did not wire the generator self-check into CI" >&2; exit 1; }
+( cd "$P161MAP" && node .sandcastle/repo-map.mjs --self-check >/dev/null ) \
+  || { echo "the migrated generator fails its own self-check" >&2; exit 1; }
+
 UPGRADE_OUT="$("$S/upgrade-afk.sh" "$UPGRADE_TARGET" --cron-hour 13)"
 printf '%s\n' "$UPGRADE_OUT"
 grep -q 'claude-deepseek)' "$UPGRADE_TARGET/.sandcastle/Dockerfile" \

@@ -17,3 +17,7 @@ edits instead of overwriting it.
   codebase-memory binary had to be executable. The 1.6.1 step replaces a project's
   copy only when it still matches these byte for byte; both revisions export the
   same names, so a presence test would accept a file the step must not touch.
+
+- `repo-map.mjs.1.6.0` — the map generator before it read `pyproject.toml`. The
+  1.6.1 step restages it only when a project's copy still matches this, so a
+  project that taught its generator about something local keeps that.

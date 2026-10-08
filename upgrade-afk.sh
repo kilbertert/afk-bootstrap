@@ -1634,7 +1634,7 @@ if [ "$from_minor" -eq 6 ] && [ "$from_patch" -lt 1 ] && [ "$to_minor" -ge 6 ]; 
   say "== $FROM -> $TEMPLATE_VERSION: MCP config written atomically; binary must be executable =="
 
   RESTAGE=""
-  for rel in .sandcastle/mcp-config.ts .sandcastle/mcp-config.check.ts; do
+  for rel in .sandcastle/mcp-config.ts .sandcastle/mcp-config.check.ts .sandcastle/repo-map.mjs; do
     SRC="$S/scaffold/$rel"
     [ -e "$SRC" ] || { echo "migration reference missing: $SRC" >&2; exit 1; }
     if [ -e "$WORK/$rel" ] && cmp -s "$WORK/$rel" "$S/references/$(basename "$rel").1.6.0"; then
@@ -1648,6 +1648,15 @@ if [ "$from_minor" -eq 6 ] && [ "$from_patch" -lt 1 ] && [ "$to_minor" -ge 6 ]; 
     fi
   done
 
+  # The map is regenerated unconditionally at this version, because the generator
+  # changed: `entryPoints` now reads `[project.scripts]`, so every project that
+  # ships console commands has a map whose content is out of date even though its
+  # file is current. Leaving it would fail the freshness check this scaffold's own
+  # CI runs, on the project's next push, for a reason the project did not cause.
+  if [ -e "$WORK/.sandcastle/repo-map.mjs" ]; then
+    MAP_NEEDED=1
+  fi
+
   # NEW_FILES drives both the change report and the publish loop; a path that is
   # restaged without being named there is migrated in the stage and discarded at
   # exit — the 1.6.0 defect this same file records.
@@ -1655,6 +1664,38 @@ if [ "$from_minor" -eq 6 ] && [ "$from_patch" -lt 1 ] && [ "$to_minor" -ge 6 ]; 
     note "restaged: $rel"
     NEW_FILES="$NEW_FILES $rel"
   done
+
+  # The generator gained a parser for pyproject.toml's console scripts, and a
+  # self-check for it. A project that already runs the map freshness check has no
+  # line that exercises the parser: a fresh scaffold carries no console scripts,
+  # so the map is empty there and correct — the defect is only visible in the
+  # Python projects this step is largely aimed at. Anchored on the map step the
+  # 1.6.0 wiring installed; a project that reordered its CI is reported.
+  POLICY="$WORK/.github/workflows/afk-policy.yml"
+  if [ ! -e "$POLICY" ]; then
+    note "afk-policy.yml absent; the scaffold supplies it"
+  elif grep -qF "repository-map generator self-check" "$POLICY"; then
+    note "afk-policy.yml: generator self-check already wired"
+  else
+    P1="      - name: Verify the repository map is current
+        run: node .sandcastle/repo-map.check.mjs"
+    P2="$P1
+      # The generator's own parser, not the map it produced: a regex that matches
+      # nothing yields a map that looks complete and omits the answer, and a fresh
+      # scaffold cannot catch that because a fresh scaffold has no console scripts
+      # to omit. Deliberately NOT wired into repo-map.check.mjs — the map check
+      # must use the shipping code path or it would validate one thing and ship
+      # another.
+      - name: Repository-map generator self-check
+        run: node .sandcastle/repo-map.mjs --self-check"
+    if grep -qF "$P1" "$POLICY"; then
+      subst "$POLICY" "$P1" "$P2"
+      note "afk-policy.yml: generator self-check added"
+    else
+      say "afk-policy.yml has no map-freshness step to anchor on."
+      say "Add a CI step running 'node .sandcastle/repo-map.mjs --self-check' by hand."
+    fi
+  fi
 fi
 
 

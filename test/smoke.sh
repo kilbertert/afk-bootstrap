@@ -107,6 +107,16 @@ grep -q "sandcastle:fake-$LANGUAGE-project" "$TARGET/.sandcastle/profile.ts" || 
 grep -q 'claude-deepseek' "$TARGET/.sandcastle/profile.ts" || { echo "claude-deepseek profile missing" >&2; exit 1; }
 grep -q 'claude-deepseek' "$TARGET/.sandcastle/main.ts" || { echo "claude-deepseek CLI option missing" >&2; exit 1; }
 grep -q 'claude-deepseek)' "$TARGET/.sandcastle/Dockerfile" || { echo "claude-deepseek Docker dispatch missing" >&2; exit 1; }
+# Every runner that drives an agent logs the calls it made. Asserted on a fresh
+# scaffold so a template edit that drops the flag fails here rather than
+# silently shrinking what a future run's log can answer.
+for runner in \
+  .sandcastle/implement/implement.ts \
+  .sandcastle/implement-prd/implement-prd.ts \
+  .sandcastle/implement-pr/implement-pr.ts; do
+  grep -q 'verbose: true' "$TARGET/$runner" \
+    || { echo "scaffolded $runner does not log every tool call" >&2; exit 1; }
+done
 # The generated workflow doc is project-owned once it lands (the fixture above
 # pre-creates one), so the provider documentation is asserted on the template.
 grep -q 'claude-deepseek' "$S/templates/afk-workflow.md" || { echo "claude-deepseek workflow documentation missing" >&2; exit 1; }
@@ -604,6 +614,52 @@ grep -q 'just-written.ts' "$P164/.sandcastle/REPO-MAP.md" \
   || { echo "an uncommitted new file is missing from the map" >&2; exit 1; }
 ( cd "$P164" && node .sandcastle/repo-map.check.mjs >/dev/null ) \
   || { echo "the 1.6.4 map is stale on arrival" >&2; exit 1; }
+
+# The 1.6.4 -> 1.6.5 step: every agent runner logs the calls it actually made.
+# Asserted on all three runners, because a fix applied to one and not the others
+# is exactly the drift a single-file check misses — and the failure is silent
+# (a log that shows fewer tools still looks like a complete log).
+P165="$TMP/upgrade-164-runners-$LANGUAGE"
+rm -rf "$P165"
+mkdir -p "$P165/.github/workflows" "$P165/docs" "$P165/.sandcastle/implement" "$P165/.sandcastle/implement-pr" "$P165/.sandcastle/implement-prd"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$P165/"
+for rel in .sandcastle/implement/implement.ts .sandcastle/implement-prd/implement-prd.ts .sandcastle/implement-pr/implement-pr.ts; do
+  printf 'const result = await sandcastle.run({\n  logging: { type: "stdout" },\n});\n' > "$P165/$rel"
+done
+node -e '
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  m.afk_template_version = "1.6.4";
+  m.templateVersion = 1;
+  fs.writeFileSync(process.argv[1], JSON.stringify(m, null, 2) + "\n");
+' "$P165/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$P165" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project at 1.6.4" >&2; exit 1; }
+for rel in .sandcastle/implement/implement.ts .sandcastle/implement-prd/implement-prd.ts .sandcastle/implement-pr/implement-pr.ts; do
+  grep -q 'verbose: true' "$P165/$rel" \
+    || { echo "1.6.5 did not make $rel verbose" >&2; exit 1; }
+done
+# A runner the step cannot anchor on is reported, never half-rewritten: a file
+# with `verbose: true` appended somewhere unexpected is worse than one left alone.
+P165ODD="$TMP/upgrade-164-odd-$LANGUAGE"
+rm -rf "$P165ODD"
+mkdir -p "$P165ODD/.github/workflows" "$P165ODD/docs" "$P165ODD/.sandcastle/implement"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$P165ODD/"
+printf 'const result = await sandcastle.run({\n  logging: { type: "file", path: "/tmp/x.log" },\n});\n' > "$P165ODD/.sandcastle/implement/implement.ts"
+node -e '
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  m.afk_template_version = "1.6.4";
+  m.templateVersion = 1;
+  fs.writeFileSync(process.argv[1], JSON.stringify(m, null, 2) + "\n");
+' "$P165ODD/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$P165ODD" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project with a non-stdout logging runner" >&2; exit 1; }
+grep -q 'type: "file"' "$P165ODD/.sandcastle/implement/implement.ts" \
+  || { echo "1.6.5 rewrote a logging option it should have left alone" >&2; exit 1; }
+if grep -q 'verbose' "$P165ODD/.sandcastle/implement/implement.ts"; then
+  echo "1.6.5 added verbose to a runner it could not anchor on" >&2; exit 1
+fi
 # It has to be valid YAML at a step boundary. An insertion that lands a level too
 # deep parses the `-` as a continuation key and the workflow fails to load — the
 # run never starts, which is the silent outcome this whole step exists to remove.

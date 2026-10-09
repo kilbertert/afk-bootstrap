@@ -12,7 +12,15 @@ const OUTPUT_DIR = process.env.OUTPUT_DIR ?? "/tmp";
 const result = await sandcastle.run({
   name: `implement-#${ISSUE_NUMBER}`,
   ...claudeProfile(process.env.AFK_PROFILE),
-  logging: { type: "stdout" },
+  // `verbose` appends every raw stdout line the agent emits, including the
+// tool-use blocks sandcastle's parser drops. Its typed `toolCall` events only
+// cover four tools (Bash, WebSearch, WebFetch, Agent) — everything else, and
+// every MCP call, is invisible without this. Measured on a real run: the log
+// showed 70 tool calls, all Bash, while the session had also used Read, Edit
+// and MCP tools that simply never appeared. Debugging why an agent ignored an
+// instruction needs the calls it actually made, not the subset the renderer
+// happens to know.
+logging: { type: "stdout", verbose: true },
   promptFile: path.join(import.meta.dirname, "prompt.md"),
   promptArgs: {
     ISSUE_NUMBER,

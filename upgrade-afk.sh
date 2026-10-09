@@ -1862,6 +1862,48 @@ if [ "$from_minor" -eq 6 ] && [ "$from_patch" -lt 4 ] && [ "$to_minor" -ge 6 ]; 
 fi
 
 
+# ---- step: 1.6.4 -> 1.6.5 — a run's tool calls are visible in its log ---------
+# The three runners that drive an agent set `logging: { type: "stdout" }`, which
+# renders tool calls through a four-entry table (Bash, WebSearch, WebFetch,
+# Agent). Everything else — Read, Edit, Write, and every `mcp__*` call — is
+# dropped before it reaches the log.
+#
+# That is not a cosmetic gap. Diagnosing "the agent ignored the instruction to
+# read REPO-MAP.md first" or "the MCP servers never got used" needs the calls it
+# actually made; a log that shows only Bash answers a different question. On the
+# run that motivated this step the log showed 70 tool calls, all Bash, and the
+# conclusion drawn from it was wrong.
+#
+# `verbose` is the provider's own escape hatch: it appends every raw stdout line,
+# including the tool-use blocks the parser discards.
+if [ "$from_minor" -eq 6 ] && [ "$from_patch" -lt 5 ] && [ "$to_minor" -ge 6 ]; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: agent runs log every tool call =="
+
+  for rel in \
+    .sandcastle/implement/implement.ts \
+    .sandcastle/implement-prd/implement-prd.ts \
+    .sandcastle/implement-pr/implement-pr.ts ; do
+    [ -e "$WORK/$rel" ] || { note "$rel absent; skipped"; continue; }
+    if grep -qF "verbose: true" "$WORK/$rel"; then
+      note "$rel: already verbose"
+      continue
+    fi
+    if ! grep -qF 'logging: { type: "stdout" },' "$WORK/$rel"; then
+      say "$rel has no logging line this migration recognises."
+      say "Set its logging option to { type: \"stdout\", verbose: true } by hand."
+      continue
+    fi
+    # shellcheck disable=SC2016  # the replacement is TS source; no shell here.
+    subst "$WORK/$rel" \
+      'logging: { type: "stdout" },' \
+      'logging: { type: "stdout", verbose: true },'
+    NEW_FILES="$NEW_FILES $rel"
+    note "verbose logging: $rel"
+  done
+fi
+
+
 if [ "$STEP_RAN" = "0" ]; then
   echo "no upgrade step defined from $FROM to $TEMPLATE_VERSION" >&2
   exit 1

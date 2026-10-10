@@ -824,6 +824,47 @@ node -e '
 ( cd "$P172C" && grep -qF "timeout 120" .sandcastle/profile.ts ) \
   || { echo "the index hook has no self-imposed deadline — a hang can kill the run" >&2; exit 1; }
 
+# 1.7.4: every agent runner works in its own worktree. The workflow checkout
+# carries the review and update-branch workflows' residue, and everything reading
+# the filesystem — the indexer, the agent — sees it as part of the repository.
+# Measured: 6 283 nodes became 24 627, because serena's own .pkl caches under
+# `candidate/` are parsed as source and time out.
+# The three runner files come from `bootstrap-afk.sh`, not from a migration: the
+# cumulative fixture above never had them, so this case plants them at their
+# pre-1.7.4 shape. Without that the assertion passes vacuously — which is how the
+# first version of it "passed" while checking nothing.
+P174="$TMP/upgrade-173-worktrees-$LANGUAGE"
+rm -rf "$P174"
+mkdir -p "$P174/.github/workflows" "$P174/.sandcastle/implement" "$P174/.sandcastle/implement-prd" "$P174/.sandcastle/implement-pr"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$P174/"
+cp -R "$S/test/fixtures/runners-1.7.3/." "$P174/"
+printf 'node_modules/\n' > "$P174/.gitignore"
+node -e '
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  m.afk_template_version = "1.7.3";
+  m.templateVersion = 1;
+  fs.writeFileSync(process.argv[1], JSON.stringify(m, null, 2) + "\n");
+' "$P174/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$P174" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project at 1.7.3" >&2; exit 1; }
+for runner in \
+  .sandcastle/implement/implement.ts \
+  .sandcastle/implement-prd/implement-prd.ts \
+  .sandcastle/implement-pr/implement-pr.ts; do
+  grep -qF 'branchStrategy: { type: "branch"' "$P174/$runner" \
+    || { echo "1.7.4 left $runner on the workflow checkout" >&2; exit 1; }
+  # Parseable, not just textually present: the insertion is three lines into a
+  # call's argument list, which is exactly where a migration produces something
+  # that compiles nowhere.
+  npx --yes esbuild --loader:.ts=ts "$P174/$runner" --outfile=/dev/null 2>/dev/null \
+    || { echo "1.7.4 produced a $runner that does not parse" >&2; exit 1; }
+done
+# And the worktree it creates must be ignored, or the next run indexes the
+# previous run's worktree — the same defect one level in.
+grep -qE '^\.sandcastle/worktrees/?' "$P174/.gitignore" \
+  || { echo "1.7.4 did not ignore the sandbox worktree directory" >&2; exit 1; }
+
 
 ( cd "$P171" && npx --yes tsx -e '
 import { mcpServers } from "./.sandcastle/mcp-config.ts";

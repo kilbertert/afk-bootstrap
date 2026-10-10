@@ -12,26 +12,6 @@ const OUTPUT_DIR = process.env.OUTPUT_DIR ?? "/tmp";
 const result = await sandcastle.run({
   name: `implement-#${ISSUE_NUMBER}`,
   ...claudeProfile(process.env.AFK_PROFILE),
-  // An isolated worktree, not the runner's checkout.
-  //
-  // Without this the default applies: the bind-mount provider's `head` strategy,
-  // which mounts the workflow's own checkout straight into the container. That
-  // checkout is not a clean tree — the review and update-branch workflows leave
-  // their own directories in it (`candidate/`, `controller/`, `delivery/`, each
-  // with its own `.git`), and they are untracked and unignored, so they are
-  // simply *part of the repository* as far as anything reading the filesystem is
-  // concerned.
-  //
-  // Measured: the knowledge-graph indexer walked them and went from 6 283 nodes
-  // to 24 627, because `candidate/.serena/cache/python/*.pkl` are serena's own
-  // caches that the indexer tries to parse as source and times out on. The same
-  // residue is visible to the agent, which may read a second copy of the code
-  // that is not the one it is working on.
-  //
-  // `branchStrategy: branch` makes sandcastle create a worktree from
-  // `origin/main` and mount that instead. `main.ts` and `planner.ts` have always
-  // done this; the label-driven chain did not.
-  branchStrategy: { type: "branch", branch: BRANCH, baseBranch: "origin/main" },
   // `verbose` appends every raw stdout line the agent emits, including the
 // tool-use blocks sandcastle's parser drops. Its typed `toolCall` events only
 // cover four tools (Bash, WebSearch, WebFetch, Agent) — everything else, and

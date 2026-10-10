@@ -2281,6 +2281,81 @@ if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 3 ]; then
 fi
 
 
+# ---- step: 1.7.3 -> 1.7.4 — runs work in their own worktree ----------------
+# MINOR-in-behaviour, patch in version: the label-driven implementer switched from
+# mounting the workflow's own checkout to creating an isolated worktree.
+#
+# Why it matters: the default for a bind-mount provider is `head`, which mounts
+# the workflow checkout straight into the container. That checkout carries the
+# residue of the review and update-branch workflows — `candidate/`, `controller/`,
+# `delivery/`, each with its own `.git`, all untracked and unignored. Anything
+# reading the filesystem sees them as part of the repository:
+#
+#   - the knowledge-graph indexer walked them and went from 6 283 nodes to 24 627,
+#     because `candidate/.serena/cache/python/*.pkl` are serena's own caches that
+#     the indexer tries to parse as source and times out on;
+#   - the agent sees them too, and may read a second copy of the code that is not
+#     the one it is working on.
+#
+# `main.ts` and `planner.ts` have always used an isolated worktree; only the
+# label-driven chain did not. The two halves ship together, because the worktree
+# sandcastle creates lives under `.sandcastle/worktrees/` — ignored in some
+# projects, not in others, and an unignored one is the same defect one level in.
+if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 4 ]; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: the implementer works in its own worktree =="
+
+  # The three files share one anchor: the profile spread every runner opens with.
+  # An isolated worktree is one line; the reasoning lives where the code does.
+  cat > "$STAGE/add-worktree-strategy.mjs" <<'WTJS'
+import { readFileSync, writeFileSync } from "node:fs";
+const [path] = process.argv.slice(2);
+let src = readFileSync(path, "utf8");
+// Two spellings exist in the field: the profile call with an explicit profile
+// argument, and the bare one the PRD runner uses. Both are the same spread, and
+// anchoring on only one silently skips the file that uses the other.
+const ANCHORS = ["  ...claudeProfile(process.env.AFK_PROFILE),", "  ...claudeProfile(),"];
+const anchor = ANCHORS.find((a) => src.includes(a));
+if (anchor === undefined) process.exit(3);
+if (src.includes("branchStrategy:")) process.exit(4);
+const note = [
+  "  // An isolated worktree, not the workflow checkout: that checkout carries the",
+  "  // review and update-branch workflows' residue (candidate/, controller/,",
+  "  // delivery/, each with its own .git), and everything reading the filesystem",
+  "  // sees it as part of the repository — the agent included.",
+  '  branchStrategy: { type: "branch", branch: BRANCH, baseBranch: "origin/main" },',
+].join("\n");
+writeFileSync(path, src.replace(anchor, anchor + "\n" + note));
+WTJS
+
+  for rel in \
+    .sandcastle/implement/implement.ts \
+    .sandcastle/implement-prd/implement-prd.ts \
+    .sandcastle/implement-pr/implement-pr.ts ; do
+    [ -e "$WORK/$rel" ] || { note "$rel absent; skipped"; continue; }
+    node "$STAGE/add-worktree-strategy.mjs" "$WORK/$rel" || rc=$?
+    case ${rc:-0} in
+      0) NEW_FILES="$NEW_FILES $rel"; note "$rel: now uses an isolated worktree" ;;
+      3) say "$rel has no claudeProfile spread this step recognises; add"
+         say '  branchStrategy: { type: "branch", branch: BRANCH, baseBranch: "origin/main" }' ;;
+      4) note "$rel: already uses an explicit branch strategy" ;;
+      *) echo "$rel: could not add the branch strategy — refusing to guess" >&2; exit 1 ;;
+    esac
+    rc=0
+  done
+
+  # The worktree sandcastle creates lives under `.sandcastle/worktrees/`. An
+  # unignored one is the same defect one level in: the next run would index the
+  # previous run's worktree as part of the repository.
+  if [ -f "$TARGET/.gitignore" ] && ! grep -qE '^\.sandcastle/worktrees/?' "$TARGET/.gitignore"; then
+    cp "$TARGET/.gitignore" "$WORK/.gitignore"
+    printf '\n# AFK sandbox worktrees (one per run; residue if not ignored)\n.sandcastle/worktrees/\n' >> "$WORK/.gitignore"
+    NEW_FILES="$NEW_FILES .gitignore"
+    note ".gitignore: .sandcastle/worktrees/ added"
+  fi
+fi
+
+
 if [ "$STEP_RAN" = "0" ]; then
   echo "no upgrade step defined from $FROM to $TEMPLATE_VERSION" >&2
   exit 1

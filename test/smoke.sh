@@ -927,6 +927,50 @@ if ( cd "$BRANCHCHECK" && AFK_ROOT="$PWD" AFK_DEFAULT_BRANCH=main BRANCH=main no
   echo "the branch rule accepted a run that names the default branch" >&2; exit 1
 fi
 
+# 1.7.9: a retry reclaims the worktree a failed run left. Sandcastle preserves it
+# on failure by design, and the next run for the same issue finds its branch
+# still checked out — `git branch --force` then refuses, so re-running a failed
+# issue (the normal case) fails before the agent starts.
+P179="$TMP/upgrade-178-worktree-reclaim-$LANGUAGE"
+rm -rf "$P179"
+mkdir -p "$P179/.github/workflows" "$P179/.sandcastle"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$P179/"
+cp -R "$S/test/fixtures/workflows-1.7.4/." "$P179/.github/workflows/"
+node -e '
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  m.afk_template_version = "1.7.8";
+  m.templateVersion = 1;
+  fs.writeFileSync(process.argv[1], JSON.stringify(m, null, 2) + "\n");
+' "$P179/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$P179" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project at 1.7.8" >&2; exit 1; }
+for wf in agent-implement agent-implement-prd; do
+  grep -qF "stale_worktree" "$P179/.github/workflows/$wf.yml" \
+    || { echo "$wf.yml does not reclaim a stale worktree before creating the branch" >&2; exit 1; }
+  python3 - "$P179/.github/workflows/$wf.yml" <<'WTFILE' || { echo "$wf.yml is not valid YAML after the insertion" >&2; exit 1; }
+import sys, yaml
+yaml.safe_load(open(sys.argv[1]).read())
+WTFILE
+done
+# The reclamation is a real command, not prose: exercised on a throwaway repo,
+# because "the branch is force-updated while a worktree still holds it" is the
+# failure it exists to prevent and a textual assertion cannot see it.
+WT="$TMP/stale-worktree-$LANGUAGE"
+rm -rf "$WT"
+mkdir -p "$WT"
+( cd "$WT" && git init -q -b main && git config user.email t@e.com && git config user.name t \
+  && : > f && git add -A && git checkout -q -b chore/seed && git commit -qm "chore: seed" \
+  && git branch -f main chore/seed && git checkout -q main \
+  && git branch agent/issue-1 && git worktree add -q .sandcastle/worktrees/w agent/issue-1 )
+if ( cd "$WT" && git branch --force agent/issue-1 HEAD ) >/dev/null 2>&1; then
+  echo "the fixture does not reproduce the conflict — a branch in a worktree was force-updated" >&2
+  exit 1
+fi
+( cd "$WT" && stale="$(git worktree list --porcelain | awk -v b="refs/heads/agent/issue-1" '/^worktree /{ wt=$2 } $1 == "branch" && $2 == b { print wt }')" \
+  && [ -n "$stale" ] && git worktree remove --force "$stale" && git branch --force agent/issue-1 HEAD ) \
+  || { echo "reclaiming the stale worktree did not let the branch be force-updated" >&2; exit 1; }
+
 for runner in .sandcastle/implement/implement.ts .sandcastle/implement-prd/implement-prd.ts; do
   grep -qF 'origin/main..' "$P174/$runner" \
     || { echo "$runner does not count commits on the branch" >&2; exit 1; }

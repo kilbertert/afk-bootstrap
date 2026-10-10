@@ -2666,6 +2666,80 @@ if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 8 ]; then
 fi
 
 
+# ---- step: 1.7.8 -> 1.7.9 — a retry reclaims the worktree a failed run left --
+# Sandcastle preserves the worktree when a run fails ("Worktree preserved at ...")
+# — that is deliberate, so the work can be inspected. The next run for the same
+# issue then finds its branch still checked out there, and `git branch --force`
+# refuses:
+#
+#   fatal: cannot force update the branch 'agent/issue-676-...' used by worktree at ...
+#
+# Re-running a failed issue is the normal case, so the retry has to reclaim it.
+# `git worktree remove --force` discards uncommitted work in that worktree, which
+# is right here: it belongs to a run that already failed, and this run redoes the
+# work from the base branch.
+if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 9 ]; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: a retry reclaims a stale worktree =="
+
+  for pair in \
+    ".github/workflows/agent-implement.yml|          git branch --force \"\$BRANCH\" HEAD" \
+    ".github/workflows/agent-implement-prd.yml|            git branch --force \"\$BRANCH\" HEAD"; do
+    WF="${pair%%|*}"
+    ANCHOR="${pair#*|}"
+    [ -e "$WORK/$WF" ] || { note "$WF absent; skipped"; continue; }
+    if grep -qF "stale_worktree" "$WORK/$WF"; then
+      note "$WF: already reclaims a stale worktree"
+      continue
+    fi
+    if ! grep -qF -- "$ANCHOR" "$WORK/$WF"; then
+      say "$WF has no branch-creation line this step recognises."
+      say "Add a 'git worktree remove --force' for any worktree holding \$BRANCH"
+      say "before the branch is force-updated."
+      continue
+    fi
+    cat > "$STAGE/add-reclaim.mjs" <<'RECLAIMJS'
+import { readFileSync, writeFileSync } from "node:fs";
+const [path, anchor, indent] = process.argv.slice(2);
+const src = readFileSync(path, "utf8");
+if (!src.includes(anchor)) process.exit(3);
+const inserted = [
+  `${indent}# A failed run leaves its worktree behind — sandcastle preserves it on`,
+  `${indent}# purpose ("Worktree preserved at ..."), and the next run for the same`,
+  `${indent}# issue finds the branch still checked out there. git branch --force`,
+  `${indent}# then refuses:`,
+  `${indent}#`,
+  `${indent}#   fatal: cannot force update the branch '...' used by worktree at ...`,
+  `${indent}#`,
+  `${indent}# Reclaim it first. git worktree remove --force discards uncommitted`,
+  `${indent}# work in that worktree, which is correct here: it belongs to a run`,
+  `${indent}# that already failed, and this run redoes the work from the base branch.`,
+  `${indent}stale_worktree="$(git worktree list --porcelain | awk -v b="refs/heads/$BRANCH" '`,
+  `${indent}  /^worktree /{ wt=$2 }`,
+  `${indent}  $1 == "branch" && $2 == b { print wt }`,
+  `${indent}')"`,
+  `${indent}if [ -n "$stale_worktree" ]; then`,
+  `${indent}  echo "reclaiming the worktree a previous run left at $stale_worktree"`,
+  `${indent}  git worktree remove --force "$stale_worktree" || true`,
+  `${indent}fi`,
+].join("\n");
+writeFileSync(path, src.replace(anchor, inserted + "\n" + anchor));
+RECLAIMJS
+    case "$WF" in
+      *implement-prd*) node "$STAGE/add-reclaim.mjs" "$WORK/$WF" "$ANCHOR" "            " \
+        || { echo "$WF: could not insert the reclamation — refusing to guess" >&2; exit 1; } ;;
+      *) node "$STAGE/add-reclaim.mjs" "$WORK/$WF" "$ANCHOR" "          " \
+        || { echo "$WF: could not insert the reclamation — refusing to guess" >&2; exit 1; } ;;
+    esac
+    # Not registered in NEW_FILES: `.github/workflows` is published as a
+    # directory, and a file listed here as well publishes twice — the second
+    # copy's rollback backup is taken after the first landed, so a failed publish
+    # restores that newer content over the directory restore.
+    note "$WF: reclaims a stale worktree before creating the branch"
+  done
+fi
+
+
 if [ "$STEP_RAN" = "0" ]; then
   echo "no upgrade step defined from $FROM to $TEMPLATE_VERSION" >&2
   exit 1

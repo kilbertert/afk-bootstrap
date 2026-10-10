@@ -838,6 +838,12 @@ rm -rf "$P174"
 mkdir -p "$P174/.github/workflows" "$P174/.sandcastle/implement" "$P174/.sandcastle/implement-prd" "$P174/.sandcastle/implement-pr"
 cp -R "$S/test/fixtures/legacy-1.1.x/." "$P174/"
 cp -R "$S/test/fixtures/runners-1.7.3/." "$P174/"
+# The two workflows, from the same fixture release — the 1.7.5 step edits both,
+# at two different indents, and a fixture that carried only one of them would
+# leave the harder case untested.
+cp -R "$S/test/fixtures/workflows-1.7.4/." "$P174/.github/workflows/"
+# 1.7.5 edits the runners and 1.7.6 the workflows — two releases, one end state,
+# so this fixture walks the whole chain in a single invocation.
 printf 'node_modules/\n' > "$P174/.gitignore"
 node -e '
   const fs = require("fs");
@@ -872,6 +878,32 @@ if grep -qF "branchStrategy:" "$P174/.sandcastle/implement-pr/implement-pr.ts"; 
 fi
 npx --yes esbuild --loader:.ts=ts "$P174/.sandcastle/implement-pr/implement-pr.ts" --outfile=/dev/null 2>/dev/null \
   || { echo "the migration left implement-pr.ts unparseable" >&2; exit 1; }
+
+# And the workflows must stop checking the task branch out for the same reason:
+# sandcastle's `branch` strategy checks it out inside a worktree, and git refuses
+# to check one branch out twice. The branch is created without moving HEAD.
+# The patterns are built so the literal `"$BRANCH"` is not read as an expansion
+# (shellcheck SC2016) — the text being matched is workflow source.
+DQ='"'
+CO_OLD="git checkout -b ${DQ}\$BRANCH${DQ}"
+CO_OLD_CAP="git checkout -B ${DQ}\$BRANCH${DQ}"
+BR_NEW="git branch --force ${DQ}\$BRANCH${DQ}"
+for wf in agent-implement agent-implement-prd; do
+  if grep -qF -e "$CO_OLD" -e "$CO_OLD_CAP" "$P174/.github/workflows/$wf.yml"; then
+    echo "$wf.yml still checks out the task branch — the worktree would be refused" >&2
+    exit 1
+  fi
+  grep -qF "$BR_NEW" "$P174/.github/workflows/$wf.yml" \
+    || { echo "$wf.yml does not create the task branch without checking it out" >&2; exit 1; }
+done
+# Both indents are exercised above (10 spaces and 12), which is the point: an
+# exact-anchor substitution on the wrong indent fails loudly rather than missing.
+python3 - "$P174" <<'YAMLOK' || { echo "the migrated workflows are not valid YAML" >&2; exit 1; }
+import sys, pathlib, yaml
+root = pathlib.Path(sys.argv[1]) / ".github" / "workflows"
+for n in ("agent-implement", "agent-implement-prd"):
+    yaml.safe_load((root / f"{n}.yml").read_text())
+YAMLOK
 # And the worktree it creates must be ignored, or the next run indexes the
 # previous run's worktree — the same defect one level in.
 grep -qE '^\.sandcastle/worktrees/?' "$P174/.gitignore" \

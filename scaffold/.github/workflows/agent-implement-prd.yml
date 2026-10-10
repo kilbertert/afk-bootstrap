@@ -259,6 +259,10 @@ jobs:
 
       - name: Verify AFK policy before push
         if: steps.shape.outputs.mode == 'run' && success()
+        env:
+          # See agent-implement.yml: the checkout stays on the default branch, so
+          # the check has to be told which branch the run is working on.
+          BRANCH: ${{ steps.branch.outputs.name }}
         run: node .sandcastle/policy-check.mjs delivery
 
       - name: Push branch

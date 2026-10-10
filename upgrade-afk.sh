@@ -2496,6 +2496,145 @@ if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 6 ]; then
   done
 fi
 
+# ---- step: 1.7.6 -> 1.7.7 — the commit count is taken on the branch ---------
+# Sandcastle's `branch` strategy collects `result.commits` with
+# `git rev-list <base>..HEAD` run **in the host repository** — and the host stays
+# on the base branch, because the task branch is checked out in a worktree (git
+# allows each branch in one worktree only). So `result.commits` is empty for a
+# run that did commit.
+#
+# Measured on a real run: the agent committed on
+# `agent/issue-670-...`, the worktree held the commit, and the run failed with
+# "Agent finished but no commits were made on the branch" — then deleted the
+# worktree. 1.7.5 had already moved `implement.ts` off its own `git rev-list
+# main..HEAD`; that call and `result.commits` read the same HEAD, one level
+# apart, so the fix moved the read rather than fixing it.
+#
+# The branch ref is shared across worktrees, so naming the branch is both correct
+# and independent of where the host checkout happens to be.
+if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 7 ]; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: the commit count names the branch =="
+
+  # The pattern is a literal from the runner source, so the branch variable in
+  # it is matched as text rather than expanded (shellcheck SC2016 otherwise).
+  DQ='"'
+  ON_BRANCH="origin/main..${DQ}\$BRANCH${DQ}"
+
+  REL=.sandcastle/implement/implement.ts
+  if [ ! -e "$WORK/$REL" ]; then
+    note "$REL absent; skipped"
+  elif grep -qF "origin/main..\$BRANCH" "$WORK/$REL"; then
+    note "$REL: already counts on the branch"
+  elif grep -qF "$ON_BRANCH" "$WORK/$REL"; then
+    note "$REL: already counts on the branch"
+  else
+    cat > "$STAGE/use-branch-count.mjs" <<'BRANCHJS'
+import { readFileSync, writeFileSync } from "node:fs";
+const [path] = process.argv.slice(2);
+let src = readFileSync(path, "utf8");
+
+// The 1.7.5 shape: a HEAD-relative count that reads the base branch.
+const OLD = `const commitsAhead = Number(
+  execSync("git rev-list --count main..HEAD", { encoding: "utf8" }).trim()
+);`;
+
+// The 1.7.5 follow-up shape, where the count moved to `result.commits` — the
+// same HEAD read, one level in.
+const ALT = `const commits = result.commits ?? [];
+if (commits.length === 0) {
+  fail("Agent finished but no commits were made on the branch.");
+}`;
+
+const NEW = `const commitsAhead = Number(
+  execSync(\`git rev-list --count "origin/main..\${BRANCH}"\`, { encoding: "utf8" }).trim()
+);`;
+
+if (src.includes(OLD)) {
+  src = src.replace(OLD, NEW);
+} else if (src.includes(ALT)) {
+  src = src.replace(
+    ALT,
+    `const commitsAhead = Number(
+  execSync(\`git rev-list --count "origin/main..\${BRANCH}"\`, { encoding: "utf8" }).trim()
+);
+if (!Number.isFinite(commitsAhead) || commitsAhead === 0) {
+  fail("Agent finished but no commits were made on the branch.");
+}`,
+  );
+  src = src.replace(
+    "console.log(`\\nImplementation produced ${commits.length} commit(s) on ${BRANCH}.`);",
+    "console.log(`\\nImplementation produced ${commitsAhead} commit(s) on ${BRANCH}.`);",
+  );
+} else if (src.includes("origin/main..${BRANCH}")) {
+  // Already counting on the branch; only the trailing per-run line is left.
+} else {
+  process.exit(3);
+}
+
+// The trailing per-run line reports the same count, and it reads
+// `result.commits` in both shapes above — the value this step exists to replace.
+// Left alone it prints 0 for a run that committed.
+for (const [from, to] of [
+  ["console.log(`  commits this run: ${commits.length}`);", "console.log(`  commits this run: ${commitsAhead}`);"],
+  ["console.log(`  commits this run: ${result.commits.length}`);", "console.log(`  commits this run: ${commitsAhead}`);"],
+]) {
+  if (src.includes(from)) src = src.replace(from, to);
+}
+
+// `execSync` is what reads the branch, and the file may not import it yet.
+if (!src.includes('from "node:child_process"')) {
+  src = src.replace('import * as fs from "node:fs";', 'import { execSync } from "node:child_process";\nimport * as fs from "node:fs";');
+}
+writeFileSync(path, src);
+BRANCHJS
+    if node "$STAGE/use-branch-count.mjs" "$WORK/$REL"; then
+      NEW_FILES="$NEW_FILES $REL"
+      note "$REL: counts commits on the branch"
+    else
+      say "$REL has no commit count this step recognises; if it reads HEAD or"
+      say "result.commits, change it to:"
+      say "  git rev-list --count \"origin/main..\$BRANCH\""
+    fi
+  fi
+
+  # The PRD runner only logs the count, but the log is the evidence an operator
+  # reads when a run looks wrong — and it printed 0 for runs that committed.
+  REL2=.sandcastle/implement-prd/implement-prd.ts
+  if [ ! -e "$WORK/$REL2" ]; then
+    note "$REL2 absent; skipped"
+  elif grep -qF "commitsOnBranch" "$WORK/$REL2"; then
+    note "$REL2: already counts on the branch"
+  elif ! grep -qF "result.commits.length" "$WORK/$REL2"; then
+    note "$REL2: no HEAD-relative count to correct"
+  else
+    cat > "$STAGE/use-branch-count-prd.mjs" <<'PRDJS'
+import { readFileSync, writeFileSync } from "node:fs";
+const [path] = process.argv.slice(2);
+let src = readFileSync(path, "utf8");
+const OLD = "console.log(`  commits this run: ${result.commits.length}`);";
+if (!src.includes(OLD)) process.exit(3);
+src = src.replace(OLD, "console.log(`  commits this run: ${commitsOnBranch(BRANCH)}`);");
+src = src.replace(
+  /\nfunction required\(/,
+  `\n/**\n * Commits on \`branch\` that are not on \`origin/main\`.\n *\n * The branch ref is shared across worktrees, so this is correct regardless of\n * which branch this process's checkout happens to be on.\n */\nfunction commitsOnBranch(branch: string): number {\n  return Number(\n    execSync(\`git rev-list --count "origin/main..\${branch}"\`, { encoding: "utf8" }).trim(),\n  );\n}\n\nfunction required(`,
+);
+if (!src.includes('from "node:child_process"')) {
+  src = src.replace('import * as sandcastle from "@ai-hero/sandcastle";', 'import { execSync } from "node:child_process";\nimport * as sandcastle from "@ai-hero/sandcastle";');
+}
+writeFileSync(path, src);
+PRDJS
+    if node "$STAGE/use-branch-count-prd.mjs" "$WORK/$REL2"; then
+      NEW_FILES="$NEW_FILES $REL2"
+      note "$REL2: counts commits on the branch"
+    else
+      say "$REL2 has no commit count this step recognises; change its"
+      say "result.commits.length to git rev-list --count \"origin/main..\$BRANCH\"."
+    fi
+  fi
+fi
+
+
 if [ "$STEP_RAN" = "0" ]; then
   echo "no upgrade step defined from $FROM to $TEMPLATE_VERSION" >&2
   exit 1

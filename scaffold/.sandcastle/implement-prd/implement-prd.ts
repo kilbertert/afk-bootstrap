@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import * as sandcastle from "@ai-hero/sandcastle";
 import { claudeProfile } from "../profile.js";
 import * as path from "node:path";
@@ -39,9 +40,19 @@ logging: { type: "stdout", verbose: true },
 // been completed by a previous iteration, in which case the agent legitimately
 // produces zero new commits and we still want the workflow to proceed (close
 // the sub-issue, advance to the next one).
+//
+// The count below is reported for the log, and it is taken on the **branch**
+// rather than from `result.commits` or the host's HEAD. Both of those are
+// HEAD-relative and the host stays on the base branch — sandcastle checks the
+// task branch out in a worktree, where git allows each branch only once — so
+// either would print `0` for a run that did commit. Measured on a real run: the
+// implement runner reported "no commits were made" and deleted the worktree
+// while the commit sat on the branch.
 
 console.log(`\nImplementation finished for sub-issue #${SUB_ISSUE_NUMBER}.`);
-console.log(`  commits this run: ${result.commits.length}`);
+console.log(
+  `  commits this run: ${commitsOnBranch(BRANCH)}`,
+);
 
 function required(name: string): string {
   const value = process.env[name];
@@ -50,4 +61,16 @@ function required(name: string): string {
     process.exit(1);
   }
   return value;
+}
+
+/**
+ * Commits on `branch` that are not on `origin/main`.
+ *
+ * The branch ref is shared across worktrees, so this is correct regardless of
+ * which branch this process's checkout happens to be on.
+ */
+function commitsOnBranch(branch: string): number {
+  return Number(
+    execSync(`git rev-list --count "origin/main..${branch}"`, { encoding: "utf8" }).trim(),
+  );
 }

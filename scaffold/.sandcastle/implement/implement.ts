@@ -1,3 +1,4 @@
+import { execSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import * as sandcastle from "@ai-hero/sandcastle";
@@ -48,19 +49,29 @@ logging: { type: "stdout", verbose: true },
   },
 });
 
-// `result.commits`, not `git rev-list main..HEAD` on the host.
+// Count on the **branch**, not on HEAD and not on `result.commits`.
 //
 // The agent works in a worktree under `.sandcastle/worktrees/`, and that
 // worktree holds the branch — the host checkout stays where it was, because git
-// refuses to check the same branch out twice. Counting on the host measured the
-// host's HEAD, which is the base branch, so every run would report zero commits
-// and fail.
-const commits = result.commits ?? [];
-if (commits.length === 0) {
+// refuses to check the same branch out twice. So the host's HEAD is the base
+// branch, and every HEAD-relative count reads zero.
+//
+// `result.commits` is that same count one level in: sandcastle collects it with
+// `git rev-list <base>..HEAD` run in the host repository. Measured on a real
+// run: the agent committed, the branch had the commit, the run reported "Agent
+// finished but no commits were made on the branch", and the worktree was
+// deleted.
+//
+// The branch ref is shared across worktrees, so naming it is both correct and
+// independent of where the host happens to be.
+const commitsAhead = Number(
+  execSync(`git rev-list --count "origin/main..${BRANCH}"`, { encoding: "utf8" }).trim()
+);
+if (!Number.isFinite(commitsAhead) || commitsAhead === 0) {
   fail("Agent finished but no commits were made on the branch.");
 }
 
-console.log(`\nImplementation produced ${commits.length} commit(s) on ${BRANCH}.`);
+console.log(`\nImplementation produced ${commitsAhead} commit(s) on ${BRANCH}.`);
 
 function required(name: string): string {
   const value = process.env[name];

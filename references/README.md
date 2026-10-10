@@ -36,3 +36,16 @@ edits instead of overwriting it.
 - `mcp-config.ts.1.7.0` — the MCP config as 1.7.0 shipped it, before the serena
   entry named an active project. The 1.7.1 step replaces a project's copy only
   when it matches this byte for byte.
+
+- `repo-map.mjs.1.7.10` / `repo-map.check.mjs.1.7.10` — the map generator and its
+  check as 1.7.10 shipped them: the map reported where things live but never said
+  what NAME this repository's knowledge graph answers to. An agent asked to use
+  the graph had to guess, and the name indexing derives on its own comes from the
+  sandbox path, so the guess always missed. The 1.7.11 step replaces a project's
+  copy only when it matches these two byte for byte.
+
+- `profile.ts.1.7.10` — the same file with the graph's `--name` argument
+  removed, which is the shape a 1.7.10 project carries. Derived from the current
+  scaffold by deleting exactly the token the 1.7.11 step adds, so the fixture and
+  the step's anchor cannot drift apart: change either spelling and the smoke test
+  fails instead of the migration silently skipping.

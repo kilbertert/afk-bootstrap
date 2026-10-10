@@ -115,6 +115,12 @@ export function mcpServers(): Record<string, { command: string; args: string[] }
   if (codebaseMemoryAvailable()) {
     servers["codebase-memory-mcp"] = {
       command: SANDBOX_CBM_BINARY,
+      // No arguments, and that is not an omission: the binary ignores
+      // `--project` on the server path (measured — a session started with it
+      // still answers `missing required argument: project`). The name is
+      // per-CALL and cannot be defaulted by this config, so the only lever here
+      // is what the graph is indexed AS. profile.ts names it after the
+      // repository for exactly that reason.
       args: [],
     };
   }

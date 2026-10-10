@@ -122,7 +122,7 @@ export function claudeProfile(
                   // grep for the next 3.7 minutes, and only recovered after a
                   // `list_projects` detour. Naming it after the repository makes
                   // the agent's first, unguided guess correct.
-                  command: `timeout 120 ${SANDBOX_CBM_BINARY} cli index_repository --repo-path . --mode fast --name __AFK_CBM_PROJECT__ || true`,
+                  command: `timeout 120 ${SANDBOX_CBM_BINARY} cli index_repository --repo-path . --mode fast || true`,
                   // The outer deadline stays generous because it is now
                   // unreachable in practice: any hang is cut at 120 s by the
                   // command itself, and the hook only fails if the runtime

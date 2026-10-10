@@ -2794,6 +2794,92 @@ POLICYJS
 fi
 
 
+# ---- step: 1.7.10 -> 1.7.11 — the graph is named after the repository -------
+# The knowledge-graph server refuses a call that does not name its project, and
+# the name indexing derives on its own comes from the PATH. Inside a sandbox that
+# path is always `/home/agent/workspace`, so the graph of every repository on
+# this host lands under `home-agent-workspace` — a name no agent guesses.
+#
+# Measured in run 38069110783 (AI-Ops #676): the agent passed `AI-Ops`, the
+# repository's own name, got
+#
+#   {"error":"project not found or not indexed", "available_projects":["home-agent-workspace"]}
+#
+# and spent the next 3.7 minutes on grep before recovering through a
+# `list_projects` detour. The MCP config cannot repair this by defaulting the
+# name — it is per CALL, and the binary ignores `--project` on the server path
+# (measured). So the two things that can be said are said instead: the index is
+# created under the repository's name, and the map states that name where the
+# agent is already reading.
+#
+# Both halves, or neither. Naming only the index leaves the agent guessing;
+# naming only the map leaves the map wrong.
+if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 11 ]; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: the graph is named after the repository =="
+
+  # The repository's own name, in its own case — the same field the map
+  # generator reads, so the two cannot disagree. `$SLUG` would be lowercased,
+  # and a name that differs only in case is a different project to the server.
+  CBM_NAME="$(node -e 'process.stdout.write(String(require(process.argv[1]).repository ?? "").split("/").pop())' \
+    "$WORK/.afk-bootstrap.json" 2>/dev/null || true)"
+  if [ -z "$CBM_NAME" ]; then
+    echo ".afk-bootstrap.json names no repository; cannot derive the graph project name" >&2
+    exit 1
+  fi
+
+  # 1. The index hook names it. Anchored on the command the 1.6.0 and 1.7.3 steps
+  #    between them produce, so a project that customised its hook is reported
+  #    rather than rewritten.
+  PROF="$WORK/.sandcastle/profile.ts"
+  if [ ! -e "$PROF" ]; then
+    note "profile.ts absent; skipped"
+  elif grep -qF -- "--name " "$PROF"; then
+    note "profile.ts: index hook already names the project"
+  elif grep -qF "index_repository --repo-path ." "$PROF"; then
+    # shellcheck disable=SC2016  # the anchor is TS source; no shell here.
+    subst "$PROF" \
+      'cli index_repository --repo-path . --mode fast || true' \
+      "cli index_repository --repo-path . --mode fast --name $CBM_NAME || true"
+    NEW_FILES="$NEW_FILES .sandcastle/profile.ts"
+    note "profile.ts: graph indexed as $CBM_NAME"
+  else
+    say "$PROF has no index hook this step recognises. Add \`--name $CBM_NAME\`"
+    say "to its \`cli index_repository\` call by hand, and re-run this step."
+  fi
+
+  # 2. The map says it. Replaced only when the project's copy is still the one
+  #    1.7.10 shipped, byte for byte — a project that taught its generator
+  #    something local keeps that, and is told to carry the section itself.
+  for pair in "repo-map.mjs|repo-map.mjs.1.7.10|the generator" \
+              "repo-map.check.mjs|repo-map.check.mjs.1.7.10|the checker"; do
+    REL="${pair%%|*}"; rest="${pair#*|}"; REF="${rest%%|*}"; WHAT="${rest##*|}"
+    if [ ! -e "$WORK/.sandcastle/$REL" ]; then
+      note "$REL absent; skipped"
+      continue
+    fi
+    if cmp -s "$WORK/.sandcastle/$REL" "$S/references/$REF"; then
+      cp "$S/scaffold/.sandcastle/$REL" "$WORK/.sandcastle/$REL"
+      NEW_FILES="$NEW_FILES .sandcastle/$REL"
+      note "$REL: restaged ($WHAT now prints the graph's project name)"
+    elif grep -qF '## Code intelligence' "$WORK/.sandcastle/$REL"; then
+      note "$REL: already carries the section"
+    else
+      say ".sandcastle/$REL differs from what 1.7.10 shipped and carries no"
+      say "Code intelligence section — this step will not overwrite a project's"
+      say "own version. Teach it to print the section itself: the name is"
+      say "\"$CBM_NAME\", read from .afk-bootstrap.json's \`repository\` field."
+    fi
+  done
+
+  # Both halves change, so the map is regenerated after the publish — the one
+  # artifact whose content depends on every other change having landed. Forced
+  # rather than conditional: a stale map here would keep the OLD name, which is
+  # the failure this step exists to remove.
+  MAP_NEEDED=1
+fi
+
+
 if [ "$STEP_RAN" = "0" ]; then
   echo "no upgrade step defined from $FROM to $TEMPLATE_VERSION" >&2
   exit 1

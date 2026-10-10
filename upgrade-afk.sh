@@ -2301,6 +2301,11 @@ fi
 # label-driven chain did not. The two halves ship together, because the worktree
 # sandcastle creates lives under `.sandcastle/worktrees/` — ignored in some
 # projects, not in others, and an unignored one is the same defect one level in.
+#
+# 1.7.5 removes the strategy from `implement-pr.ts`, where 1.7.4 added it by
+# mistake: that runner's workflow checks out `candidate/` and the trusted
+# delivery script checks the branch out inside it, so a second checkout of the
+# same branch is refused outright.
 if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 4 ]; then
   STEP_RAN=1
   say "== $FROM -> $TEMPLATE_VERSION: the implementer works in its own worktree =="
@@ -2328,10 +2333,13 @@ const note = [
 writeFileSync(path, src.replace(anchor, anchor + "\n" + note));
 WTJS
 
+  # Two runners, not three. `implement-pr.ts` runs inside `candidate/`, which
+  # the trusted delivery script has *already* checked the branch out in — adding
+  # a worktree strategy there asks git to check the same branch out twice, which
+  # it refuses. That checkout is the isolation; it does not need a second one.
   for rel in \
     .sandcastle/implement/implement.ts \
-    .sandcastle/implement-prd/implement-prd.ts \
-    .sandcastle/implement-pr/implement-pr.ts ; do
+    .sandcastle/implement-prd/implement-prd.ts ; do
     [ -e "$WORK/$rel" ] || { note "$rel absent; skipped"; continue; }
     node "$STAGE/add-worktree-strategy.mjs" "$WORK/$rel" || rc=$?
     case ${rc:-0} in
@@ -2352,6 +2360,56 @@ WTJS
     printf '\n# AFK sandbox worktrees (one per run; residue if not ignored)\n.sandcastle/worktrees/\n' >> "$WORK/.gitignore"
     NEW_FILES="$NEW_FILES .gitignore"
     note ".gitignore: .sandcastle/worktrees/ added"
+  fi
+fi
+
+
+# ---- step: 1.7.4 -> 1.7.5 — undo the worktree strategy on the PR runner ----
+# 1.7.4 added `branchStrategy` to three runners. Two of them need it; the third
+# does not, and the addition breaks it.
+#
+# `implement-pr.ts` runs inside `candidate/`, and the workflow's own
+# `trusted-pr-delivery.sh prepare` has already run
+# `git checkout -q -B "$BRANCH" "$EXPECTED_HEAD"` there. Asking sandcastle for a
+# worktree on the same branch is asking git to check one branch out twice, which
+# it refuses:
+#
+#   WorktreeError: Branch 'agent/issue-...' is already checked out in worktree at ...
+#
+# That checkout *is* the isolation for this runner — it is a fresh clone of the
+# PR head, not the workflow checkout — so it never had the defect being fixed.
+if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 5 ]; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: the PR runner keeps its own checkout =="
+
+  REL=.sandcastle/implement-pr/implement-pr.ts
+  if [ ! -e "$WORK/$REL" ]; then
+    note "$REL absent; skipped"
+  elif ! grep -qF "branchStrategy:" "$WORK/$REL"; then
+    note "$REL: no branch strategy to remove"
+  elif grep -qF 'branchStrategy: { type: "branch", branch: BRANCH, baseBranch: "origin/main" },' "$WORK/$REL"; then
+    cat > "$STAGE/drop-strategy.mjs" <<'DROPJS'
+import { readFileSync, writeFileSync } from "node:fs";
+const [path] = process.argv.slice(2);
+let src = readFileSync(path, "utf8");
+const note = [
+  "  // An isolated worktree, not the workflow checkout: that checkout carries the",
+  "  // review and update-branch workflows' residue (candidate/, controller/,",
+  "  // delivery/, each with its own .git), and everything reading the filesystem",
+  "  // sees it as part of the repository — the agent included.",
+  '  branchStrategy: { type: "branch", branch: BRANCH, baseBranch: "origin/main" },',
+].join("\n");
+if (!src.includes(note)) process.exit(3);
+writeFileSync(path, src.replace(note + "\n", ""));
+DROPJS
+    node "$STAGE/drop-strategy.mjs" "$WORK/$REL" \
+      || { echo "$REL: could not remove the strategy — refusing to guess" >&2; exit 1; }
+    NEW_FILES="$NEW_FILES $REL"
+    note "$REL: worktree strategy removed (candidate/ is already its own checkout)"
+  else
+    say "$REL carries a branch strategy this step did not write; left alone."
+    say "If it was added by 1.7.4, remove it: this runner's workflow checks"
+    say "candidate/ out on the branch already, so a second worktree is refused."
   fi
 fi
 

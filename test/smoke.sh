@@ -848,18 +848,30 @@ node -e '
 ' "$P174/.afk-bootstrap.json"
 "$S/upgrade-afk.sh" "$P174" --cron-hour 13 >/dev/null \
   || { echo "upgrade refused a project at 1.7.3" >&2; exit 1; }
+# Two runners get the isolated worktree, and the third must NOT have it.
+#
+# `implement-pr.ts` runs inside `candidate/`, which the workflow's own trusted
+# delivery script has already checked the branch out in — a second checkout of
+# the same branch is refused by git. 1.7.4 added it there by mistake and 1.7.5
+# removes it, so this asserts the end state of the whole 1.7.x chain: an upgrade
+# from 1.7.3 runs 1.7.4 and 1.7.5 in one invocation.
 for runner in \
   .sandcastle/implement/implement.ts \
-  .sandcastle/implement-prd/implement-prd.ts \
-  .sandcastle/implement-pr/implement-pr.ts; do
+  .sandcastle/implement-prd/implement-prd.ts; do
   grep -qF 'branchStrategy: { type: "branch"' "$P174/$runner" \
-    || { echo "1.7.4 left $runner on the workflow checkout" >&2; exit 1; }
+    || { echo "the label-driven runners are not on an isolated worktree" >&2; exit 1; }
   # Parseable, not just textually present: the insertion is three lines into a
   # call's argument list, which is exactly where a migration produces something
   # that compiles nowhere.
   npx --yes esbuild --loader:.ts=ts "$P174/$runner" --outfile=/dev/null 2>/dev/null \
-    || { echo "1.7.4 produced a $runner that does not parse" >&2; exit 1; }
+    || { echo "the migration produced a $runner that does not parse" >&2; exit 1; }
 done
+if grep -qF "branchStrategy:" "$P174/.sandcastle/implement-pr/implement-pr.ts"; then
+  echo "the PR runner must keep its candidate/ checkout — a worktree on the same branch is refused" >&2
+  exit 1
+fi
+npx --yes esbuild --loader:.ts=ts "$P174/.sandcastle/implement-pr/implement-pr.ts" --outfile=/dev/null 2>/dev/null \
+  || { echo "the migration left implement-pr.ts unparseable" >&2; exit 1; }
 # And the worktree it creates must be ignored, or the next run indexes the
 # previous run's worktree — the same defect one level in.
 grep -qE '^\.sandcastle/worktrees/?' "$P174/.gitignore" \

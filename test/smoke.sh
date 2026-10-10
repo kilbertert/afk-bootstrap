@@ -764,7 +764,10 @@ P172="$TMP/upgrade-171-hooks-$LANGUAGE"
 rm -rf "$P172"
 mkdir -p "$P172/.github/workflows" "$P172/.sandcastle"
 cp -R "$S/test/fixtures/legacy-1.1.x/." "$P172/"
-git -C "$S" show "5c40f3c:scaffold/.sandcastle/profile.ts" > "$P172/.sandcastle/profile.ts"
+# From the fixture, not from a ref: CI checks out a detached HEAD with no local
+# `main`, so `git show <sha>` fails there — which is how this fixture came to
+# exist, the same way `profile-1.6.5/` did.
+cp "$S/test/fixtures/profile-1.7.1/profile.ts" "$P172/.sandcastle/profile.ts"
 cp "$S/scaffold/.sandcastle/mcp-config.ts" "$P172/.sandcastle/mcp-config.ts"
 cp "$S/scaffold/.sandcastle/sandbox-prepare.sh" "$P172/.sandcastle/sandbox-prepare.sh"
 cp "$S/scaffold/.sandcastle/sandbox-prepare.check.ts" "$P172/.sandcastle/sandbox-prepare.check.ts"

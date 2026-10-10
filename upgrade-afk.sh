@@ -2065,7 +2065,9 @@ fi
 #
 # The server was `connected` the whole time. "The process started" is not the
 # same as "the tool works", and the gap is invisible from the outside.
-if [ "$from_minor" -eq 7 ] && [ "$from_patch" -lt 1 ] && [ "$to_minor" -ge 7 ]; then
+# Same rule as the step below: gate on the target, so a project arriving from
+# 1.6.x runs this in the same invocation that installs the MCP config.
+if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 1 ]; then
   STEP_RAN=1
   say "== $FROM -> $TEMPLATE_VERSION: serena gets an active project =="
 
@@ -2096,6 +2098,150 @@ if [ "$from_minor" -eq 7 ] && [ "$from_patch" -lt 1 ] && [ "$to_minor" -ge 7 ]; 
   fi
 fi
 
+
+# ---- step: 1.7.1 -> 1.7.2 — the hooks actually run --------------------------
+# `hooks` is an option of `run()`, not of the sandbox provider. It was written
+# inside `docker()` in 1.7.0, where the option is not read at all: no error, no
+# warning, no hook. The symptom is identical to a hook that ran and did nothing,
+# and the measurement that appeared to confirm the hook worked (a prepared venv)
+# was in fact the agent installing dependencies itself.
+#
+# The move is anchored rather than guessed: both ends are text this script's own
+# 1.7.0 step wrote, and a project that has since edited either one is reported.
+# Gated on the version being upgraded TO, not the one being upgraded FROM —
+# the same rule as the 1.7.0 step above. A 1.6.5 project reaches 1.7.2 in one
+# invocation: that run's 1.7.0 step installs a hooks block inside `docker()`,
+# and a `from_minor -eq 7` gate would then skip the step that moves it — the
+# project comes out stamped 1.7.2 with hooks nothing reads.
+if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 2 ]; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: sandbox hooks move where run() reads them =="
+
+  PROF="$WORK/.sandcastle/profile.ts"
+  if [ ! -e "$PROF" ]; then
+    note "profile.ts absent; skipped"
+  elif grep -qF "codebaseMemoryAvailable" "$PROF"; then
+    note "profile.ts: hooks already on run()"
+  elif ! grep -qF "hooks: {" "$PROF"; then
+    note "profile.ts: carries no hooks; nothing to move"
+  elif ! grep -qF "const PREPARE_SCRIPT" "$PROF"; then
+    say "$PROF has a hooks block this step did not write."
+    say "Move it out of docker({ ... }) and onto the object claudeProfile returns,"
+    say "then add the index hook; sandbox-prepare.check.ts fails until you do."
+  else
+    cat > "$STAGE/move-hooks.mjs" <<'MOVEJS'
+import { readFileSync, writeFileSync } from "node:fs";
+const [path] = process.argv.slice(2);
+let src = readFileSync(path, "utf8");
+
+const IMPORT_OLD = 'import { mcpConfigMounts, writeMcpConfig } from "./mcp-config.js";';
+const IMPORT_NEW = [
+  "import {",
+  "  SANDBOX_CBM_BINARY,",
+  "  codebaseMemoryAvailable,",
+  "  mcpConfigMounts,",
+  "  writeMcpConfig,",
+  '} from "./mcp-config.js";',
+].join("\n");
+if (!src.includes(IMPORT_OLD)) {
+  console.error("profile.ts: mcp-config import anchor missing");
+  process.exit(1);
+}
+src = src.replace(IMPORT_OLD, IMPORT_NEW);
+
+const RT_OLD = "): { agent: AgentProvider; sandbox: SandboxProvider } {";
+const RT_NEW = "): { agent: AgentProvider; sandbox: SandboxProvider; hooks: SandboxHooks } {";
+if (!src.includes(RT_OLD)) {
+  console.error("profile.ts: return-type anchor missing");
+  process.exit(1);
+}
+src = src.replace(RT_OLD, RT_NEW);
+
+const AGENT_OLD = 'import { claudeCode, type AgentProvider, type SandboxProvider } from "@ai-hero/sandcastle";';
+const AGENT_NEW = [
+  "import {",
+  "  claudeCode,",
+  "  type AgentProvider,",
+  "  type SandboxHooks,",
+  "  type SandboxProvider,",
+  '} from "@ai-hero/sandcastle";',
+].join("\n");
+if (!src.includes(AGENT_OLD)) {
+  console.error("profile.ts: sandcastle import anchor missing");
+  process.exit(1);
+}
+src = src.replace(AGENT_OLD, AGENT_NEW);
+
+// The whole conditional block, from its spread to its closing line.
+const HSTART = "      ...(existsSync(join(process.cwd(), PREPARE_SCRIPT))";
+const HEND = "        : {}),\n";
+const hs = src.indexOf(HSTART);
+if (hs < 0) {
+  console.error("profile.ts: hooks spread anchor missing");
+  process.exit(1);
+}
+const he = src.indexOf(HEND, hs);
+if (he < 0) {
+  console.error("profile.ts: hooks spread end anchor missing");
+  process.exit(1);
+}
+src = src.slice(0, hs) + src.slice(he + HEND.length);
+
+const HOOKS = [
+  "    // `hooks` is an option of `run()`, NOT of the sandbox provider. It lived",
+  "    // inside `docker()` where the option is not read at all — no error, no",
+  "    // warning, no hook. A hook that never runs is indistinguishable from one",
+  "    // that ran and did nothing.",
+  "    hooks: {",
+  "      sandbox: {",
+  "        onSandboxReady: [",
+  "          ...(existsSync(join(process.cwd(), PREPARE_SCRIPT))",
+  "            ? [",
+  "                {",
+  "                  command: \"bash .sandcastle/sandbox-prepare.sh\",",
+  "                  timeoutMs: Number(process.env.AFK_PREPARE_TIMEOUT_MS ?? 15 * 60 * 1000),",
+  "                },",
+  "              ]",
+  "            : []),",
+  "          // The knowledge-graph server holds no data until the repository is",
+  "          // indexed, so its tools answer an empty graph on the first call and",
+  "          // the agent concludes they are useless.",
+  "          ...(codebaseMemoryAvailable()",
+  "            ? [",
+  "                {",
+  "                  command: `${SANDBOX_CBM_BINARY} cli index_repository --repo-path . --mode fast || true`,",
+  "                  timeoutMs: Number(process.env.AFK_INDEX_TIMEOUT_MS ?? 5 * 60 * 1000),",
+  "                },",
+  "              ]",
+  "            : []),",
+  "        ],",
+  "      },",
+  "    },",
+].join("\n");
+
+const A = '    agent: claudeCode(process.env.AFK_MODEL ?? "claude-sonnet-4-6"),';
+if (!src.includes(A)) {
+  console.error("profile.ts: agent anchor missing");
+  process.exit(1);
+}
+src = src.replace(A, HOOKS + "\n" + A);
+writeFileSync(path, src);
+MOVEJS
+    node "$STAGE/move-hooks.mjs" "$PROF" \
+      || { echo "profile.ts: could not move the hooks — refusing to guess" >&2; exit 1; }
+    NEW_FILES="$NEW_FILES .sandcastle/profile.ts"
+    note "profile.ts: hooks moved onto run()"
+
+    # The check travels with the fix: it is what fails while the block sits in
+    # the wrong object, and it is the only thing that can — the sandbox cannot
+    # be asked at build time whether a hook would run.
+    CHK=.sandcastle/sandbox-prepare.check.ts
+    [ -e "$S/scaffold/$CHK" ] || { echo "migration reference missing: $S/scaffold/$CHK" >&2; exit 1; }
+    cp "$S/scaffold/$CHK" "$WORK/$CHK"
+    NEW_FILES="$NEW_FILES $CHK"
+    note "restaged: $CHK"
+  fi
+fi
 
 if [ "$STEP_RAN" = "0" ]; then
   echo "no upgrade step defined from $FROM to $TEMPLATE_VERSION" >&2

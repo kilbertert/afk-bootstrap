@@ -2880,6 +2880,164 @@ if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 11 ]; then
 fi
 
 
+# ---- step: 1.7.11 -> 1.7.12 — decision records get a shape and a checker ----
+# The prompts have said "read the ADRs" since 1.6.0, and nothing has ever said
+# "write one". Measured across the four consumer repositories: 43 records, and a
+# large minority are a title, a status paragraph, and nothing else — no
+# alternatives, sometimes no status. The records written in prose are good. The
+# ones that got the short treatment are exactly the ones a later agent cannot act
+# on: a record that says what was decided and not what was rejected is how a
+# settled argument gets re-litigated by the next session.
+#
+# What this step installs is a shape and a checker, not a quota. Two things make
+# it adoptable rather than a wall of prose edits:
+#
+#   1. The checker judges structure only on the records a change TOUCHES. The
+#      metric that made this necessary: 20 of 43 records on this host would fail
+#      a whole-tree gate, so gating on the whole tree would have forced twenty
+#      edits inside a scaffold-upgrade pull request — and inventing the
+#      alternatives a record never weighed is the exact fabrication the check
+#      exists to prevent. `--all` sweeps the back catalogue on request and
+#      reports; the bare form reports and exits 0.
+#   2. Whether a record is OWED is a judgement, and the checker does not make it.
+#      A `No-ADR: <reason>` line in the commit body is the escape hatch, and it is
+#      checked rather than trusted, because a decision not to write something and
+#      a decision forgotten are indistinguishable in a diff.
+#
+# Written for the consumer's convention, which is `docs/adr/` — that directory
+# exists in every repository on this host and the prompts already point at it, so
+# the alternative was migrating a convention to make room for a checker. The
+# other end was not taken either: four directories, a sha256 seal manifest for
+# frozen records, and a 69 KB HTML dashboard is a governance model, and adopting
+# one is a decision with its own acceptance evidence rather than a scaffold
+# upgrade.
+if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 12 ]; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: decision records get a shape and a checker =="
+
+  # 1. The checker and the convention it enforces. New files: nothing to anchor
+  #    on, and both are inert until the policy job below runs them.
+  REL=.sandcastle/adr.check.mjs
+  [ -e "$S/scaffold/$REL" ] || { echo "migration reference missing: $S/scaffold/$REL" >&2; exit 1; }
+  cp "$S/scaffold/$REL" "$WORK/$REL"
+  NEW_FILES="$NEW_FILES $REL"
+  note "added: $REL"
+
+  REL=docs/agents/architecture-decisions.md
+  [ -e "$S/scaffold/$REL" ] || { echo "migration reference missing: $S/scaffold/$REL" >&2; exit 1; }
+  # `docs/agents/` is not part of the staging walk, so a project that has never
+  # carried one has no directory to write into. Created on demand rather than
+  # assumed: the copy would otherwise fail on macOS/BSD `cp` with a bare "no such
+  # file or directory", which reads like a missing source rather than a missing
+  # parent.
+  mkdir -p "$WORK/docs/agents"
+  if [ -e "$TARGET/$REL" ]; then
+    # Project-owned: if the project has written its own convention, this step
+    # leaves it alone. The checker does not read it, so a divergent document
+    # costs nothing mechanically — only the reader.
+    note "$REL: already present; left as the project's own"
+  else
+    cp "$S/scaffold/$REL" "$WORK/$REL"
+    NEW_FILES="$NEW_FILES $REL"
+    note "added: $REL"
+  fi
+
+  # 2. The prompts. Anchored on the line the previous template wrote, so a
+  #    project that has customised this prompt is reported rather than rewritten.
+  #    Five prompts reference the ADR directory; only the two implementers are
+  #    asked to WRITE one — a review prompt reads decisions, it does not make
+  #    them, and `implement-pr` is a comment pass.
+  cat > "$STAGE/add-adr-duty.mjs" <<'ADRJS'
+import { readFileSync, writeFileSync } from "node:fs";
+const [path, anchor] = process.argv.slice(2);
+const src = readFileSync(path, "utf8");
+if (src.includes("No-ADR")) process.exit(4);
+const at = src.indexOf(anchor);
+if (at < 0) process.exit(3);
+const duty = [
+  "If this change settles something a later reader would otherwise have to",
+  "re-derive — a user-visible behavior, a cross-file contract, an auth boundary, a",
+  "format, a delivery or test-strategy decision — write or update the record in",
+  "`docs/adr/` **in this same commit**. `docs/agents/architecture-decisions.md`",
+  "says what counts and what does not; the short version is that most changes owe",
+  "nothing. If nothing is owed, one line in the commit body settles it:",
+  "",
+  "    No-ADR: <why not>",
+  "",
+].join("\n");
+writeFileSync(path, src.slice(0, at) + duty + src.slice(at));
+ADRJS
+
+  for pair in \
+    ".sandcastle/implement/prompt.md|Before committing, run \`npm run check\`" \
+    ".sandcastle/implement-prd/prompt.md|Before committing, run \`npm run typecheck\`"; do
+    REL="${pair%%|*}"; ANCHOR="${pair#*|}"
+    if [ ! -e "$WORK/$REL" ]; then
+      note "$REL absent; skipped"
+      continue
+    fi
+    node "$STAGE/add-adr-duty.mjs" "$WORK/$REL" "$ANCHOR" || rc=$?
+    case ${rc:-0} in
+      0) NEW_FILES="$NEW_FILES $REL"; note "$REL: asks for a decision record" ;;
+      3) say "$REL has no anchor this step recognises; add the paragraph by hand:"
+         say "a record in docs/adr/ when the change settles something, or a"
+         say "'No-ADR: <reason>' line in the commit body." ;;
+      4) note "$REL: already asks for a decision record" ;;
+      *) echo "$REL: could not add the duty — refusing to guess" >&2; exit 1 ;;
+    esac
+    rc=0
+  done
+
+  # 3. The map. The convention document is a markdown file under `docs/agents/`,
+  #    and `docs() ` in the generator counts that directory — so adding it makes
+  #    every project's committed map stale, and the policy job would go red on the
+  #    next push for a reason the project did not cause.
+  MAP_NEEDED=1
+
+  # 4. The policy job runs it. Anchored after the prepare-hook step, which every
+  #    project at this version carries.
+  POLICY="$WORK/.github/workflows/afk-policy.yml"
+  if [ ! -e "$POLICY" ]; then
+    note "afk-policy.yml absent; the scaffold supplies it"
+  elif grep -qF "adr.check.mjs" "$POLICY"; then
+    note "afk-policy.yml: decision-record check already wired"
+  elif grep -qF "sandbox-prepare.check.ts" "$POLICY"; then
+    cat > "$STAGE/add-adr-step.mjs" <<'STEPJS'
+import { readFileSync, writeFileSync } from "node:fs";
+const [path] = process.argv.slice(2);
+const src = readFileSync(path, "utf8");
+const anchor = "      - name: Verify the sandbox prepare hook\n        run: npx --yes tsx .sandcastle/sandbox-prepare.check.ts\n";
+if (!src.includes(anchor)) process.exit(3);
+const step = [
+  "      # Whether a decision record is owed, and whether one was written. `--base`",
+  "      # scopes both halves to this diff: the structure rules judge only records",
+  "      # the change touches, so adopting this cannot require editing a back",
+  "      # catalogue. A change that owes a record and carries none fails here; a",
+  "      # change that owes none can say so with a `No-ADR:` line in the commit",
+  "      # body. Not pinned to a ref: the script resolves the merge base itself, and",
+  "      # a new-branch push sends an all-zero `before` that git cannot resolve —",
+  "      # the script reports that and does not fail on it.",
+  "      - name: Verify decision records",
+  "        env:",
+  "          AFK_ADR_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}",
+  '        run: node .sandcastle/adr.check.mjs --base "$AFK_ADR_BASE"',
+  "",
+].join("\n");
+writeFileSync(path, src.replace(anchor, anchor + step));
+STEPJS
+    node "$STAGE/add-adr-step.mjs" "$POLICY" \
+      || { echo "afk-policy.yml: could not insert the check — refusing to guess" >&2; exit 1; }
+    NEW_FILES="$NEW_FILES .github/workflows/afk-policy.yml"
+    note "afk-policy.yml: decision-record check added"
+  else
+    say "afk-policy.yml has no prepare-hook step to anchor on."
+    say "Add this step by hand:"
+    say "  - name: Verify decision records"
+    say "    run: node .sandcastle/adr.check.mjs --base \"\${AFK_ADR_BASE}\""
+  fi
+fi
+
+
 if [ "$STEP_RAN" = "0" ]; then
   echo "no upgrade step defined from $FROM to $TEMPLATE_VERSION" >&2
   exit 1

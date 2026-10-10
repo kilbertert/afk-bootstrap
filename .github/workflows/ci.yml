@@ -31,6 +31,11 @@ jobs:
           test/smoke.sh node
           test/smoke.sh python
           bash test/trusted-pr-delivery.sh
+      # The scaffolder's own decision records. `afk-bootstrap` is an
+      # afk-bootstrap project, so it adopts what it ships — and the records it
+      # carries are the ones that explain why the template looks the way it does.
+      - name: Verify decision records
+        run: node scaffold/.sandcastle/adr.check.mjs --all
       - name: Shellcheck (when available)
         run: |
           if command -v shellcheck >/dev/null 2>&1; then

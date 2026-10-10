@@ -1065,7 +1065,8 @@ cp -R "$S/test/fixtures/workflows-1.7.4/." "$P1712/.github/workflows/"
 # against exactly that text.
 mkdir -p "$P1712/.sandcastle/implement" "$P1712/.sandcastle/implement-prd"
 cp "$S/scaffold/.sandcastle/implement/prompt.md" "$P1712/.sandcastle/implement/prompt.md"
-cp "$S/scaffold/.sandcastle/implement-prd/prompt.md" "$P1712/.sandcastle/implement-prd/prompt.md"
+cp "$S/templates/prompt.node.md" "$P1712/.sandcastle/implement-prd/prompt.md"
+cp "$S/templates/implement.node.md" "$P1712/.sandcastle/implement.md"
 cp "$S/scaffold/.github/workflows/afk-policy.yml" "$P1712/.github/workflows/afk-policy.yml"
 # The map generator, because the new convention document is counted by it —
 # `docs() ` reports `docs/agents/ — N markdown file(s)`, so adding a file there
@@ -1078,14 +1079,16 @@ cp "$S/scaffold/.sandcastle/repo-map.check.mjs" "$P1712/.sandcastle/repo-map.che
 python3 - "$P1712" <<'STRIPDUTY'
 import pathlib, sys
 root = pathlib.Path(sys.argv[1])
-for rel in (".sandcastle/implement/prompt.md", ".sandcastle/implement-prd/prompt.md"):
+for rel in (".sandcastle/implement/prompt.md", ".sandcastle/implement-prd/prompt.md",
+            ".sandcastle/implement.md"):
     p = root / rel
     t = p.read_text()
     i = t.find("If this change settles something")
     assert i != -1, f"{rel}: the scaffold prompt no longer carries the duty — this test is stale"
-    j = t.find("\n\n", t.find("No-ADR: <why not>", i))
+    j = t.find("No-ADR: <why not>", i)
     assert j != -1, f"{rel}: could not bound the duty paragraph"
-    p.write_text(t[:i] + t[j + 2:])
+    # Drop the blank line before and the blank line after.
+    p.write_text(t[:i - 1] + t[j + len("    No-ADR: <why not>") + 1:])
 for rel, needle in ((".github/workflows/afk-policy.yml", "Verify decision records"),):
     p = root / rel
     t = p.read_text()
@@ -1115,8 +1118,11 @@ node -e '
 grep -q 'adr.check.mjs' "$P1712/.github/workflows/afk-policy.yml" \
   || { echo "the decision-record check is not wired into the policy job" >&2; exit 1; }
 # The prompts must ask for a record, not only for one to be read.
-grep -qE 'No-ADR' "$P1712/.sandcastle/implement/prompt.md" \
-  || { echo "the implement prompt never asks for a decision record" >&2; exit 1; }
+for rel in \
+  .sandcastle/implement/prompt.md .sandcastle/implement-prd/prompt.md .sandcastle/implement.md; do
+  grep -qE 'No-ADR' "$P1712/$rel" \
+    || { echo "$rel never asks for a decision record" >&2; exit 1; }
+done
 
 ADRC="$P1712/.sandcastle/adr.check.mjs"
 # Captured, not piped into `grep -q`: this script runs under `pipefail`, and

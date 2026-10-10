@@ -204,7 +204,17 @@ let drafts = 0;
 function recordsUnderReview() {
   if (ALL || !BASE) return allEntries;
   const mergeBase = tryGit(["merge-base", BASE, "HEAD"]);
-  if (mergeBase === null) return allEntries;
+  // Unresolvable base → judge NOTHING, and say so. Falling back to the whole tree
+  // is the one thing that must not happen: a shallow checkout (which CI has by
+  // default) would silently turn "this diff" into "this project's entire back
+  // catalogue", and the failure would land on whoever pushed next rather than on
+  // the configuration that caused it.
+  if (mergeBase === null) {
+    notes.push(
+      `structure not judged: cannot resolve ${BASE} in this checkout — a gate that cannot see the diff is not a gate (CI needs \`fetch-depth: 0\`)`,
+    );
+    return [];
+  }
   const diff = tryGit(["diff", "--name-status", mergeBase.trim(), "HEAD"]) ?? "";
   const names = new Set();
   for (const line of diff.split("\n").filter(Boolean)) {

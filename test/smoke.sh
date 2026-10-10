@@ -989,6 +989,63 @@ if "BRANCH" not in env:
 BRANCHENV
 done
 
+# 1.7.11: the graph is named after the repository.
+#
+# Both halves are asserted, because either one alone leaves the failure in place:
+# naming only the index leaves the agent guessing, and naming only the map leaves
+# the map wrong. The names come from the same manifest field, so the third
+# assertion is that they agree — a step that lowercased one side would produce a
+# confidently-wrong instruction rather than a missing one.
+P1711="$TMP/upgrade-1710-graph-name-$LANGUAGE"
+rm -rf "$P1711"
+mkdir -p "$P1711/.github/workflows" "$P1711/.sandcastle"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$P1711/"
+cp -R "$S/test/fixtures/workflows-1.7.4/." "$P1711/.github/workflows/"
+# The 1.7.10 shapes of the two files this step restages, taken from references —
+# the same place the step reads them, so the fixture cannot drift from the anchor.
+cp "$S/references/repo-map.mjs.1.7.10" "$P1711/.sandcastle/repo-map.mjs"
+cp "$S/references/repo-map.check.mjs.1.7.10" "$P1711/.sandcastle/repo-map.check.mjs"
+# And the profile as 1.7.10 carried it: hooks present, no `--name`.
+cp "$S/references/profile.ts.1.7.10" "$P1711/.sandcastle/profile.ts"
+grep -qF "index_repository" "$P1711/.sandcastle/profile.ts" \
+  || { echo "the 1.7.10 profile fixture carries no index hook" >&2; exit 1; }
+grep -qF "## Code intelligence" "$P1711/.sandcastle/repo-map.mjs" \
+  && { echo "the 1.7.10 map fixture already carries the section" >&2; exit 1; }
+node -e '
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  m.afk_template_version = "1.7.10";
+  m.templateVersion = 1;
+  m.repository = "kilbertert/AI-Ops";
+  fs.writeFileSync(process.argv[1], JSON.stringify(m, null, 2) + "\n");
+' "$P1711/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$P1711" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project at 1.7.10" >&2; exit 1; }
+grep -qF -- "--name AI-Ops" "$P1711/.sandcastle/profile.ts" \
+  || { echo "1.7.11 did not name the graph in the index hook" >&2; exit 1; }
+grep -qF '## Code intelligence' "$P1711/.sandcastle/REPO-MAP.md" \
+  || { echo "the regenerated map does not name the graph" >&2; exit 1; }
+# The generator itself carries it, not just the map it happened to write: the
+# policy job regenerates the map on every push, so a section present only in the
+# committed file disappears on the next run.
+grep -qF "## Code intelligence" "$P1711/.sandcastle/repo-map.mjs" \
+  || { echo "the restaged generator does not emit the Code intelligence section" >&2; exit 1; }
+( cd "$P1711" && node .sandcastle/repo-map.check.mjs >/dev/null ) \
+  || { echo "the migrated map fails its own check" >&2; exit 1; }
+# Negative control: a generator that prints a DIFFERENT name than the manifest
+# must fail the check. Without this the assertion could be passing on the section
+# merely existing rather than on it naming the right project.
+python3 - "$P1711" <<'MAPNEG' || { echo "the map check accepted a name that is not the indexed project" >&2; exit 1; }
+import pathlib, subprocess, sys
+root = pathlib.Path(sys.argv[1])
+gen = root / ".sandcastle" / "repo-map.mjs"
+gen.write_text(gen.read_text().replace('${projectName}', 'wrong-name', 1))
+subprocess.run(["node", ".sandcastle/repo-map.mjs"], cwd=root, check=True, stdout=subprocess.DEVNULL)
+if subprocess.run(["node", ".sandcastle/repo-map.check.mjs"], cwd=root,
+                  stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
+    sys.exit(1)
+MAPNEG
+
 for runner in .sandcastle/implement/implement.ts .sandcastle/implement-prd/implement-prd.ts; do
   grep -qF 'origin/main..' "$P174/$runner" \
     || { echo "$runner does not count commits on the branch" >&2; exit 1; }

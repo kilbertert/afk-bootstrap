@@ -80,6 +80,24 @@ cp -R --no-clobber "$S/scaffold/." "$TARGET/"
 # Render the AFK_IMAGE default with the image built below.
 sed -i "s#__AFK_IMAGE__#sandcastle:$SLUG#g" "$TARGET/.sandcastle/profile.ts"
 
+# ---- name this project in the knowledge graph ------------------------------
+# The graph server refuses a call that does not name its project, and the name
+# indexing derives on its own comes from the PATH — `/home/agent/workspace`
+# inside a sandbox — so it is the same for every repository on this host and is
+# never the name an agent guesses. Rendering it here is what makes the guess in
+# REPO-MAP.md correct.
+#
+# The repository's own name, in its own case, deliberately — NOT `$SLUG`. The
+# map generator derives the name it prints from the `repository` field of
+# `.afk-bootstrap.json`, and `repo-map.check.mjs` compares the two. Lowercasing
+# here would make the index hook and the instruction disagree on case, which is
+# the same failure this render exists to remove, one character smaller.
+#
+# `${REPO##*/}` is constrained to `[A-Za-z0-9_.-]+` by the `--repo` validation
+# above, so it carries nothing a sed replacement or the TS template literal
+# around it would reinterpret.
+sed -i "s#__AFK_CBM_PROJECT__#${REPO##*/}#g" "$TARGET/.sandcastle/profile.ts"
+
 # ---- render this project's architecture-review hour -------------------------
 # Every project on this host resolves the same upstream credential, so the
 # schedule hour is the only thing keeping two reviews from contending for one

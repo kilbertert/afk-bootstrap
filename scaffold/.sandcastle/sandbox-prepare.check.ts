@@ -135,6 +135,29 @@ assert(
   `the index hook's own timeout (${inner}s) must be strictly smaller than the hook deadline (${outerMs}ms) — otherwise a hang kills the run`,
 );
 
+// --- the graph is indexed under a name the agent can guess -------------------
+//
+// Without `--name`, the project name is derived from the PATH — and in a sandbox
+// that path is always `/home/agent/workspace`, so every repository on this host
+// indexes as `home-agent-workspace`. Measured in a real run: the agent passed
+// `AI-Ops` (the repository's own name, the only guess available to it), got
+// `project not found or not indexed`, spent 3.7 minutes on grep, and recovered
+// only through a `list_projects` detour.
+//
+// There are exactly two ways to satisfy this and the check accepts either, so
+// that a project with its own shape is not forced into one: the placeholder the
+// scaffold ships, or a literal name.
+assert(
+  /--name ([A-Za-z0-9_.-]+|__AFK_CBM_PROJECT__)/.test(indexHook),
+  `the index hook must name the project (\`--name <repo>\` or the __AFK_CBM_PROJECT__ placeholder); without it the graph is unaddressable from inside the sandbox. got: ${indexHook}`,
+);
+// It must stay on one line: the value lands inside a shell command inside a TS
+// template literal, so a newline silently changes what `timeout` receives.
+assert(
+  !indexHook.includes("\\n"),
+  "the index hook must stay a single command line",
+);
+
 console.log(
   `sandbox-prepare check ok (script ${scriptExists ? "present, hook wired" : "absent, hook off"}; hooks on run(), not on the provider)`,
 );

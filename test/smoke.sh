@@ -84,8 +84,9 @@ for f in \
   .sandcastle/mcp-config.ts .sandcastle/mcp-config.check.ts \
   .sandcastle/repo-map.mjs .sandcastle/repo-map.check.mjs .sandcastle/REPO-MAP.md \
   .sandcastle/profile-network.ts .sandcastle/profile-network.check.ts \
-  .sandcastle/sandbox-prepare.sh \
+  .sandcastle/sandbox-prepare.sh .sandcastle/adr.check.mjs \
   docs/agents/issue-tracker.md docs/agents/triage-labels.md docs/agents/domain.md \
+  docs/agents/architecture-decisions.md \
   .sandcastle/implement-prd/prompt.md .sandcastle/write-prd-pr \
   .sandcastle/implement .sandcastle/write-pr .sandcastle/review .sandcastle/implement-pr \
   .sandcastle/update-branch .sandcastle/architecture-review \
@@ -1045,6 +1046,101 @@ if subprocess.run(["node", ".sandcastle/repo-map.check.mjs"], cwd=root,
                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL).returncode == 0:
     sys.exit(1)
 MAPNEG
+
+# 1.7.12: decision records get a shape and a checker.
+#
+# The scaffold's prompts have said "read the ADRs" since 1.6.0 and nothing said
+# "write one". This asserts both halves of the fix: the checker ships and is
+# wired into the policy job, and — the part that decides whether adopting it is
+# possible at all — the checker judges only the records a change touches, so a
+# repository with a back catalogue can adopt it without editing that catalogue.
+P1712="$TMP/upgrade-1711-adr-$LANGUAGE"
+rm -rf "$P1712"
+mkdir -p "$P1712/.github/workflows" "$P1712/.sandcastle" "$P1712/docs/adr"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$P1712/"
+cp -R "$S/test/fixtures/workflows-1.7.4/." "$P1712/.github/workflows/"
+# A 1.7.x project carries the scaffold's own prompts and policy job — the two
+# files this step edits. Taken from the scaffold rather than from a fixture
+# because they are unmodified at this version and the step's anchors are written
+# against exactly that text.
+mkdir -p "$P1712/.sandcastle/implement" "$P1712/.sandcastle/implement-prd"
+cp "$S/scaffold/.sandcastle/implement/prompt.md" "$P1712/.sandcastle/implement/prompt.md"
+cp "$S/scaffold/.sandcastle/implement-prd/prompt.md" "$P1712/.sandcastle/implement-prd/prompt.md"
+cp "$S/scaffold/.github/workflows/afk-policy.yml" "$P1712/.github/workflows/afk-policy.yml"
+# The map generator, because the new convention document is counted by it —
+# `docs() ` reports `docs/agents/ — N markdown file(s)`, so adding a file there
+# makes every project's committed map stale, and this step regenerates it.
+cp "$S/scaffold/.sandcastle/repo-map.mjs" "$P1712/.sandcastle/repo-map.mjs"
+cp "$S/scaffold/.sandcastle/repo-map.check.mjs" "$P1712/.sandcastle/repo-map.check.mjs"
+# Strip the duty this step adds, so the fixture is the version BEFORE it: without
+# this the step would find its own paragraph and skip, and the test would pass
+# while nothing had changed.
+python3 - "$P1712" <<'STRIPDUTY'
+import pathlib, sys
+root = pathlib.Path(sys.argv[1])
+for rel in (".sandcastle/implement/prompt.md", ".sandcastle/implement-prd/prompt.md"):
+    p = root / rel
+    t = p.read_text()
+    i = t.find("If this change settles something")
+    assert i != -1, f"{rel}: the scaffold prompt no longer carries the duty — this test is stale"
+    j = t.find("\n\n", t.find("No-ADR: <why not>", i))
+    assert j != -1, f"{rel}: could not bound the duty paragraph"
+    p.write_text(t[:i] + t[j + 2:])
+for rel, needle in ((".github/workflows/afk-policy.yml", "Verify decision records"),):
+    p = root / rel
+    t = p.read_text()
+    i = t.find(needle)
+    assert i != -1, f"{rel}: the scaffold policy no longer carries the step — this test is stale"
+    start = t.rfind("      #", 0, i)
+    end = t.find('run: node .sandcastle/adr.check.mjs --base "$AFK_ADR_BASE"', i)
+    assert end != -1
+    p.write_text(t[:start] + t[end + len('run: node .sandcastle/adr.check.mjs --base "$AFK_ADR_BASE"'):].lstrip("\n"))
+STRIPDUTY
+# A back-catalogue record: no status line, no alternatives. It predates the
+# convention, which is the normal case in every repository on this host.
+printf '# Legacy record\n\nSomething was decided once, in prose.\n' > "$P1712/docs/adr/0001-legacy.md"
+node -e '
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  m.afk_template_version = "1.7.11";
+  m.templateVersion = 1;
+  fs.writeFileSync(process.argv[1], JSON.stringify(m, null, 2) + "\n");
+' "$P1712/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$P1712" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project at 1.7.11" >&2; exit 1; }
+[ -e "$P1712/.sandcastle/adr.check.mjs" ] \
+  || { echo "1.7.12 did not ship the decision-record check" >&2; exit 1; }
+[ -e "$P1712/docs/agents/architecture-decisions.md" ] \
+  || { echo "1.7.12 did not ship the decision-record convention" >&2; exit 1; }
+grep -q 'adr.check.mjs' "$P1712/.github/workflows/afk-policy.yml" \
+  || { echo "the decision-record check is not wired into the policy job" >&2; exit 1; }
+# The prompts must ask for a record, not only for one to be read.
+grep -qE 'No-ADR' "$P1712/.sandcastle/implement/prompt.md" \
+  || { echo "the implement prompt never asks for a decision record" >&2; exit 1; }
+
+ADRC="$P1712/.sandcastle/adr.check.mjs"
+# Captured, not piped into `grep -q`: this script runs under `pipefail`, and
+# `grep -q` closes the pipe on its first match, so the producer dies of SIGPIPE
+# and the pipeline reports 141 — a passing assertion read as a failure. The
+# output is two lines; capturing it costs nothing.
+BARE_OUT="$( cd "$P1712" && node "$ADRC" 2>&1 )" && BARE_RC=0 || BARE_RC=$?
+# A bare run reports and does not block: this is what makes the migration
+# adoptable — the project's back catalogue must not turn its first check red.
+[ "$BARE_RC" = "0" ] \
+  || { echo "the check blocked on a back-catalogue record with no diff to scope to" >&2; exit 1; }
+case "$BARE_OUT" in
+  *0001-legacy.md*) ;;
+  *) echo "the bare report did not name the back-catalogue record" >&2; exit 1 ;;
+esac
+# ...but the back catalogue is still visible when someone asks for it, and the
+# exit code is what makes `--all` a gate rather than a report.
+ALL_OUT="$( cd "$P1712" && node "$ADRC" --all 2>&1 )" && ALL_RC=0 || ALL_RC=$?
+[ "$ALL_RC" != "0" ] \
+  || { echo "the check passed a record with no status and no alternatives under --all" >&2; exit 1; }
+case "$ALL_OUT" in
+  *0001-legacy.md*) ;;
+  *) echo "the sweep did not name the offending record" >&2; exit 1 ;;
+esac
 
 for runner in .sandcastle/implement/implement.ts .sandcastle/implement-prd/implement-prd.ts; do
   grep -qF 'origin/main..' "$P174/$runner" \

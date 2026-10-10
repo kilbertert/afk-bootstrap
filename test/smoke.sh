@@ -84,6 +84,7 @@ for f in \
   .sandcastle/mcp-config.ts .sandcastle/mcp-config.check.ts \
   .sandcastle/repo-map.mjs .sandcastle/repo-map.check.mjs .sandcastle/REPO-MAP.md \
   .sandcastle/profile-network.ts .sandcastle/profile-network.check.ts \
+  .sandcastle/sandbox-prepare.sh \
   docs/agents/issue-tracker.md docs/agents/triage-labels.md docs/agents/domain.md \
   .sandcastle/implement-prd/prompt.md .sandcastle/write-prd-pr \
   .sandcastle/implement .sandcastle/write-pr .sandcastle/review .sandcastle/implement-pr \
@@ -660,6 +661,70 @@ grep -q 'type: "file"' "$P165ODD/.sandcastle/implement/implement.ts" \
 if grep -q 'verbose' "$P165ODD/.sandcastle/implement/implement.ts"; then
   echo "1.6.5 added verbose to a runner it could not anchor on" >&2; exit 1
 fi
+
+# The 1.6.5 -> 1.7.0 step: a run's workspace is prepared before the agent starts.
+# The fixture is a 1.6.5 project — the hook is absent, so the migration has to add
+# both halves. A hook nobody registered is the failure this guards: the script
+# would sit there and every run would quietly go back to the agent installing its
+# own dependencies.
+P170="$TMP/upgrade-165-prepare-$LANGUAGE"
+rm -rf "$P170"
+mkdir -p "$P170/.github/workflows" "$P170/docs" "$P170/.sandcastle"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$P170/"
+# From the fixture, not by stripping the feature out of the current template: a
+# strip is a regex against text the migration is about to change, so it stops
+# producing a 1.6.5 shape the moment the template is edited, and the test then
+# passes while testing nothing. (The first version of this fixture did exactly
+# that, and the two assertions below are what caught it.)
+cp "$S/test/fixtures/profile-1.6.5/profile.ts" "$P170/.sandcastle/profile.ts"
+cp "$S/test/fixtures/profile-1.6.5/afk-policy.yml" "$P170/.github/workflows/afk-policy.yml"
+if grep -q 'sandbox-prepare' "$P170/.sandcastle/profile.ts"; then
+  echo "fixture still carries the prepare hook — it is not a 1.6.5 shape" >&2; exit 1
+fi
+if grep -q 'sandbox-prepare' "$P170/.github/workflows/afk-policy.yml"; then
+  echo "fixture still wires the prepare check — it is not a 1.6.5 shape" >&2; exit 1
+fi
+node -e '
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  m.afk_template_version = "1.6.5";
+  m.templateVersion = 1;
+  fs.writeFileSync(process.argv[1], JSON.stringify(m, null, 2) + "\n");
+' "$P170/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$P170" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project at 1.6.5" >&2; exit 1; }
+[ -e "$P170/.sandcastle/sandbox-prepare.sh" ] \
+  || { echo "1.7.0 did not add the prepare script" >&2; exit 1; }
+grep -q 'sandbox-prepare.sh' "$P170/.sandcastle/profile.ts" \
+  || { echo "1.7.0 left the prepare hook unwired — the script would never run" >&2; exit 1; }
+grep -q 'sandbox-prepare.check.ts' "$P170/.github/workflows/afk-policy.yml" \
+  || { echo "1.7.0 did not wire the prepare-hook check into CI" >&2; exit 1; }
+# The injected hook must leave a parseable profile.ts and a valid workflow: a
+# multi-line insertion into a TS object literal is exactly where a migration
+# produces something that compiles nowhere and fails the project's next run.
+( cd "$P170" && npx --yes tsx .sandcastle/sandbox-prepare.check.ts >/dev/null ) \
+  || { echo "the migrated prepare hook does not pass its own check" >&2; exit 1; }
+python3 - "$P170" <<'YAMLOK' || { echo "the injected CI step is not valid YAML" >&2; exit 1; }
+import sys, pathlib, yaml
+yaml.safe_load((pathlib.Path(sys.argv[1]) / ".github/workflows/afk-policy.yml").read_text())
+YAMLOK
+# A project that already wrote its own prepare script keeps it: the file is that
+# project's own answer to "what does a run need", and overwriting it would
+# overwrite the very answer this mechanism exists to collect.
+P170OWN="$TMP/upgrade-165-prepare-own-$LANGUAGE"
+rm -rf "$P170OWN"
+cp -R "$P170" "$P170OWN"
+node -e '
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  m.afk_template_version = "1.6.5";
+  fs.writeFileSync(process.argv[1], JSON.stringify(m, null, 2) + "\n");
+' "$P170OWN/.afk-bootstrap.json"
+printf '#!/usr/bin/env bash\nset -euo pipefail\necho "this project own setup"\n' > "$P170OWN/.sandcastle/sandbox-prepare.sh"
+"$S/upgrade-afk.sh" "$P170OWN" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project with its own prepare script" >&2; exit 1; }
+grep -q 'this project own setup' "$P170OWN/.sandcastle/sandbox-prepare.sh" \
+  || { echo "1.7.0 overwrote a project's own sandbox-prepare.sh" >&2; exit 1; }
 # It has to be valid YAML at a step boundary. An insertion that lands a level too
 # deep parses the `-` as a continuation key and the workflow fails to load — the
 # run never starts, which is the silent outcome this whole step exists to remove.

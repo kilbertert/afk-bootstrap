@@ -38,10 +38,6 @@ jobs:
       # compares — it never writes the file it is judging.
       - name: Verify the repository map is current
         run: node .sandcastle/repo-map.check.mjs
-      # The prepare hook's two halves must agree — a script nobody registered
-      # silently reverts every run to the agent installing its own dependencies.
-      - name: Verify the sandbox prepare hook
-        run: npx --yes tsx .sandcastle/sandbox-prepare.check.ts
       # The generator's own parser, not the map it produced: a regex that matches
       # nothing yields a map that looks complete and omits the answer, and a fresh
       # scaffold cannot catch that because a fresh scaffold has no console scripts

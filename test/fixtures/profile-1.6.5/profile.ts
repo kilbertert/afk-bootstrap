@@ -6,9 +6,6 @@ import { docker } from "@ai-hero/sandcastle/sandboxes/docker";
 import { sandboxNetworkOptions } from "./profile-network.js";
 import { mcpConfigMounts, writeMcpConfig } from "./mcp-config.js";
 
-/** The prepare script, relative to the repository root. */
-const PREPARE_SCRIPT = join(".sandcastle", "sandbox-prepare.sh");
-
 // Endpoints are supplied as host settings files mounted read-only into the
 // sandbox, never baked into the image. A baked key lands in an image layer
 // that anyone who can pull the image can read, and rotating it means rebuilding
@@ -59,47 +56,6 @@ export function claudeProfile(
         ...(profile ? { AFK_PROFILE: profile } : {}),
         ...(agentToken ? { GH_TOKEN: agentToken } : {}),
       },
-      // The project's own sandbox preparation, run once per iteration after the
-      // container is up and before the agent starts.
-      //
-      // Why this exists: a run's workspace starts empty — dependencies, build
-      // output and virtualenvs are all gitignored, so nothing is installed. An
-      // agent asked to verify its own change therefore spends its budget
-      // installing, and when a check it runs reports "missing" it cannot tell
-      // *this checkout has not been set up* from *this sandbox lacks the
-      // prerequisite*, so the sensible-looking remedy is to download one. That
-      // was measured: an agent spent its last ten minutes repeatedly fetching a
-      // 150 MB Chromium build for a browser the image already had.
-      //
-      // The fix belongs here rather than in the agent's instructions: what a run
-      // needs before it starts is a property of the environment, not something to
-      // re-derive by probing. A project states it once in
-      // `.sandcastle/sandbox-prepare.sh` and every run after that begins ready.
-      //
-      // Optional by construction — no file, no hook, no cost. A project with no
-      // setup step (a pure Node repo whose one `npm ci` the workflow already
-      // does) simply does not have the script.
-      ...(existsSync(join(process.cwd(), PREPARE_SCRIPT))
-        ? {
-            hooks: {
-              sandbox: {
-                onSandboxReady: [
-                  {
-                    // Relative: sandcastle runs a sandbox hook with cwd set to
-                    // the repository root (its own SANDBOX_REPO_DIR, which the
-                    // Docker provider bind-mounts at /home/agent/workspace).
-                    // Naming the absolute path here would hard-code a provider
-                    // constant this file does not own.
-                    command: "bash .sandcastle/sandbox-prepare.sh",
-                    // Generous: this is `uv sync` + `npm install` for a project
-                    // that needs both, and a timeout here fails the whole run.
-                    timeoutMs: Number(process.env.AFK_PREPARE_TIMEOUT_MS ?? 15 * 60 * 1000),
-                  },
-                ],
-              },
-            },
-          }
-        : {}),
       // Host networking is required only by profiles whose endpoint is the
       // host-loopback relay: a default-bridge container cannot reach the host's
       // 127.0.0.1. Every other profile talks to a public HTTPS origin and stays

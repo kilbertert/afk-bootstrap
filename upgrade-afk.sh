@@ -1904,6 +1904,154 @@ if [ "$from_minor" -eq 6 ] && [ "$from_patch" -lt 5 ] && [ "$to_minor" -ge 6 ]; 
 fi
 
 
+# ---- step: 1.6.5 -> 1.7.0 — the sandbox is prepared before the agent starts ---
+# MINOR, not patch: this adds a mechanism (a project-declared setup step) and a
+# file every project is asked to own. The hook is inert until a project fills the
+# script in, so nothing breaks by upgrading.
+#
+# Why: a run's workspace starts empty — dependencies, build output and virtualenvs
+# are gitignored. Without this the agent installs them itself, and the measured
+# cost is not just time: an agent that runs a check and sees "not installed"
+# cannot tell *this checkout was never set up* from *this sandbox lacks the
+# prerequisite*, so it downloads one. That happened — ten minutes spent fetching a
+# 150 MB browser build for a browser the image already had.
+#
+# `hooks.sandbox.onSandboxReady` is the provider's own facility for exactly this:
+# after the container is up, before the agent runs, cwd = repository root.
+if [ "$to_minor" -ge 7 ]; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: sandbox preparation hook =="
+
+  # 1. The script and its check are new files.
+  #
+  # A project that already wrote its own sandbox-prepare.sh keeps it: the file is
+  # the project's own statement about what its runs need, and overwriting it would
+  # be overwriting the answer this mechanism exists to collect.
+  PREP_FILES=""
+  for rel in .sandcastle/sandbox-prepare.sh .sandcastle/sandbox-prepare.check.ts; do
+    SRC="$S/scaffold/$rel"
+    [ -e "$SRC" ] || { echo "migration reference missing: $SRC" >&2; exit 1; }
+    if [ -e "$WORK/$rel" ]; then
+      note "$rel: already present; left as the project has it"
+    else
+      cp "$SRC" "$WORK/$rel"
+      PREP_FILES="$PREP_FILES $rel"
+    fi
+  done
+  [ -e "$WORK/.sandcastle/sandbox-prepare.sh" ] && chmod 750 "$WORK/.sandcastle/sandbox-prepare.sh"
+
+  # 2. profile.ts gains the hook. Anchored on the network spread, which every
+  #    1.5.0+ profile carries and which this step sits next to.
+  PROF="$WORK/.sandcastle/profile.ts"
+  if grep -qF "sandbox-prepare.sh" "$PROF"; then
+    note "profile.ts: prepare hook already wired"
+  elif grep -qF 'const PREPARE_SCRIPT' "$PROF"; then
+    note "profile.ts: prepare hook constant present"
+  elif grep -qF 'import { sandboxNetworkOptions } from "./profile-network.js";' "$PROF"; then
+    cat > "$STAGE/add-prepare-hook.mjs" <<'PREPJS'
+import { readFileSync, writeFileSync } from "node:fs";
+const [path] = process.argv.slice(2);
+let src = readFileSync(path, "utf8");
+
+const importAnchor = 'import { sandboxNetworkOptions } from "./profile-network.js";';
+const constBlock = [
+  importAnchor,
+  "",
+  "/** The prepare script, relative to the repository root. */",
+  'const PREPARE_SCRIPT = join(".sandcastle", "sandbox-prepare.sh");',
+].join("\n");
+if (!src.includes(importAnchor)) {
+  console.error("profile.ts: network import anchor missing");
+  process.exit(1);
+}
+src = src.replace(importAnchor, constBlock);
+
+// The hook goes immediately before the network spread: both are options of the
+// same docker() call, and the spread is the anchor this migration owns.
+const spreadAnchor = "      ...sandboxNetworkOptions(profile),";
+if (!src.includes(spreadAnchor)) {
+  console.error("profile.ts: network spread anchor missing");
+  process.exit(1);
+}
+const indent = "      ";
+const hook = [
+  `${indent}// The project's own sandbox preparation, run once per iteration after the`,
+  `${indent}// container is up and before the agent starts.`,
+  `${indent}//`,
+  `${indent}// A run's workspace starts empty, so without this the agent installs its own`,
+  `${indent}// dependencies — and an agent that sees "not installed" cannot tell *this`,
+  `${indent}// checkout was never set up* from *this sandbox lacks the prerequisite*, so`,
+  `${indent}// it downloads one. Keep this in the environment, not in the agent's`,
+  `${indent}// instructions: what a run needs before it starts is not something to`,
+  `${indent}// re-derive by probing.`,
+  `${indent}//`,
+  `${indent}// Optional by construction — no file, no hook, no cost.`,
+  `${indent}...(existsSync(join(process.cwd(), PREPARE_SCRIPT))`,
+  `${indent}  ? {`,
+  `${indent}      hooks: {`,
+  `${indent}        sandbox: {`,
+  `${indent}          onSandboxReady: [`,
+  `${indent}            {`,
+  `${indent}              // Relative: sandcastle runs a sandbox hook with cwd set to`,
+  `${indent}              // the repository root. An absolute path would hard-code a`,
+  `${indent}              // provider constant this file does not own.`,
+  `${indent}              command: "bash .sandcastle/sandbox-prepare.sh",`,
+  `${indent}              // Generous: this is uv sync + npm install for a project`,
+  `${indent}              // that needs both, and a timeout here fails the whole run.`,
+  `${indent}              timeoutMs: Number(process.env.AFK_PREPARE_TIMEOUT_MS ?? 15 * 60 * 1000),`,
+  `${indent}            },`,
+  `${indent}          ],`,
+  `${indent}        },`,
+  `${indent}      },`,
+  `${indent}    }`,
+  `${indent}  : {}),`,
+  spreadAnchor,
+].join("\n");
+src = src.replace(spreadAnchor, hook);
+writeFileSync(path, src);
+PREPJS
+    node "$STAGE/add-prepare-hook.mjs" "$PROF" \
+      || { echo "profile.ts: could not wire the prepare hook — refusing to guess" >&2; exit 1; }
+    NEW_FILES="$NEW_FILES .sandcastle/profile.ts"
+    note "profile.ts: prepare hook wired"
+  else
+    say ""
+    say "profile.ts carries neither the prepare hook nor the 1.5.x network import"
+    say "this step anchors on. Add it by hand:"
+    say "  - a PREPARE_SCRIPT constant for .sandcastle/sandbox-prepare.sh"
+    say "  - hooks.sandbox.onSandboxReady running 'bash .sandcastle/sandbox-prepare.sh',"
+    say "    guarded by existsSync so a project without the script is unaffected."
+  fi
+
+  # 3. CI gains the pairing check. Anchored on the map self-check the 1.6.5 step
+  #    wires; a project that reorganised its CI is reported.
+  POLICY="$WORK/.github/workflows/afk-policy.yml"
+  if [ ! -e "$POLICY" ]; then
+    note "afk-policy.yml absent; the scaffold supplies it"
+  elif grep -qF "sandbox-prepare.check.ts" "$POLICY"; then
+    note "afk-policy.yml: prepare-hook check already wired"
+  else
+    P1="      - name: Repository-map generator self-check"
+    P2="      # The prepare hook's two halves must agree — a script nobody registered
+      # silently reverts every run to the agent installing its own dependencies.
+      - name: Verify the sandbox prepare hook
+        run: npx --yes tsx .sandcastle/sandbox-prepare.check.ts
+$P1"
+    if grep -qF "$P1" "$POLICY"; then
+      subst "$POLICY" "$P1" "$P2"
+      note "afk-policy.yml: prepare-hook check added"
+    else
+      say "afk-policy.yml has no generator self-check step to anchor on."
+      say "Add a CI step running 'npx --yes tsx .sandcastle/sandbox-prepare.check.ts' by hand."
+    fi
+  fi
+
+  for rel in ${PREP_FILES:-}; do
+    NEW_FILES="$NEW_FILES $rel"
+  done
+fi
+
+
 if [ "$STEP_RAN" = "0" ]; then
   echo "no upgrade step defined from $FROM to $TEMPLATE_VERSION" >&2
   exit 1

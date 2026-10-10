@@ -1,6 +1,5 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import { execSync } from "node:child_process";
 import * as sandcastle from "@ai-hero/sandcastle";
 import { claudeProfile } from "../profile.js";
 
@@ -49,17 +48,19 @@ logging: { type: "stdout", verbose: true },
   },
 });
 
-const commitsAhead = Number(
-  execSync("git rev-list --count main..HEAD", { encoding: "utf8" }).trim()
-);
-if (!Number.isFinite(commitsAhead) || commitsAhead === 0) {
+// `result.commits`, not `git rev-list main..HEAD` on the host.
+//
+// The agent works in a worktree under `.sandcastle/worktrees/`, and that
+// worktree holds the branch — the host checkout stays where it was, because git
+// refuses to check the same branch out twice. Counting on the host measured the
+// host's HEAD, which is the base branch, so every run would report zero commits
+// and fail.
+const commits = result.commits ?? [];
+if (commits.length === 0) {
   fail("Agent finished but no commits were made on the branch.");
 }
 
-console.log(
-  `\nImplementation produced ${commitsAhead} commit(s) on ${BRANCH}.`
-);
-console.log(`  commits this run: ${result.commits.length}`);
+console.log(`\nImplementation produced ${commits.length} commit(s) on ${BRANCH}.`);
 
 function required(name: string): string {
   const value = process.env[name];

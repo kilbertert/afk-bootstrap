@@ -163,6 +163,19 @@ jobs:
           branch="agent/issue-${ISSUE_NUMBER}-${slug}"
           echo "name=$branch" >> "$GITHUB_OUTPUT"
 
+      # The agent does not run on this checkout.
+      #
+      # Sandcastle's `branch` strategy creates a worktree under
+      # `.sandcastle/worktrees/` and checks the task branch out there — and git
+      # refuses to check one branch out twice, so a checkout here would fail the
+      # run with "already checked out in worktree". That is not a workaround for
+      # something: it is the same isolation the review workflows rely on, and the
+      # reason it matters here is that this checkout carries their residue.
+      #
+      # The branch is still created, just not checked out: `git branch` writes the
+      # ref without touching HEAD, so `git push origin "$BRANCH"` later finds it
+      # (worktrees share one ref namespace) and this working tree stays on its own
+      # branch.
       - name: Create branch
         if: steps.shape.outputs.proceed == 'true' && steps.preflight.outputs.refused != 'true'
         env:
@@ -170,7 +183,7 @@ jobs:
         run: |
           git config user.name "claude-code[bot]"
           git config user.email "claude-code[bot]@users.noreply.github.com"
-          git checkout -b "$BRANCH"
+          git branch --force "$BRANCH" HEAD
 
 
       - name: Setup Node.js 22

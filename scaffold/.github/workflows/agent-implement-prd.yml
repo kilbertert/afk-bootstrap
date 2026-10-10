@@ -192,12 +192,15 @@ jobs:
           set -euo pipefail
           git config user.name "claude-code[bot]"
           git config user.email "claude-code[bot]@users.noreply.github.com"
+          # Same rule as agent-implement.yml: the branch is created, not checked
+          # out. Sandcastle's `branch` strategy checks it out in a worktree, and
+          # git refuses to check one branch out twice.
           if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
             git fetch origin "$BRANCH"
-            git checkout -B "$BRANCH" "origin/$BRANCH"
+            git branch --force "$BRANCH" "origin/$BRANCH"
             echo "is_first=false" >> "$GITHUB_OUTPUT"
           else
-            git checkout -b "$BRANCH"
+            git branch --force "$BRANCH" HEAD
             echo "is_first=true" >> "$GITHUB_OUTPUT"
           fi
 

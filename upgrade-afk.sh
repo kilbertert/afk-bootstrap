@@ -2243,6 +2243,44 @@ MOVEJS
   fi
 fi
 
+# ---- step: 1.7.2 -> 1.7.3 — the index hook bounds itself ---------------------
+# A sandbox hook runs through `execOk`, which fails the effect when the command
+# exits non-zero **or when it outlives `timeoutMs`** — and a timeout raises
+# `HookTimeoutError`, which kills the whole run. `|| true` therefore covers only
+# the first case. Measured: a run sat exactly 5 minutes inside "Setting up
+# sandbox" and died, on a command that takes 1.2 s in every workspace shape
+# reproducible locally.
+#
+# Indexing is an accelerator — the agent can always fall back to grep. Giving it
+# its own deadline strictly smaller than the hook's means the worst case is a
+# missing index rather than a dead run.
+if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 3 ]; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: the index hook bounds itself =="
+
+  PROF="$WORK/.sandcastle/profile.ts"
+  if [ ! -e "$PROF" ]; then
+    note "profile.ts absent; skipped"
+  elif grep -qF "timeout 120" "$PROF"; then
+    note "profile.ts: index hook already bounded"
+  elif ! grep -qF "index_repository" "$PROF"; then
+    note "profile.ts: carries no index hook; nothing to bound"
+  elif grep -qF "command: \`\${SANDBOX_CBM_BINARY} cli index_repository" "$PROF"; then
+    # shellcheck disable=SC2016  # the anchor is TS source; no shell here.
+    subst "$PROF" \
+      'command: `${SANDBOX_CBM_BINARY} cli index_repository' \
+      'command: `timeout 120 ${SANDBOX_CBM_BINARY} cli index_repository'
+    NEW_FILES="$NEW_FILES .sandcastle/profile.ts"
+    note "profile.ts: index hook bounded to 120s"
+  else
+    say "$PROF has an index hook this step does not recognise."
+    say "Prefix its command with a bound strictly smaller than its timeoutMs:"
+    say "  timeout 120 <binary> cli index_repository --repo-path . --mode fast || true"
+    say "A sandbox hook that outlives its timeout fails the whole run."
+  fi
+fi
+
+
 if [ "$STEP_RAN" = "0" ]; then
   echo "no upgrade step defined from $FROM to $TEMPLATE_VERSION" >&2
   exit 1

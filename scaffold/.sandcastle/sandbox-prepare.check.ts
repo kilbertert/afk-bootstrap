@@ -112,6 +112,29 @@ for (const needle of ["sandbox-prepare.sh", "index_repository"]) {
   );
 }
 
+// --- an accelerator must not be able to stop the run -------------------------
+//
+// A sandbox hook runs through `execOk`, which fails the effect when the command
+// exits non-zero **or when it outlives `timeoutMs`** — and a timeout raises
+// `HookTimeoutError`, which kills the whole run. `|| true` therefore covers only
+// the first case. Measured: a run sat exactly `timeoutMs` inside "Setting up
+// sandbox" and then died, on a command that takes 1.2 s in every workspace shape
+// reproducible locally.
+//
+// The index hook is an accelerator — the agent can always fall back to grep. So
+// it must carry its own deadline, strictly smaller than the hook's, and that is
+// asserted here rather than trusted: the two numbers live in different files'
+// worth of options and drifting them is silent.
+const indexHook = profile.match(/command: `([^`]*index_repository[^`]*)`/)?.[1] ?? "";
+assert(indexHook.includes("timeout "), `the index hook must bound itself with \`timeout\`, got: ${indexHook}`);
+const inner = Number(indexHook.match(/timeout\s+(\d+)/)?.[1] ?? NaN);
+assert(Number.isFinite(inner), "the index hook's own timeout must be a plain number of seconds");
+const outerMs = Number(profile.match(/AFK_INDEX_TIMEOUT_MS \?\? ([0-9]+) \* ([0-9]+) \* ([0-9]+)/)?.slice(1).reduce((a, b) => a * Number(b), 1) ?? NaN);
+assert(
+  Number.isFinite(outerMs) && inner * 1000 < outerMs,
+  `the index hook's own timeout (${inner}s) must be strictly smaller than the hook deadline (${outerMs}ms) — otherwise a hang kills the run`,
+);
+
 console.log(
   `sandbox-prepare check ok (script ${scriptExists ? "present, hook wired" : "absent, hook off"}; hooks on run(), not on the provider)`,
 );

@@ -32,3 +32,7 @@ edits instead of overwriting it.
   test counts were correct, but the file set behind the map still came from a
   filesystem walk. The 1.6.4 step replaces a project's copy only when it matches
   this byte for byte.
+
+- `mcp-config.ts.1.7.0` — the MCP config as 1.7.0 shipped it, before the serena
+  entry named an active project. The 1.7.1 step replaces a project's copy only
+  when it matches this byte for byte.

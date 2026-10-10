@@ -725,6 +725,43 @@ printf '#!/usr/bin/env bash\nset -euo pipefail\necho "this project own setup"\n'
   || { echo "upgrade refused a project with its own prepare script" >&2; exit 1; }
 grep -q 'this project own setup' "$P170OWN/.sandcastle/sandbox-prepare.sh" \
   || { echo "1.7.0 overwrote a project's own sandbox-prepare.sh" >&2; exit 1; }
+
+# The 1.7.0 -> 1.7.1 step: serena is started with an active project. Without it
+# every symbol tool answers "No active project" on the first call, which is the
+# call an agent uses to decide whether the tool is worth using.
+P171="$TMP/upgrade-170-serena-$LANGUAGE"
+rm -rf "$P171"
+mkdir -p "$P171/.github/workflows" "$P171/.sandcastle"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$P171/"
+cp "$S/references/mcp-config.ts.1.7.0" "$P171/.sandcastle/mcp-config.ts"
+cp "$S/scaffold/.sandcastle/mcp-config.check.ts" "$P171/.sandcastle/mcp-config.check.ts"
+if grep -qF -- '"--project"' "$P171/.sandcastle/mcp-config.ts"; then
+  echo "the 1.7.0 fixture already carries --project" >&2; exit 1
+fi
+node -e '
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  m.afk_template_version = "1.7.0";
+  m.templateVersion = 1;
+  fs.writeFileSync(process.argv[1], JSON.stringify(m, null, 2) + "\n");
+' "$P171/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$P171" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project at 1.7.0" >&2; exit 1; }
+grep -qF -- '"--project"' "$P171/.sandcastle/mcp-config.ts" \
+  || { echo "1.7.1 did not give serena an active project" >&2; exit 1; }
+# The path must be the sandbox mount, not anything the host resolved: the config
+# is read inside the container. Asserted through `mcpServers()` — the artefact the
+# agent's session actually reads — rather than on the source text.
+( cd "$P171" && npx --yes tsx -e '
+import { mcpServers } from "./.sandcastle/mcp-config.ts";
+const args = mcpServers().serena.args;
+const i = args.indexOf("--project");
+if (i < 0) { console.error("serena has no --project"); process.exit(1); }
+if (args[i + 1] !== "/home/agent/workspace") {
+  console.error("serena --project is not the sandbox path: " + args[i + 1]);
+  process.exit(1);
+}
+' ) || { echo "the migrated serena config is not usable" >&2; exit 1; }
 # It has to be valid YAML at a step boundary. An insertion that lands a level too
 # deep parses the `-` as a continuation key and the workflow fails to load — the
 # run never starts, which is the silent outcome this whole step exists to remove.

@@ -2052,6 +2052,51 @@ $P1"
 fi
 
 
+# ---- step: 1.7.0 -> 1.7.1 — serena is started with an active project ---------
+# The MCP config launched serena without `--project`, so in every fresh sandbox
+# serena had no active project. All of its symbol tools then answer
+#
+#   No active project. … known projects: []
+#
+# and they answer that on the FIRST call — which is the call an agent makes to
+# decide whether the tool is worth using. It concluded the tool was broken and
+# fell back to grep: measured on a real run, 50 `grep` invocations looking for
+# symbols while `mcp__serena__*` was called zero times.
+#
+# The server was `connected` the whole time. "The process started" is not the
+# same as "the tool works", and the gap is invisible from the outside.
+if [ "$from_minor" -eq 7 ] && [ "$from_patch" -lt 1 ] && [ "$to_minor" -ge 7 ]; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: serena gets an active project =="
+
+  REL=.sandcastle/mcp-config.ts
+  SRC="$S/scaffold/$REL"
+  [ -e "$SRC" ] || { echo "migration reference missing: $SRC" >&2; exit 1; }
+  if [ -e "$WORK/$REL" ] && grep -qF -- '"--project"' "$WORK/$REL"; then
+    note "$REL: --project already present"
+  elif [ -e "$WORK/$REL" ] && cmp -s "$WORK/$REL" "$S/references/mcp-config.ts.1.7.0"; then
+    cp "$SRC" "$WORK/$REL"
+    NEW_FILES="$NEW_FILES $REL"
+    note "restaged: $REL"
+  elif [ -e "$WORK/$REL" ]; then
+    say ""
+    say "$REL is not the 1.7.0 shape — leaving it as the project has it."
+    say "Add to the serena entry:"
+    say "  args: [\"start-mcp-server\", \"--context\", \"ide-assistant\", \"--project\", SANDBOX_WORKSPACE]"
+    say "with SANDBOX_WORKSPACE = \"/home/agent/workspace\" (the sandbox mount, not a host path)."
+  fi
+
+  # The check ships with the fix: it asserts `--project` names the sandbox path,
+  # which is the half a host-only test would get wrong.
+  CHK=.sandcastle/mcp-config.check.ts
+  if [ -e "$S/scaffold/$CHK" ]; then
+    cp "$S/scaffold/$CHK" "$WORK/$CHK"
+    NEW_FILES="$NEW_FILES $CHK"
+    note "restaged: $CHK"
+  fi
+fi
+
+
 if [ "$STEP_RAN" = "0" ]; then
   echo "no upgrade step defined from $FROM to $TEMPLATE_VERSION" >&2
   exit 1

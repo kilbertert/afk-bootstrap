@@ -43,6 +43,16 @@ Use red-green-refactor where applicable.
 Before committing, run `npm run check`, then
 `node .sandcastle/policy-check.mjs commit`.
 
+If this change settles something a later reader would otherwise have to
+re-derive — a user-visible behavior, a cross-file contract, an auth boundary, a
+format, a delivery or test-strategy decision — write or update the record in
+`docs/adr/` **in this same commit**. `docs/agents/architecture-decisions.md`
+says what counts and what does not; the short version is that most changes owe
+nothing. If nothing is owed, one line in the commit body settles it:
+
+    No-ADR: <why not>
+
+
 If the repo has a project verification skill — a directory matching
 `.claude/skills/verify-*/` — and your change alters behavior a user can see,
 run that skill and capture its evidence too. Tests are not a substitute: it

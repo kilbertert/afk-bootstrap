@@ -2949,12 +2949,20 @@ if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 12 ]; then
   #    them, and `implement-pr` is a comment pass.
   cat > "$STAGE/add-adr-duty.mjs" <<'ADRJS'
 import { readFileSync, writeFileSync } from "node:fs";
-const [path, anchor] = process.argv.slice(2);
+const [path, needle] = process.argv.slice(2);
 const src = readFileSync(path, "utf8");
 if (src.includes("No-ADR")) process.exit(4);
-const at = src.indexOf(anchor);
+// Line-anchored, not substring-anchored. The three prompts spell the surrounding
+// sentence three ways — `...commit\`.` in two of them, `...commit\` before
+// committing.` in the third — so a substring anchor carrying the punctuation
+// matches one and silently skips the others. The needle is the command itself,
+// which is identical in all three; the insertion point is the end of the line
+// carrying it.
+const lines = src.split("\n");
+const at = lines.findIndex((l) => l.includes(needle));
 if (at < 0) process.exit(3);
 const duty = [
+  "",
   "If this change settles something a later reader would otherwise have to",
   "re-derive — a user-visible behavior, a cross-file contract, an auth boundary, a",
   "format, a delivery or test-strategy decision — write or update the record in",
@@ -2965,12 +2973,20 @@ const duty = [
   "    No-ADR: <why not>",
   "",
 ].join("\n");
-writeFileSync(path, src.slice(0, at) + duty + src.slice(at));
+lines.splice(at + 1, 0, duty);
+writeFileSync(path, lines.join("\n"));
 ADRJS
 
+  # Three files are live for implementation work, and an earlier release's note
+  # counted two: the label-driven runners read `implement/prompt.md` and
+  # `implement-prd/prompt.md`, and the local runner reads `.sandcastle/implement.md`
+  # (bootstrap renders it from the language template). Missing the third would
+  # leave the local entry point — the one that produced 22 of this host's agent
+  # PRs — without the duty.
   for pair in \
-    ".sandcastle/implement/prompt.md|Before committing, run \`npm run check\`" \
-    ".sandcastle/implement-prd/prompt.md|Before committing, run \`npm run typecheck\`"; do
+    ".sandcastle/implement/prompt.md|node .sandcastle/policy-check.mjs commit" \
+    ".sandcastle/implement-prd/prompt.md|node .sandcastle/policy-check.mjs commit" \
+    ".sandcastle/implement.md|node .sandcastle/policy-check.mjs commit"; do
     REL="${pair%%|*}"; ANCHOR="${pair#*|}"
     if [ ! -e "$WORK/$REL" ]; then
       note "$REL absent; skipped"

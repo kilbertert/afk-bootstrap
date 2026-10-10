@@ -19,6 +19,12 @@ jobs:
         uses: actions/checkout@v4
         with:
           persist-credentials: false
+          # `fetch-depth: 0` is required, not a preference: the decision-record
+          # check resolves the merge base against `base.sha`, and a shallow
+          # checkout does not have that commit — so the check would report that
+          # it cannot see the diff, and a gate that cannot see the diff is not a
+          # gate.
+          fetch-depth: 0
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:

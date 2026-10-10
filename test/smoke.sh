@@ -879,6 +879,22 @@ fi
 npx --yes esbuild --loader:.ts=ts "$P174/.sandcastle/implement-pr/implement-pr.ts" --outfile=/dev/null 2>/dev/null \
   || { echo "the migration left implement-pr.ts unparseable" >&2; exit 1; }
 
+# 1.7.7: the commit count names the branch, because both HEAD and
+# `result.commits` are HEAD-relative and the host stays on the base branch —
+# measured, that reported "no commits were made" for a run whose commit was on
+# the branch, and deleted the worktree.
+for runner in .sandcastle/implement/implement.ts .sandcastle/implement-prd/implement-prd.ts; do
+  grep -qF 'origin/main..' "$P174/$runner" \
+    || { echo "$runner does not count commits on the branch" >&2; exit 1; }
+  # The explanatory comment names `result.commits` on purpose, so this looks for
+  # a *use* — the identifier outside a comment line.
+  if grep -vE '^\s*(//|/\*|\*)' "$P174/$runner" | grep -qE 'result\.commits\b'; then
+    echo "$runner still reads result.commits, which is HEAD-relative" >&2; exit 1
+  fi
+  npx --yes esbuild --loader:.ts=ts "$P174/$runner" --outfile=/dev/null 2>/dev/null \
+    || { echo "the migration left $runner unparseable" >&2; exit 1; }
+done
+
 # And the workflows must stop checking the task branch out for the same reason:
 # sandcastle's `branch` strategy checks it out inside a worktree, and git refuses
 # to check one branch out twice. The branch is created without moving HEAD.

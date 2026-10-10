@@ -2635,6 +2635,37 @@ PRDJS
 fi
 
 
+# ---- step: 1.7.7 -> 1.7.8 — the branch policy names the branch ---------------
+# `checkBranch` read this process's HEAD. Once the runner works in a worktree
+# (1.7.4), the checkout the policy job runs in stays on the default branch **by
+# design** — git allows each branch in one worktree only — so the rule rejected
+# every correct run:
+#
+#   policy check failed: protected default branch cannot be used by AFK: main
+#
+# The rule is about the branch the run works on, and the workflow sets `BRANCH`
+# to exactly that. When it is present, that is what is checked; the HEAD read
+# remains for the caller the rule was written for — a person running `pnpm afk`
+# by hand, who sets no BRANCH.
+if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 8 ]; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: the branch policy names the branch =="
+
+  REL=.sandcastle/policy-check.mjs
+  if [ ! -e "$WORK/$REL" ]; then
+    note "$REL absent; skipped"
+  elif grep -qF "process.env.BRANCH" "$WORK/$REL"; then
+    note "$REL: already checks the named branch"
+  elif ! grep -qF "protected default branch cannot be used by AFK" "$WORK/$REL"; then
+    note "$REL: no branch rule this step recognises"
+  else
+    cp "$S/scaffold/$REL" "$WORK/$REL"
+    NEW_FILES="$NEW_FILES $REL"
+    note "$REL: the branch rule checks the named branch"
+  fi
+fi
+
+
 if [ "$STEP_RAN" = "0" ]; then
   echo "no upgrade step defined from $FROM to $TEMPLATE_VERSION" >&2
   exit 1

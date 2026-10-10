@@ -883,6 +883,50 @@ npx --yes esbuild --loader:.ts=ts "$P174/.sandcastle/implement-pr/implement-pr.t
 # `result.commits` are HEAD-relative and the host stays on the base branch —
 # measured, that reported "no commits were made" for a run whose commit was on
 # the branch, and deleted the worktree.
+# 1.7.8: the branch rule checks the branch the run names, not this process's
+# HEAD. Since 1.7.4 the policy job's checkout stays on the default branch by
+# design (the task branch lives in a worktree), so reading HEAD rejected every
+# correct run.
+P178="$TMP/upgrade-177-branch-policy-$LANGUAGE"
+rm -rf "$P178"
+mkdir -p "$P178/.github/workflows" "$P178/.sandcastle"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$P178/"
+cp "$S/scaffold/.sandcastle/consensus-contract.json" "$P178/.sandcastle/consensus-contract.json"
+cp "$S/test/fixtures/policy-check-1.7.7.mjs" "$P178/.sandcastle/policy-check.mjs"
+node -e '
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  m.afk_template_version = "1.7.7";
+  m.templateVersion = 1;
+  fs.writeFileSync(process.argv[1], JSON.stringify(m, null, 2) + "\n");
+' "$P178/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$P178" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project at 1.7.7" >&2; exit 1; }
+grep -qF "process.env.BRANCH" "$P178/.sandcastle/policy-check.mjs" \
+  || { echo "1.7.8 did not make the branch rule name the branch" >&2; exit 1; }
+# And the rule must still refuse the case it was written for. Exercised here
+# rather than only asserted textually, because "the check is now a no-op" is the
+# way this fix goes wrong.
+BRANCHCHECK="$TMP/branch-policy-$LANGUAGE"
+rm -rf "$BRANCHCHECK"
+mkdir -p "$BRANCHCHECK/.sandcastle"
+cp "$P178/.sandcastle/policy-check.mjs" "$P178/.sandcastle/consensus-contract.json" "$BRANCHCHECK/.sandcastle/"
+cp "$P178/.afk-bootstrap.json" "$BRANCHCHECK/.afk-bootstrap.json"
+# The seed commit is made on a scratch branch and `main` is then moved to it:
+# the host's commit guard refuses a commit *on* a default branch, and this
+# fixture needs HEAD to be the default branch — that is the case under test.
+( cd "$BRANCHCHECK" && git init -q -b main && git config user.email t@e.com && git config user.name t \
+  && : > f && git add -A && git checkout -q -b chore/seed && git commit -qm "chore: seed" \
+  && git branch -f main chore/seed && git checkout -q main )
+if ( cd "$BRANCHCHECK" && AFK_ROOT="$PWD" AFK_DEFAULT_BRANCH=main node .sandcastle/policy-check.mjs commit ) >/dev/null 2>&1; then
+  echo "the branch rule accepted HEAD on the default branch" >&2; exit 1
+fi
+( cd "$BRANCHCHECK" && AFK_ROOT="$PWD" AFK_DEFAULT_BRANCH=main BRANCH=agent/issue-1 node .sandcastle/policy-check.mjs commit ) >/dev/null 2>&1 \
+  || { echo "the branch rule rejected a run that names a task branch" >&2; exit 1; }
+if ( cd "$BRANCHCHECK" && AFK_ROOT="$PWD" AFK_DEFAULT_BRANCH=main BRANCH=main node .sandcastle/policy-check.mjs commit ) >/dev/null 2>&1; then
+  echo "the branch rule accepted a run that names the default branch" >&2; exit 1
+fi
+
 for runner in .sandcastle/implement/implement.ts .sandcastle/implement-prd/implement-prd.ts; do
   grep -qF 'origin/main..' "$P174/$runner" \
     || { echo "$runner does not count commits on the branch" >&2; exit 1; }

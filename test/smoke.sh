@@ -816,6 +816,14 @@ node -e '
 ( cd "$P172C" && npx --yes tsx .sandcastle/sandbox-prepare.check.ts >/dev/null ) \
   || { echo "a 1.6.5 project reaching 1.7.2 in one run keeps hooks run() cannot read" >&2; exit 1; }
 
+# 1.7.3: the index hook bounds itself. A sandbox hook that outlives its own
+# timeoutMs raises HookTimeoutError, which kills the run — `|| true` cannot help,
+# because there is no exit code to swallow. Measured: a run sat exactly the
+# deadline inside "Setting up sandbox" and died, on a command that takes 1.2 s in
+# every workspace shape reproducible locally.
+( cd "$P172C" && grep -qF "timeout 120" .sandcastle/profile.ts ) \
+  || { echo "the index hook has no self-imposed deadline — a hang can kill the run" >&2; exit 1; }
+
 
 ( cd "$P171" && npx --yes tsx -e '
 import { mcpServers } from "./.sandcastle/mcp-config.ts";

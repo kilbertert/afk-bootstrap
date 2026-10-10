@@ -88,10 +88,36 @@ export function claudeProfile(
                 },
               ]
             : []),
+          // Indexed only when the server will actually be mounted — the same
+          // `codebaseMemoryAvailable()` the mount decision uses, so a host
+          // without the binary runs no hook it cannot satisfy.
           ...(codebaseMemoryAvailable()
             ? [
                 {
-                  command: `${SANDBOX_CBM_BINARY} cli index_repository --repo-path . --mode fast || true`,
+                  // `timeout 120` is load-bearing, not decoration. A sandbox
+                  // hook runs through `execOk`, which fails the effect when the
+                  // command exits non-zero **or when it outlives `timeoutMs`** —
+                  // and a timeout raises `HookTimeoutError`, which kills the
+                  // whole run. So `|| true` covers only the first case: a
+                  // command that hangs has nothing to fall back to.
+                  //
+                  // Measured: a run sat exactly `timeoutMs` (5 min) inside
+                  // "Setting up sandbox" and then died, on a command that takes
+                  // 1.2 s locally in every workspace shape tried (with and
+                  // without `.venv`, with and without `.git`). The hang was not
+                  // reproducible outside the runner, which is the point — a
+                  // borrowed accelerator must not be able to stop the run for a
+                  // reason nobody can reproduce.
+                  //
+                  // So the command's own deadline is strictly smaller than the
+                  // hook's. Indexing may fail, may produce nothing, and the
+                  // agent falls back to grep; that is a fine outcome. An
+                  // accelerator that can kill the run is not.
+                  command: `timeout 120 ${SANDBOX_CBM_BINARY} cli index_repository --repo-path . --mode fast || true`,
+                  // The outer deadline stays generous because it is now
+                  // unreachable in practice: any hang is cut at 120 s by the
+                  // command itself, and the hook only fails if the runtime
+                  // cannot even start it.
                   timeoutMs: Number(process.env.AFK_INDEX_TIMEOUT_MS ?? 5 * 60 * 1000),
                 },
               ]

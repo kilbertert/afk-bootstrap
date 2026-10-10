@@ -212,6 +212,16 @@ if [ -f "$TARGET/.gitignore" ] && ! grep -qx 'node_modules' "$TARGET/.gitignore"
   printf '\n# AFK runner (package.json) dependencies\nnode_modules/\n' >> "$TARGET/.gitignore"
 fi
 
+# A run mounts a worktree that sandcastle creates under `.sandcastle/worktrees/`.
+# That directory must be ignored, or it becomes residue the *next* run sees: the
+# knowledge-graph indexer walks untracked, unignored paths, so an unignored
+# worktree of this repository would be indexed as part of this repository —
+# doubling the node count and pulling in serena's own `.pkl` caches, which the
+# indexer tries to parse as source and times out on.
+if [ -f "$TARGET/.gitignore" ] && ! grep -qE '^\.sandcastle/worktrees/?' "$TARGET/.gitignore"; then
+  printf '\n# AFK sandbox worktrees (one per run; residue if not ignored)\n.sandcastle/worktrees/\n' >> "$TARGET/.gitignore"
+fi
+
 # ---- package.json: merge or create ----------------------------------------
 if [ -f "$TARGET/package.json" ]; then
   # shellcheck disable=SC2016  # the JS wants literal `$`; none is shell here.

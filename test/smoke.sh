@@ -752,6 +752,68 @@ grep -qF -- '"--project"' "$P171/.sandcastle/mcp-config.ts" \
 # The path must be the sandbox mount, not anything the host resolved: the config
 # is read inside the container. Asserted through `mcpServers()` — the artefact the
 # agent's session actually reads — rather than on the source text.
+# The 1.7.1 -> 1.7.2 step: `hooks` moves out of `docker()` and onto the object
+# `claudeProfile` returns, which callers spread into `run()`.
+#
+# This is the one defect in this series that no runtime evidence could have
+# caught: a hook in the wrong object is silently ignored, and the symptom (an
+# unprepared workspace) is identical to a hook that ran and did nothing. The
+# first measurement that appeared to confirm 1.7.0's hook worked — a ready venv —
+# was the agent installing dependencies itself. So the assertion is structural.
+P172="$TMP/upgrade-171-hooks-$LANGUAGE"
+rm -rf "$P172"
+mkdir -p "$P172/.github/workflows" "$P172/.sandcastle"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$P172/"
+git -C "$S" show "5c40f3c:scaffold/.sandcastle/profile.ts" > "$P172/.sandcastle/profile.ts"
+cp "$S/scaffold/.sandcastle/mcp-config.ts" "$P172/.sandcastle/mcp-config.ts"
+cp "$S/scaffold/.sandcastle/sandbox-prepare.sh" "$P172/.sandcastle/sandbox-prepare.sh"
+cp "$S/scaffold/.sandcastle/sandbox-prepare.check.ts" "$P172/.sandcastle/sandbox-prepare.check.ts"
+# The fixture is the 1.7.1 shape: hooks present, inside docker().
+grep -qF "hooks: {" "$P172/.sandcastle/profile.ts" \
+  || { echo "the 1.7.1 fixture carries no hooks block" >&2; exit 1; }
+grep -qF "codebaseMemoryAvailable" "$P172/.sandcastle/profile.ts" \
+  && { echo "the 1.7.1 fixture already has the fix" >&2; exit 1; }
+node -e '
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  m.afk_template_version = "1.7.1";
+  m.templateVersion = 1;
+  fs.writeFileSync(process.argv[1], JSON.stringify(m, null, 2) + "\n");
+' "$P172/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$P172" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project at 1.7.1" >&2; exit 1; }
+grep -qF "codebaseMemoryAvailable" "$P172/.sandcastle/profile.ts" \
+  || { echo "1.7.2 did not move the hooks onto run()" >&2; exit 1; }
+# The check is the only thing that can express this: it fails while the block
+# sits in the wrong object, and the sandbox cannot be asked at build time
+# whether a hook would run.
+( cd "$P172" && npx --yes tsx .sandcastle/sandbox-prepare.check.ts >/dev/null ) \
+  || { echo "the migrated profile still carries hooks where run() cannot read them" >&2; exit 1; }
+
+# The same journey starting further back, which is where the gate matters: a 1.6.5
+# project reaches 1.7.2 in ONE invocation, and that run's 1.7.0 step is what
+# installs the hooks block. A step gated on `from_minor` would then skip the move
+# — stamped 1.7.2 with hooks nothing reads. This is the mirror of the `to_patch`
+# trap the 1.3.1 step carries a note about.
+P172C="$TMP/upgrade-165-to-172-$LANGUAGE"
+rm -rf "$P172C"
+mkdir -p "$P172C/.github/workflows" "$P172C/.sandcastle"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$P172C/"
+cp "$S/test/fixtures/profile-1.6.5/profile.ts" "$P172C/.sandcastle/profile.ts"
+cp "$S/test/fixtures/profile-1.6.5/afk-policy.yml" "$P172C/.github/workflows/afk-policy.yml"
+node -e '
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  m.afk_template_version = "1.6.5";
+  m.templateVersion = 1;
+  fs.writeFileSync(process.argv[1], JSON.stringify(m, null, 2) + "\n");
+' "$P172C/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$P172C" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a 1.6.5 project" >&2; exit 1; }
+( cd "$P172C" && npx --yes tsx .sandcastle/sandbox-prepare.check.ts >/dev/null ) \
+  || { echo "a 1.6.5 project reaching 1.7.2 in one run keeps hooks run() cannot read" >&2; exit 1; }
+
+
 ( cd "$P171" && npx --yes tsx -e '
 import { mcpServers } from "./.sandcastle/mcp-config.ts";
 const args = mcpServers().serena.args;

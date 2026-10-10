@@ -2740,6 +2740,60 @@ RECLAIMJS
 fi
 
 
+# ---- step: 1.7.9 -> 1.7.10 — the policy step is told which branch ------------
+# 1.7.8 made the branch rule check `BRANCH` when it is set — and the step that
+# runs the rule never set it. So the fix had no effect: the check still read
+# HEAD, which is the default branch by design, and still refused every run.
+#
+#   policy check failed: protected default branch cannot be used by AFK: main
+#
+# The fix is the env var, and its absence is exactly the kind of gap a
+# source-level assertion misses: `policy-check.mjs` was correct, and the caller
+# was not.
+if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 10 ]; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: the policy step is told which branch =="
+
+  cat > "$STAGE/add-policy-branch.mjs" <<'POLICYJS'
+import { readFileSync, writeFileSync } from "node:fs";
+const [path] = process.argv.slice(2);
+let src = readFileSync(path, "utf8");
+const RUN = "        run: node .sandcastle/policy-check.mjs delivery";
+const HEAD = "      - name: Verify AFK policy before push";
+const i = src.indexOf(HEAD);
+if (i < 0) process.exit(3);
+const runAt = src.indexOf(RUN, i);
+if (runAt < 0) process.exit(4);
+// Already carries the env block?
+const between = src.slice(i, runAt);
+if (between.includes("BRANCH:")) process.exit(5);
+const env = [
+  "        env:",
+  "          # The branch this run works on. The policy check needs it because the",
+  "          # checkout this step runs in stays on the default branch — the task",
+  "          # branch lives in a worktree — so without it the check reads HEAD and",
+  "          # refuses every correct run.",
+  "          BRANCH: ${{ steps.branch.outputs.name }}",
+  "",
+].join("\n");
+writeFileSync(path, src.slice(0, runAt) + env + src.slice(runAt));
+POLICYJS
+
+  for wf in .github/workflows/agent-implement.yml .github/workflows/agent-implement-prd.yml; do
+    [ -e "$WORK/$wf" ] || { note "$wf absent; skipped"; continue; }
+    node "$STAGE/add-policy-branch.mjs" "$WORK/$wf" || rc=$?
+    case ${rc:-0} in
+      0) note "$wf: the policy step is given the branch" ;;
+      3|4) say "$wf has no policy step this step recognises; pass"
+           say "BRANCH: \${{ steps.branch.outputs.name }} into that step by hand." ;;
+      5) note "$wf: policy step already given the branch" ;;
+      *) echo "$wf: could not add the branch — refusing to guess" >&2; exit 1 ;;
+    esac
+    rc=0
+  done
+fi
+
+
 if [ "$STEP_RAN" = "0" ]; then
   echo "no upgrade step defined from $FROM to $TEMPLATE_VERSION" >&2
   exit 1

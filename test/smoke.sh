@@ -971,6 +971,24 @@ fi
   && [ -n "$stale" ] && git worktree remove --force "$stale" && git branch --force agent/issue-1 HEAD ) \
   || { echo "reclaiming the stale worktree did not let the branch be force-updated" >&2; exit 1; }
 
+# 1.7.10: the policy step is told which branch. 1.7.8 made the rule check BRANCH
+# when set — and the step that runs it never set it, so the fix had no effect.
+# Asserted on the **caller**, because the callee was already correct and a
+# source-level assertion on it passes while every run still fails.
+for wf in agent-implement agent-implement-prd; do
+  python3 - "$P179/.github/workflows/$wf.yml" <<'BRANCHENV' || { echo "$wf.yml does not give the policy step the branch" >&2; exit 1; }
+import sys, yaml
+doc = yaml.safe_load(open(sys.argv[1]).read())
+steps = [s for job in doc["jobs"].values() for s in job.get("steps", [])]
+step = next((s for s in steps if s.get("name") == "Verify AFK policy before push"), None)
+if step is None:
+    sys.exit("no policy step")
+env = step.get("env") or {}
+if "BRANCH" not in env:
+    sys.exit("the policy step has no BRANCH in its env")
+BRANCHENV
+done
+
 for runner in .sandcastle/implement/implement.ts .sandcastle/implement-prd/implement-prd.ts; do
   grep -qF 'origin/main..' "$P174/$runner" \
     || { echo "$runner does not count commits on the branch" >&2; exit 1; }

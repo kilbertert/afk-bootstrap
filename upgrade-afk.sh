@@ -165,6 +165,30 @@ subst() {
   ' "$file" "$from" "$to"
 }
 
+# Replace a whole line, ignoring its indentation: the line is matched on its
+# trimmed text and rewritten with whatever leading whitespace it had. `subst`
+# cannot do this — its anchor is exact, so a file that indents the same
+# statement differently fails instead of substituting.
+trim_subst() {
+  local file="$1" from="$2" to="$3"
+  node -e '
+    const fs = require("fs");
+    const [path, from, to] = process.argv.slice(1);
+    const lines = fs.readFileSync(path, "utf8").split("\n");
+    let hits = 0;
+    const out = lines.map((l) => {
+      if (l.trim() !== from) return l;
+      hits += 1;
+      return l.slice(0, l.length - l.trimStart().length) + to;
+    });
+    if (hits === 0) {
+      console.error("trimmed anchor not found in " + path + ": " + from);
+      process.exit(1);
+    }
+    fs.writeFileSync(path, out.join("\n"));
+  ' "$file" "$from" "$to"
+}
+
 # Is this file a shape a template generated, or one a project has edited?
 #
 # Replacing profile.ts is the only step that discards a file rather than editing
@@ -2413,6 +2437,64 @@ DROPJS
   fi
 fi
 
+# ---- step: 1.7.5 -> 1.7.6 — the workflows stop checking the task branch out --
+# The other half of 1.7.5, which shipped the runner change without it.
+#
+# Sandcastle's `branch` strategy checks the task branch out inside a worktree,
+# and git refuses to check one branch out twice — so a `git checkout -b "$BRANCH"`
+# in the workflow turns every run into
+#
+#   WorktreeError: Branch 'agent/issue-...' is already checked out in worktree at ...
+#
+# The branch is still created, just not checked out: `git branch --force` writes
+# the ref without moving HEAD, and worktrees share one ref namespace, so the
+# later `git push origin "$BRANCH"` still finds it.
+if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 6 ]; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: the task branch is created, not checked out =="
+
+  # The workflow must stop checking the task branch out. Sandcastle's `branch`
+  # strategy checks it out inside a worktree, and git refuses to check one branch
+  # out twice — so a checkout here turns every run into
+  #
+  #   WorktreeError: Branch 'agent/issue-...' is already checked out in worktree at ...
+  #
+  # The branch is still created, just not checked out: `git branch --force`
+  # writes the ref without moving HEAD. Worktrees share one ref namespace, so the
+  # later `git push origin "$BRANCH"` still finds it.
+  WF1=".github/workflows/agent-implement.yml"
+  WF2=".github/workflows/agent-implement-prd.yml"
+  # Patterns are built from single-quoted fragments so the literal `"$BRANCH"`
+  # inside them is not read as a shell expansion — the text is workflow source,
+  # and shellcheck would otherwise flag every line as SC2016.
+  DQ='"'
+  CO_B="git checkout -b ${DQ}\$BRANCH${DQ}"
+  CO_CAP_B="git checkout -B ${DQ}\$BRANCH${DQ} ${DQ}origin/\$BRANCH${DQ}"
+  BR_HEAD="git branch --force ${DQ}\$BRANCH${DQ} HEAD"
+  BR_ORIGIN="git branch --force ${DQ}\$BRANCH${DQ} ${DQ}origin/\$BRANCH${DQ}"
+  for wf in "$WF1" "$WF2"; do
+    [ -e "$WORK/$wf" ] || continue
+    # The two workflows indent this line differently (10 spaces in
+    # agent-implement, 12 in agent-implement-prd where it sits inside an
+    # if/else), and an exact-anchor substitution on the wrong indent is a hard
+    # failure rather than a miss. Matching on the trimmed line keeps the file's
+    # own indentation and works for both.
+    if grep -qF -- "$CO_B" "$WORK/$wf"; then
+      trim_subst "$WORK/$wf" "$CO_B" "$BR_HEAD"
+      # Not registered in NEW_FILES: the publish phase handles `.github/workflows`
+      # as a directory (it compares the whole tree), and registering a file that
+      # lives inside a published directory makes it publish twice. The second
+      # copy takes its rollback backup *after* the first one landed, so a failed
+      # publish restores that newer content over the directory restore — leaving
+      # the project with a half-migrated workflow.
+      note "$wf: the task branch is created, not checked out"
+    fi
+    if grep -qF -- "$CO_CAP_B" "$WORK/$wf"; then
+      trim_subst "$WORK/$wf" "$CO_CAP_B" "$BR_ORIGIN"
+      note "$wf: a resumed branch is reset, not checked out"
+    fi
+  done
+fi
 
 if [ "$STEP_RAN" = "0" ]; then
   echo "no upgrade step defined from $FROM to $TEMPLATE_VERSION" >&2

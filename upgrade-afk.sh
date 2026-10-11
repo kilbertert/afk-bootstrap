@@ -3015,34 +3015,39 @@ ADRJS
   #    next push for a reason the project did not cause.
   MAP_NEEDED=1
 
-  # 4. The policy job. Replaced wholesale when it is still the shape this scaffold
+  # 4. The policy job. Replaced wholesale when it is a shape this scaffold
   #    generated, rather than patched step by step.
   #
-  #    Four rounds of patching each left a different hole: a commented
-  #    `fetch-depth` counted as configured; an unrelated job's checkout answered
-  #    for this one; `fetch-depth: 1  # fast` was not replaced; a renamed step lost
-  #    the anchor and got a DUPLICATE depth key inserted after the shallow one —
-  #    and YAML takes the last, so the shallow value survived the "fix".
+  #    Patching was tried four times and each attempt left a different hole — a
+  #    commented `fetch-depth` counted as configured; an unrelated job's checkout
+  #    answered for this one; `fetch-depth: 1  # fast` was not replaced; a renamed
+  #    step lost the anchor and got a DUPLICATE depth key inserted after the
+  #    shallow one, where YAML takes the last and the shallow value survived the
+  #    "fix". A fifth attempt parsed the YAML and immediately raised five more
+  #    (subdirectory checkouts, several decision jobs, an intervening step with its
+  #    own depth, `false` comparing equal to `0`, and PyYAML being absent on an
+  #    operator host). Each was a special case of one question: has this file been
+  #    changed away from what the scaffold generated? So ask that directly.
   #
-  #    Every one of those came from matching text against a structure. Two
-  #    consequences:
+  #    Two shapes count as the scaffold's own, because the scaffold has generated
+  #    both. They differ by exactly the two things 1.7.12 adds — the
+  #    decision-record step and `fetch-depth: 0`:
   #
-  #      * the check is `instructions == instructions`, ignoring comments and
-  #        blank lines. The 1.7.12 step inserted its own comment blocks here, so
-  #        every consumer's copy differs from the scaffold's in prose — what
-  #        decides ownership is whether the steps are still the scaffold's own.
-  #      * the patch is a replacement, which is what bootstrap already does for
-  #        this file (`cp --no-clobber scaffold/.`). A project whose instructions
-  #        differ keeps its version and is told the one thing that matters.
+  #      * the pre-1.7.12 shape (`references/afk-policy.yml.1.7.12`);
+  #      * the 1.7.12–1.7.15 shape, whose instructions are the scaffold's minus
+  #        the depth line, since that step was inserted at the prepare-hook anchor
+  #        in the same position the scaffold has it.
   #
-  #    A workflow composed entirely of scaffold steps is not something a project
-  #    assembles; keeping those steps current is the whole point of the file.
+  #    Anything else is project-owned and is left alone — with the two things it
+  #    needs named explicitly, because "left alone" would otherwise mean the gate
+  #    silently never runs in that repository.
   POLICY="$WORK/.github/workflows/afk-policy.yml"
   if [ ! -e "$POLICY" ]; then
     note "afk-policy.yml absent; the scaffold supplies it"
   elif cmp -s "$POLICY" "$S/scaffold/.github/workflows/afk-policy.yml"; then
     note "afk-policy.yml: already the scaffold's current version"
-  elif python3 - "$POLICY" "$S/references/afk-policy.yml.1.7.12" <<'SAME'
+  elif python3 - "$POLICY" "$S/references/afk-policy.yml.1.7.12" \
+                   "$S/scaffold/.github/workflows/afk-policy.yml" <<'SAME'
 import sys
 
 
@@ -3057,18 +3062,66 @@ def instructions(path):
     return out
 
 
-sys.exit(0 if instructions(sys.argv[1]) == instructions(sys.argv[2]) else 1)
+candidate = instructions(sys.argv[1])
+pre_adr = instructions(sys.argv[2])
+current = [l for l in instructions(sys.argv[3]) if l != "fetch-depth: 0"]
+sys.exit(0 if candidate in (pre_adr, current) else 1)
 SAME
   then
     cp "$S/scaffold/.github/workflows/afk-policy.yml" "$POLICY"
     NEW_FILES="$NEW_FILES .github/workflows/afk-policy.yml"
     note "afk-policy.yml: replaced with the scaffold's version (checkout fetches history)"
   else
-    say "afk-policy.yml has steps this scaffold does not recognise; left as the"
-    say "project's own. It needs a checkout that fetches the base commit:"
-    say "  give the \`actions/checkout\` step that runs before"
-    say "  'Verify decision records' \`fetch-depth: 0\`."
-    say "A shallow checkout makes that check fail with 'cannot resolve …'."
+    # Project-owned. Name BOTH pieces, not just the depth: a project that never
+    # received the decision-record step needs it too, and telling it only about the
+    # checkout would leave the gate uninstalled and unmentioned.
+    NEEDS="$(python3 - "$POLICY" <<'NEEDS'
+import sys
+
+try:
+    import yaml
+except ImportError:
+    print("the decision-record step and `fetch-depth: 0` (PyYAML unavailable, cannot check)")
+    sys.exit(0)
+
+try:
+    doc = yaml.safe_load(open(sys.argv[1], encoding="utf-8").read())
+except yaml.YAMLError:
+    print("the decision-record step and `fetch-depth: 0` (the file is not valid YAML)")
+    sys.exit(0)
+
+needs = []
+found_decision = None
+for job in (doc.get("jobs") or {}).values():
+    steps = [s for s in (job.get("steps") or []) if isinstance(s, dict)]
+    at = next((n for n, s in enumerate(steps) if s.get("name") == "Verify decision records"), None)
+    if at is None:
+        continue
+    found_decision = (steps, at)
+if found_decision is None:
+    needs.append("the decision-record step (`Verify decision records`)")
+else:
+    steps, at = found_decision
+    depth = None
+    for idx in range(at - 1, -1, -1):
+        if str(steps[idx].get("uses", "")).startswith("actions/checkout@"):
+            depth = (steps[idx].get("with") or {}).get("fetch-depth")
+            break
+    if depth != 0 and depth != "0":
+        needs.append("`fetch-depth: 0` on the checkout that runs before it")
+print(" and ".join(needs) if needs else "")
+NEEDS
+)"
+    if [ -n "$NEEDS" ]; then
+      say "afk-policy.yml has steps this scaffold does not recognise; left as the"
+      say "project's own. It is missing: $NEEDS."
+      say "Add those by hand — without them the decision-record gate never runs, or"
+      say "runs against a checkout that cannot resolve the base commit."
+    else
+      say "afk-policy.yml has steps this scaffold does not recognise; left as the"
+      say "project's own. It already carries the decision-record step and a"
+      say "full-history checkout, so nothing is missing there."
+    fi
   fi
 
 fi

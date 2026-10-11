@@ -49,3 +49,15 @@ edits instead of overwriting it.
   scaffold by deleting exactly the token the 1.7.11 step adds, so the fixture and
   the step's anchor cannot drift apart: change either spelling and the smoke test
   fails instead of the migration silently skipping.
+
+- `adr.check.mjs.1.7.12` / `architecture-decisions.md.1.7.12` — the checker and the
+  convention as 1.7.12 shipped them: the gate decided whether to ENFORCE from the
+  *value* of the base ref, so an empty `AFK_ADR_BASE` downgraded it to a report
+  (measured: `--base ""` exited 0); coverage was judged over the whole merge-base
+  diff rather than per commit; and the convention said nothing about searching for
+  an existing record before writing one. The 1.7.13 step replaces a project's copy
+  only when it matches these byte for byte. Taken from the 1.7.12 commit, not from
+  the current tree — a reference that tracks HEAD anchors nothing.
+- `adr-0002-self-application.md` — the record the 1.7.13 step installs into
+  consuming projects. It explains the three defects above, so a project that later
+  wonders why its gate refuses an empty base has the answer in its own tree.

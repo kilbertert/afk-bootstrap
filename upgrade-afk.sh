@@ -3069,46 +3069,157 @@ STEPJS
   fi
 
   # The checkout must carry the base commit, whatever branch above was taken.
-  # Anchored on the file, not on the step: a project that already carries the
-  # decision-record check took the "already wired" branch and would otherwise never
-  # receive the history it needs — and from 1.7.16 a shallow checkout FAILS rather
-  # than reporting that it cannot see the diff.
+  #
+  # This reads the YAML rather than the text, after three rounds of text matching
+  # each being wrong in a different way:
+  #   * `"fetch-depth" in text` matched a COMMENT;
+  #   * `^\s*fetch-depth:\s*0\s*$` let an unrelated job's checkout answer for this
+  #     job's;
+  #   * replacing only `fetch-depth: <EOL>` missed `fetch-depth: 1  # keep it fast`.
+  # Every one of those reported success while leaving the policy job shallow — and
+  # from 1.7.16 a shallow policy job FAILS its decision-record check.
+  #
+  # So: parse to decide, then edit the ONE step's lines, then re-parse and assert
+  # the result. The assertion is the part that matters — each earlier version
+  # printed a success message for an edit that had not happened.
   if [ -e "$POLICY" ]; then
     python3 - "$POLICY" <<'FETCHDEPTH'
-import pathlib, re, sys
-p = pathlib.Path(sys.argv[1])
-t = p.read_text()
-# `fetch-depth: <n>` with n > 0 is still a shallow checkout, and the check needs
-# the base COMMIT — so the test is the value, not the key. The previous version
-# tested for the substring, which a comment mentioning `fetch-depth` satisfies.
-if re.search(r"^\s*fetch-depth:\s*0\s*$", t, re.M):
-    print("  afk-policy.yml: checkout already fetches full history")
+import sys
+
+try:
+    import yaml
+except ImportError:
+    print("  afk-policy.yml: PyYAML unavailable; cannot check the checkout depth", file=sys.stderr)
+    sys.exit(2)
+
+path = sys.argv[1]
+with open(path, encoding="utf-8") as fh:
+    text = fh.read()
+lines = text.split("\n")
+try:
+    doc = yaml.safe_load(text)
+except yaml.YAMLError as exc:
+    print(f"  afk-policy.yml: not valid YAML ({exc})", file=sys.stderr)
+    sys.exit(2)
+
+# The decision-record step, then the checkout that precedes it IN THE SAME JOB.
+# Parsing rather than matching on the step's display name is what makes a renamed
+# `Check out repository` still resolve.
+decision = None
+decision_job = None
+for job in (doc.get("jobs") or {}).values():
+    for step in job.get("steps") or []:
+        if isinstance(step, dict) and step.get("name") == "Verify decision records":
+            decision, decision_job = step, job
+if decision is None:
+    print("  afk-policy.yml: no decision-record step; nothing to do")
     sys.exit(0)
-anchor = """      - name: Check out repository
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false"""
-if anchor not in t:
+
+steps = [s for s in (decision_job.get("steps") or []) if isinstance(s, dict)]
+at = steps.index(decision)
+checkout = None
+for idx in range(at - 1, -1, -1):
+    if str(steps[idx].get("uses", "")).startswith("actions/checkout@"):
+        checkout = steps[idx]
+        break
+if checkout is None:
+    print("  afk-policy.yml: no checkout before it; refusing to guess", file=sys.stderr)
     sys.exit(3)
-# A different depth already present: replace the value rather than adding a second
-# key, which would leave the last one winning and this migration looking applied.
-if re.search(r"^\s*fetch-depth:", t, re.M):
-    t = re.sub(r"^(\s*fetch-depth:\s*)\S+\s*$", r"\g<1>0", t, count=1, flags=re.M)
-    print("  afk-policy.yml: checkout depth raised to a full fetch")
+
+if (checkout.get("with") or {}).get("fetch-depth") in (0, "0"):
+    print("  afk-policy.yml: the decision-record job already fetches full history")
+    sys.exit(0)
+
+# Locate that step's lines. Anchored on the checkout's own `uses:` line, walking
+# back from the decision step, and bounded by the step that PRECEDES the checkout
+# — not by the decision step, which is what made the scan pass over `with:` and
+# insert a second key beside the shallow one. YAML resolves duplicate keys last-
+# wins, so the shallow value would have survived the "fix".
+decision_line = next(
+    (n for n, l in enumerate(lines) if l.strip() == "- name: Verify decision records"), None
+)
+if decision_line is None:
+    print("  afk-policy.yml: cannot locate the decision-record step in the text", file=sys.stderr)
+    sys.exit(3)
+
+uses_line = None
+for n in range(decision_line - 1, -1, -1):
+    if "actions/checkout@" in lines[n]:
+        uses_line = n
+        break
+if uses_line is None:
+    print("  afk-policy.yml: cannot locate its checkout in the text", file=sys.stderr)
+    sys.exit(3)
+
+# A step starts at its `- name:` line; scan that whole span, so a depth key AFTER
+# `with:` is found rather than being skipped over.
+step_start = uses_line
+for n in range(uses_line, -1, -1):
+    if lines[n].lstrip().startswith("- "):
+        step_start = n
+        break
+span = range(step_start, decision_line)
+
+depth_line = next((n for n in span if lines[n].strip().startswith("fetch-depth:")), None)
+if depth_line is not None:
+    # Replace the scalar only, keeping any trailing YAML comment.
+    line = lines[depth_line]
+    indent = line[: len(line) - len(line.lstrip())]
+    tail = line.partition("fetch-depth:")[2]
+    comment = "  " + tail[tail.index("#"):].strip() if "#" in tail else ""
+    lines[depth_line] = f"{indent}fetch-depth: 0{comment}"
 else:
-    t = t.replace(anchor, anchor + """
-          # Required by the decision-record check: it resolves the PR's base sha
-          # against local history, and a shallow checkout cannot see that commit.
-          fetch-depth: 0""", 1)
-    print("  afk-policy.yml: checkout now fetches full history")
-p.write_text(t)
+    with_line = next((n for n in span if lines[n].strip() == "with:"), None)
+    if with_line is None:
+        print("  afk-policy.yml: its checkout has no `with:` to extend", file=sys.stderr)
+        sys.exit(3)
+    indent = lines[with_line][: len(lines[with_line]) - len(lines[with_line].lstrip())]
+    lines[with_line + 1 : with_line + 1] = [
+        f"{indent}  # Required by the decision-record check: it resolves the PR's",
+        f"{indent}  # base sha against local history, and a shallow checkout cannot",
+        f"{indent}  # see that commit.",
+        f"{indent}  fetch-depth: 0",
+    ]
+
+# Re-parse and assert. Every earlier version of this printed a success line for an
+# edit that had not happened; this is what makes that impossible to do again.
+edited = "\n".join(lines)
+try:
+    again = yaml.safe_load(edited)
+except yaml.YAMLError as exc:
+    print(f"  afk-policy.yml: the edit produced invalid YAML ({exc})", file=sys.stderr)
+    sys.exit(2)
+found = None
+for job in (again.get("jobs") or {}).values():
+    for step in job.get("steps") or []:
+        if isinstance(step, dict) and step.get("name") == "Verify decision records":
+            found = job
+if found is None:
+    print("  afk-policy.yml: the edit lost the decision-record step", file=sys.stderr)
+    sys.exit(2)
+after = None
+steps2 = [s for s in (found.get("steps") or []) if isinstance(s, dict)]
+at2 = next(n for n, s in enumerate(steps2) if s.get("name") == "Verify decision records")
+for idx in range(at2 - 1, -1, -1):
+    if str(steps2[idx].get("uses", "")).startswith("actions/checkout@"):
+        after = (steps2[idx].get("with") or {}).get("fetch-depth")
+        break
+if after not in (0, "0"):
+    print(f"  afk-policy.yml: after the edit the job still has fetch-depth={after!r}", file=sys.stderr)
+    sys.exit(2)
+
+with open(path, "w", encoding="utf-8") as fh:
+    fh.write(edited)
+print("  afk-policy.yml: the decision-record job now fetches full history")
 FETCHDEPTH
     case $? in
       0) NEW_FILES="$NEW_FILES .github/workflows/afk-policy.yml" ;;
-      3) say "afk-policy.yml has no checkout step this step recognises; add"
-         say "  fetch-depth: 0" >&2
-         say "to it by hand — the decision-record check needs the base commit." ;;
-      *) echo "afk-policy.yml: could not add fetch-depth — refusing to guess" >&2; exit 1 ;;
+      2) say "afk-policy.yml could not be parsed, or the edit did not take; add"
+         say "\`fetch-depth: 0\` to the checkout in its decision-record job by hand." ;;
+      3) say "afk-policy.yml has no checkout this step recognises; add"
+         say "\`fetch-depth: 0\` to the checkout that runs before"
+         say "'Verify decision records' by hand." ;;
+      *) echo "afk-policy.yml: could not set the checkout depth — refusing to guess" >&2; exit 1 ;;
     esac
   fi
 fi

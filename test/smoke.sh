@@ -1310,7 +1310,16 @@ cp "$P1714/docs/adr/0002-m.md" "$P1714/docs/adr/0002-m-second.md"
   && { echo "--all accepted two records sharing a serial" >&2; exit 1; }
 ( cd "$P1714" && env -u AFK_ADR_BASE node .sandcastle/adr.check.mjs >/dev/null 2>&1 ) \
   || { echo "a bare run failed on a collision instead of reporting it" >&2; exit 1; }
-COLLISION_OUT="$( cd "$P1714" && node .sandcastle/adr.check.mjs --all 2>&1 || true )"
+if COLLISION_OUT="$( cd "$P1714" && node .sandcastle/adr.check.mjs --all 2>&1 )"; then
+  COLLISION_RC=0
+else
+  COLLISION_RC=$?
+fi
+# The exit code IS the assertion — the collision must fail under --all. Capturing
+# it rather than discarding it is what makes "A && B || C" unnecessary here, and
+# avoids SC2015 by construction rather than by suppression.
+[ "$COLLISION_RC" != "0" ] \
+  || { echo "--all exited 0 on two records sharing a serial" >&2; exit 1; }
 case "$COLLISION_OUT" in
   *'used by 2 records'*) ;;
   *) echo "the collision report does not name both holders:" >&2

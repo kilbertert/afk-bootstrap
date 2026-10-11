@@ -1333,6 +1333,27 @@ rm -f "$P1714/docs/adr/0002-m-second.md"
 # ...while a run that ASKED for a diff and supplied nothing still fails.
 ( cd "$P1714" && AFK_ADR_BASE="" node .sandcastle/adr.check.mjs >/dev/null 2>&1 ) \
   && { echo "an empty AFK_ADR_BASE with no --all still reported success" >&2; exit 1; }
+# The combination is its own case, and the one that failed open: `--all` scopes
+# the STRUCTURE rules, it does not license skipping the coverage half that `--base`
+# was also asked for. Measured before this was fixed: `--all --base ""` exited 0
+# with coverage silently unevaluated.
+( cd "$P1714" && node .sandcastle/adr.check.mjs --all --base "" >/dev/null 2>&1 ) \
+  && { echo "--all --base with no ref skipped the coverage half and reported success" >&2; exit 1; }
+# ...and with a real ref, the combination judges BOTH halves.
+( cd "$P1714" && node .sandcastle/adr.check.mjs --all --base "$BASE_MERGE" >/dev/null 2>&1 ) \
+  && { echo "--all --base with a real ref did not judge the commits" >&2; exit 1; }
+# A base that cannot be RESOLVED is fatal too. Judging nothing and saying so reads
+# as honest and fails open: a shallow checkout (CI's default) or a typo leaves
+# every commit on the branch unjudged while the log says "passed".
+( cd "$P1714" && node .sandcastle/adr.check.mjs --base deadbeefdeadbeefdeadbeefdeadbeefdeadbeef >/dev/null 2>&1 ) \
+  && { echo "an unresolvable --base judged nothing and reported success" >&2; exit 1; }
+# `--base` with no value must not silently inherit AFK_ADR_BASE: a workflow that
+# passes `--base "$UNSET"` would otherwise gate against whatever else is set.
+( cd "$P1714" && AFK_ADR_BASE="$BASE_MERGE" node .sandcastle/adr.check.mjs --base >/dev/null 2>&1 ) \
+  && { echo "--base with no value fell through to the environment instead of failing" >&2; exit 1; }
+# ...while `--base <ref> --all` is a correctly configured pair and must run.
+( cd "$P1714" && node .sandcastle/adr.check.mjs --base "$BASE_MERGE" --all >/dev/null 2>&1 ) \
+  && { echo "--base <ref> --all was rejected; the ref is not a missing argument" >&2; exit 1; }
 
 for runner in .sandcastle/implement/implement.ts .sandcastle/implement-prd/implement-prd.ts; do
   grep -qF 'origin/main..' "$P174/$runner" \

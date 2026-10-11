@@ -1130,8 +1130,24 @@ grep -q 'adr.check.mjs' "$P1712/.github/workflows/afk-policy.yml" \
 # ...and the checkout must carry the base commit that check resolves. Without it
 # the run either reports that it cannot see the diff (harmless before 1.7.16) or
 # FAILS (from 1.7.16), so the two changes land together.
-grep -q 'fetch-depth: 0' "$P1712/.github/workflows/afk-policy.yml" \
+# Parsed, not grepped: the scaffold's own comments contain `fetch-depth: 0`, so a
+# textual assertion passes without an active setting. The claim is about the
+# checkout the decision-record step runs under, so that is what is read.
+python3 - "$P1712/.github/workflows/afk-policy.yml" <<'DEPTHCHK' \
   || { echo "the policy job's checkout cannot see the base commit" >&2; exit 1; }
+import sys, yaml
+doc = yaml.safe_load(open(sys.argv[1]).read())
+for job in doc["jobs"].values():
+    steps = [s for s in job.get("steps", []) if isinstance(s, dict)]
+    at = next((n for n, s in enumerate(steps) if s.get("name") == "Verify decision records"), None)
+    if at is None:
+        continue
+    for idx in range(at - 1, -1, -1):
+        if str(steps[idx].get("uses", "")).startswith("actions/checkout@"):
+            depth = (steps[idx].get("with") or {}).get("fetch-depth")
+            sys.exit(0 if depth in (0, "0") else 1)
+sys.exit(1)
+DEPTHCHK
 # The prompts must ask for a record, not only for one to be read.
 for rel in \
   .sandcastle/implement/prompt.md .sandcastle/implement-prd/prompt.md .sandcastle/implement.md; do

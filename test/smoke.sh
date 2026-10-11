@@ -1097,7 +1097,12 @@ for rel, needle in ((".github/workflows/afk-policy.yml", "Verify decision record
     start = t.rfind("      #", 0, i)
     end = t.find('run: node .sandcastle/adr.check.mjs --base "$AFK_ADR_BASE"', i)
     assert end != -1
-    p.write_text(t[:start] + t[end + len('run: node .sandcastle/adr.check.mjs --base "$AFK_ADR_BASE"'):].lstrip("\n"))
+    t = t[:start] + t[end + len('run: node .sandcastle/adr.check.mjs --base "$AFK_ADR_BASE"'):].lstrip("\n")
+    # And the checkout's full history goes with it: the fixture must be the shape
+    # BEFORE this step, or the assertion below proves nothing.
+    import re as _re
+    t = _re.sub(r"          # `fetch-depth: 0`[\s\S]*?          fetch-depth: 0\n", "", t, count=1)
+    p.write_text(t)
 STRIPDUTY
 # A back-catalogue record: no status line, no alternatives. It predates the
 # convention, which is the normal case in every repository on this host.
@@ -1117,6 +1122,11 @@ node -e '
   || { echo "1.7.12 did not ship the decision-record convention" >&2; exit 1; }
 grep -q 'adr.check.mjs' "$P1712/.github/workflows/afk-policy.yml" \
   || { echo "the decision-record check is not wired into the policy job" >&2; exit 1; }
+# ...and the checkout must carry the base commit that check resolves. Without it
+# the run either reports that it cannot see the diff (harmless before 1.7.16) or
+# FAILS (from 1.7.16), so the two changes land together.
+grep -q 'fetch-depth: 0' "$P1712/.github/workflows/afk-policy.yml" \
+  || { echo "the policy job's checkout cannot see the base commit" >&2; exit 1; }
 # The prompts must ask for a record, not only for one to be read.
 for rel in \
   .sandcastle/implement/prompt.md .sandcastle/implement-prd/prompt.md .sandcastle/implement.md; do

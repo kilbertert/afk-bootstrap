@@ -1148,6 +1148,122 @@ case "$ALL_OUT" in
   *) echo "the sweep did not name the offending record" >&2; exit 1 ;;
 esac
 
+# 1.7.13: the gate is scoped to commits, refuses a bare --base, and applies to
+# itself. Three defects 1.7.12 shipped, each measured after it landed.
+P1713="$TMP/upgrade-1712-gate-$LANGUAGE"
+rm -rf "$P1713"
+mkdir -p "$P1713/.github/workflows" "$P1713/.sandcastle/implement" \
+         "$P1713/.sandcastle/implement-prd" "$P1713/docs/adr" "$P1713/docs/agents"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$P1713/"
+cp -R "$S/test/fixtures/workflows-1.7.4/." "$P1713/.github/workflows/"
+cp "$S/scaffold/.github/workflows/afk-policy.yml" "$P1713/.github/workflows/afk-policy.yml"
+cp "$S/scaffold/.sandcastle/repo-map.mjs" "$P1713/.sandcastle/repo-map.mjs"
+cp "$S/scaffold/.sandcastle/repo-map.check.mjs" "$P1713/.sandcastle/repo-map.check.mjs"
+# The 1.7.12 shapes, from references — the same place the step reads them, so the
+# fixture cannot drift from the anchor it is supposed to reproduce.
+cp "$S/references/adr.check.mjs.1.7.12" "$P1713/.sandcastle/adr.check.mjs"
+cp "$S/references/architecture-decisions.md.1.7.12" "$P1713/docs/agents/architecture-decisions.md"
+cp "$S/templates/implement.node.md" "$P1713/.sandcastle/implement.md"
+cp "$S/templates/prompt.node.md" "$P1713/.sandcastle/implement-prd/prompt.md"
+cp "$S/scaffold/.sandcastle/implement/prompt.md" "$P1713/.sandcastle/implement/prompt.md"
+# Strip the SEARCH duty, so the fixture is the version before it — the write duty
+# (No-ADR) is already present at 1.7.12 and is not what this step adds.
+python3 - "$P1713" <<'STRIPSEARCH'
+import pathlib, sys
+root = pathlib.Path(sys.argv[1])
+for rel in (".sandcastle/implement/prompt.md", ".sandcastle/implement-prd/prompt.md",
+            ".sandcastle/implement.md"):
+    p = root / rel
+    t = p.read_text()
+    i = t.find("Before you settle on an approach")
+    assert i != -1, f"{rel}: the scaffold prompt carries no search duty — this test is stale"
+    j = t.find("do not spend a human's time on them.")
+    assert j != -1, f"{rel}: could not bound the search duty"
+    p.write_text(t[:i - 1] + t[j + len("do not spend a human's time on them.") + 1:])
+for rel in (".sandcastle/adr.check.mjs", "docs/agents/architecture-decisions.md"):
+    p = root / rel
+    assert "search what this repository has already decided" not in p.read_text(), \
+        f"{rel}: the 1.7.12 reference already carries the fix — stale reference"
+for rel in (".sandcastle/adr.check.mjs",):
+    assert "refusing to report success" not in (root / rel).read_text(), \
+        f"{rel}: the 1.7.12 reference already carries the fail-closed fix — stale reference"
+STRIPSEARCH
+node -e '
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  m.afk_template_version = "1.7.12";
+  m.templateVersion = 1;
+  fs.writeFileSync(process.argv[1], JSON.stringify(m, null, 2) + "\n");
+' "$P1713/.afk-bootstrap.json"
+# The project is at 1.7.12, so the 1.7.12 step has already run: give it the
+# records and duties that version shipped, or the fixture is not that version.
+printf '# Legacy\n\nprose only\n' > "$P1713/docs/adr/0001-legacy.md"
+"$S/upgrade-afk.sh" "$P1713" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project at 1.7.12" >&2; exit 1; }
+# 1. The fail-open is closed, and closed by SPECIFICATION not by value: both an
+#    empty argument and an empty environment variable must fail.
+( cd "$P1713" && node .sandcastle/adr.check.mjs --base "" >/dev/null 2>&1 ) \
+  && { echo "an empty --base still reported success" >&2; exit 1; }
+( cd "$P1713" && AFK_ADR_BASE="" node .sandcastle/adr.check.mjs >/dev/null 2>&1 ) \
+  && { echo "an empty AFK_ADR_BASE still reported success" >&2; exit 1; }
+# ...while a bare run stays a report, which is what makes the migration usable.
+( cd "$P1713" && env -u AFK_ADR_BASE node .sandcastle/adr.check.mjs >/dev/null 2>&1 ) \
+  || { echo "a bare run blocked; it must report and exit 0" >&2; exit 1; }
+grep -qF 'cannot resolve' "$P1713/.sandcastle/adr.check.mjs" \
+  || { echo "the checker cannot name an unresolvable base" >&2; exit 1; }
+# 2. Coverage is judged per commit. The proof is a range holding two commits: one
+#    that owes a record and carries none, and one that carries a record. A
+#    diff-level check cannot tell them apart; a commit-level one can.
+# Seeded on a scratch branch and fast-forwarded, because the host's commit guard
+# refuses a commit ON a default branch — and the check needs HEAD to be one. Same
+# shape as the policy-check fixture above.
+( cd "$P1713" && git init -q -b main && git config user.email t@e.com && git config user.name t \
+  && git add -A && git checkout -q -b chore/seed && git commit -qm "chore: seed" \
+  && git branch -f main chore/seed && git checkout -q chore/seed )
+BASE_NOW="$( cd "$P1713" && git rev-parse HEAD )"
+# The commit that OWES a record, on its own: source only, no record in the same
+# commit. Bundling the record in would satisfy `touchedAdr` and the fixture would
+# prove nothing — measured, that is exactly how the first version of this block
+# passed a broken checker.
+mkdir -p "$P1713/src"
+printf 'def f(): return 1\n' > "$P1713/src/owed.py"
+( cd "$P1713" && git add -A && git commit -qm "feat: owes a record, carries none" )
+( cd "$P1713" && node .sandcastle/adr.check.mjs --base "$BASE_NOW" >/dev/null 2>&1 ) \
+  && { echo "a commit that owes a record and carries none was accepted" >&2; exit 1; }
+# ...and the NEXT commit passes because it carries the record. Two commits, so the
+# check has to tell them apart — which is the whole point of judging per commit.
+printf '# Covered\n\nStatus: accepted\n\n## Alternatives considered\n\n- **B** — 否\n' > "$P1713/docs/adr/0002-covered.md"
+( cd "$P1713" && git add -A && git commit -qm "feat: carries the record" )
+# `if` rather than `A && B || C`: the checker exits non-zero by design here, and
+# `|| C` would also run when `A` fails for an unrelated reason — shellcheck's
+# SC2015, and a real difference between "it flagged a commit" and "it did not run".
+if RANGE_OUT="$( cd "$P1713" && node .sandcastle/adr.check.mjs --base "$BASE_NOW" 2>&1 )"; then
+  RANGE_RC=0
+else
+  RANGE_RC=$?
+fi
+[ "$RANGE_RC" != "0" ] \
+  || { echo "the range with one owing commit exited 0" >&2; exit 1; }
+case "$RANGE_OUT" in
+  *'1 flagged'*) ;;
+  *) echo "the range report does not say one of two commits was flagged:" >&2
+     printf '%s\n' "$RANGE_OUT" >&2; exit 1 ;;
+esac
+# A diff-level check cannot express this: over the whole range, docs/adr/ IS
+# touched, so the old implementation would have passed both commits.
+grep -qF 'coverage judged' "$P1713/.sandcastle/adr.check.mjs" \
+  || { echo "the checker does not report what it judged" >&2; exit 1; }
+# 3. The rule owns itself: the step installs a record explaining the change, into
+#    the project's own docs/adr/.
+[ -e "$P1713/docs/adr/0002-adr-check-scope-and-self-application.md" ] \
+  || { echo "1.7.13 did not install its own decision record" >&2; exit 1; }
+# 4. The search duty is now in all three live prompts.
+for rel in .sandcastle/implement/prompt.md .sandcastle/implement-prd/prompt.md \
+           .sandcastle/implement.md; do
+  grep -q "search what this repository has already" "$P1713/$rel" \
+    || { echo "$rel never asks to search the records before writing" >&2; exit 1; }
+done
+
 for runner in .sandcastle/implement/implement.ts .sandcastle/implement-prd/implement-prd.ts; do
   grep -qF 'origin/main..' "$P174/$runner" \
     || { echo "$runner does not count commits on the branch" >&2; exit 1; }

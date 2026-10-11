@@ -3025,14 +3025,24 @@ const src = readFileSync(path, "utf8");
 const anchor = "      - name: Verify the sandbox prepare hook\n        run: npx --yes tsx .sandcastle/sandbox-prepare.check.ts\n";
 if (!src.includes(anchor)) process.exit(3);
 const step = [
-  "      # Whether a decision record is owed, and whether one was written. `--base`",
-  "      # scopes both halves to this diff: the structure rules judge only records",
-  "      # the change touches, so adopting this cannot require editing a back",
-  "      # catalogue. A change that owes a record and carries none fails here; a",
-  "      # change that owes none can say so with a `No-ADR:` line in the commit",
-  "      # body. Not pinned to a ref: the script resolves the merge base itself, and",
-  "      # a new-branch push sends an all-zero `before` that git cannot resolve —",
-  "      # the script reports that and does not fail on it.",
+  "      # Whether a decision record is owed, and whether one was written.",
+  "      #",
+  "      # Two independent judgements, deliberately scoped differently:",
+  "      #   * STRUCTURE covers the records this change touches — so adopting the",
+  "      #     rule never requires backfilling a catalogue nobody edited.",
+  "      #   * COVERAGE covers each of this branch's commits, judged against its",
+  "      #     own parent. Per commit, not per diff: `git diff <ref> HEAD` is the",
+  "      #     merge-base form and reports everything the branch carries, so one",
+  "      #     tooling commit would answer for a feature commit beside it.",
+  "      #",
+  "      # A commit that owes a record and carries none fails here; one that owes",
+  "      # none says so with a `No-ADR:` line in its body. Nothing is pinned to a",
+  "      # ref — the script resolves the merge base itself.",
+  "      #",
+  "      # An empty `AFK_ADR_BASE` is a FAILURE, not a downgrade to a report. The",
+  "      # expression below evaluates to \"\" when neither side exists, and a gate that",
+  "      # quietly becomes a report reads as passing at exactly the moment it is",
+  "      # misconfigured.",
   "      - name: Verify decision records",
   "        env:",
   "          AFK_ADR_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}",
@@ -3050,6 +3060,117 @@ STEPJS
     say "Add this step by hand:"
     say "  - name: Verify decision records"
     say "    run: node .sandcastle/adr.check.mjs --base \"\${AFK_ADR_BASE}\""
+  fi
+fi
+
+
+# ---- step: 1.7.12 -> 1.7.13 — the check judges commits, refuses a bare gate, and
+#                             the rule applies to itself ----------------------
+# Three defects shipped in 1.7.12, each measured after it landed:
+#
+#   1. `AFK_ADR_BASE: ${{ a || b }}` evaluates to the EMPTY STRING when neither
+#      side exists, and the checker decided whether to gate on the VALUE. So a
+#      misconfigured workflow produced a green report that looked exactly like a
+#      passing gate. Measured: `--base ""` exited 0.
+#   2. Coverage was judged over the whole merge-base diff, so a tooling commit
+#      answered for a feature commit beside it.
+#   3. The convention had nothing about searching before writing — the premise of
+#      the whole thing, since a record nobody finds is a record nobody follows.
+#
+# Files whose anchors are the SCRIPT or the CONVENTION are replaced wholesale, and
+# only when the project's copy is byte-identical to what 1.7.12 shipped: a project
+# that edited either keeps its version and is told what to carry over.
+if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 13 ]; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: the decision-record gate is scoped and enforced =="
+
+  # 1. The checker: replaced when untouched, reported otherwise. This one is not
+  #    optional — the fail-open is a hole, and a project keeping the old copy
+  #    keeps the hole.
+  REL=.sandcastle/adr.check.mjs
+  if [ ! -e "$WORK/$REL" ]; then
+    note "$REL absent; skipped"
+  elif grep -qF "refusing to report success" "$WORK/$REL"; then
+    note "$REL: already refuses a bare gate"
+  elif cmp -s "$WORK/$REL" "$S/references/adr.check.mjs.1.7.12"; then
+    cp "$S/scaffold/$REL" "$WORK/$REL"
+    NEW_FILES="$NEW_FILES $REL"
+    note "$REL: restaged (gates on commits; refuses an empty --base)"
+  else
+    say ".sandcastle/$REL differs from what 1.7.12 shipped and this step will"
+    say "not overwrite an edited checker. Two things must be carried over:"
+    say "  1. an empty \`--base\` or an empty \`AFK_ADR_BASE\` must FAIL, not report;"
+    say "  2. coverage must be judged per commit, not over the whole diff."
+  fi
+
+  # 2. The convention: same policy, same reason. A project that wrote its own is
+  #    not rewritten — the checker does not read it, so only the reader pays.
+  REL=docs/agents/architecture-decisions.md
+  if [ ! -e "$WORK/$REL" ]; then
+    note "$REL absent; skipped"
+  elif grep -qF "search what this repository has already decided" "$WORK/$REL"; then
+    note "$REL: already asks for a search first"
+  elif cmp -s "$WORK/$REL" "$S/references/architecture-decisions.md.1.7.12"; then
+    cp "$S/scaffold/$REL" "$WORK/$REL"
+    NEW_FILES="$NEW_FILES $REL"
+    note "$REL: restaged (search first; the rule owns itself)"
+  else
+    say "docs/agents/$REL differs from what 1.7.12 shipped; left as the project's"
+    say "own. Two sections are worth carrying over by hand: 'Before writing: search"
+    say "what is already there', and the note that a change to this convention owes"
+    say "a record like any other."
+  fi
+
+  # 3. The prompts: the SEARCH duty is new, so it is inserted by the same anchor
+  #    machinery the 1.7.12 step uses. The write duty is already there, which is
+  #    why this cannot reuse that step — its marker is `No-ADR` and it would skip.
+  cat > "$STAGE/add-search-duty.mjs" <<'SEARCHJS'
+import { readFileSync, writeFileSync } from "node:fs";
+const [path, needle] = process.argv.slice(2);
+const src = readFileSync(path, "utf8");
+if (src.includes("search what this repository has already decided")) process.exit(4);
+const lines = src.split("\n");
+const at = lines.findIndex((l) => l.includes(needle));
+if (at < 0) process.exit(3);
+const duty = [
+  "",
+  "Before you settle on an approach, search what this repository has already",
+  "decided: `rg -i \"<机制名或关键词>\" docs/adr/`, and read the two or three records",
+  "whose titles touch the area. Facts the code or those records can answer, answer",
+  "yourself — do not spend a human's time on them.",
+];
+lines.splice(at + 1, 0, ...duty);
+writeFileSync(path, lines.join("\n"));
+SEARCHJS
+
+  for REL in \
+    .sandcastle/implement/prompt.md \
+    .sandcastle/implement-prd/prompt.md \
+    .sandcastle/implement.md ; do
+    if [ ! -e "$WORK/$REL" ]; then
+      note "$REL absent; skipped"
+      continue
+    fi
+    node "$STAGE/add-search-duty.mjs" "$WORK/$REL" "node .sandcastle/policy-check.mjs commit" || rc=$?
+    case ${rc:-0} in
+      0) NEW_FILES="$NEW_FILES $REL"; note "$REL: asks to search the records first" ;;
+      3) say "$REL has no anchor this step recognises; add the search duty by hand." ;;
+      4) note "$REL: already asks for a search first" ;;
+      *) echo "$REL: could not add the duty — refusing to guess" >&2; exit 1 ;;
+    esac
+    rc=0
+  done
+
+  # 4. This step's own record. The rule applies to itself — and the commit that
+  #    adds it is judged by the very checker it installs, which is the point.
+  REL=docs/adr/0002-adr-check-scope-and-self-application.md
+  if [ -e "$TARGET/$REL" ]; then
+    note "$REL: already present"
+  else
+    mkdir -p "$WORK/docs/adr"
+    cp "$S/references/adr-0002-self-application.md" "$WORK/$REL"
+    NEW_FILES="$NEW_FILES $REL"
+    note "added: $REL"
   fi
 fi
 

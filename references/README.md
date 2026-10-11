@@ -77,3 +77,9 @@ edits instead of overwriting it.
   Three consecutive releases fixed the same three lines, each time closing the
   case that had been measured and leaving a sibling open. That is the argument for
   the combination tests now in `test/smoke.sh`: the pairs, not the cases.
+
+- `afk-policy.yml.1.7.12` — the policy workflow as 1.7.11 left it: the scaffold's
+  steps, no decision-record step, and a shallow checkout. This is the shape the
+  1.7.12 step replaces wholesale, and the smoke fixture copies it rather than
+  assembling it by stripping — a strip that silently stops matching leaves the
+  fixture already-fixed, and the assertions then prove nothing. Measured twice.

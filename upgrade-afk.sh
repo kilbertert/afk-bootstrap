@@ -3015,102 +3015,115 @@ ADRJS
   #    next push for a reason the project did not cause.
   MAP_NEEDED=1
 
-  # 4. The policy job runs it. Anchored after the prepare-hook step, which every
-  #    project at this version carries.
+  # 4. The policy job. Replaced wholesale when it is a shape this scaffold
+  #    generated, rather than patched step by step.
+  #
+  #    Patching was tried four times and each attempt left a different hole — a
+  #    commented `fetch-depth` counted as configured; an unrelated job's checkout
+  #    answered for this one; `fetch-depth: 1  # fast` was not replaced; a renamed
+  #    step lost the anchor and got a DUPLICATE depth key inserted after the
+  #    shallow one, where YAML takes the last and the shallow value survived the
+  #    "fix". A fifth attempt parsed the YAML and immediately raised five more
+  #    (subdirectory checkouts, several decision jobs, an intervening step with its
+  #    own depth, `false` comparing equal to `0`, and PyYAML being absent on an
+  #    operator host). Each was a special case of one question: has this file been
+  #    changed away from what the scaffold generated? So ask that directly.
+  #
+  #    Two shapes count as the scaffold's own, because the scaffold has generated
+  #    both. They differ by exactly the two things 1.7.12 adds — the
+  #    decision-record step and `fetch-depth: 0`:
+  #
+  #      * the pre-1.7.12 shape (`references/afk-policy.yml.1.7.12`);
+  #      * the 1.7.12–1.7.15 shape, whose instructions are the scaffold's minus
+  #        the depth line, since that step was inserted at the prepare-hook anchor
+  #        in the same position the scaffold has it.
+  #
+  #    Anything else is project-owned and is left alone — with the two things it
+  #    needs named explicitly, because "left alone" would otherwise mean the gate
+  #    silently never runs in that repository.
   POLICY="$WORK/.github/workflows/afk-policy.yml"
   if [ ! -e "$POLICY" ]; then
     note "afk-policy.yml absent; the scaffold supplies it"
-  elif grep -qF "adr.check.mjs" "$POLICY"; then
-    note "afk-policy.yml: decision-record check already wired"
-  elif grep -qF "sandbox-prepare.check.ts" "$POLICY"; then
-    cat > "$STAGE/add-adr-step.mjs" <<'STEPJS'
-import { readFileSync, writeFileSync } from "node:fs";
-const [path] = process.argv.slice(2);
-const src = readFileSync(path, "utf8");
-const anchor = "      - name: Verify the sandbox prepare hook\n        run: npx --yes tsx .sandcastle/sandbox-prepare.check.ts\n";
-if (!src.includes(anchor)) process.exit(3);
-const step = [
-  "      # Whether a decision record is owed, and whether one was written.",
-  "      #",
-  "      # Two independent judgements, deliberately scoped differently:",
-  "      #   * STRUCTURE covers the records this change touches — so adopting the",
-  "      #     rule never requires backfilling a catalogue nobody edited.",
-  "      #   * COVERAGE covers each of this branch's commits, judged against its",
-  "      #     own parent. Per commit, not per diff: `git diff <ref> HEAD` is the",
-  "      #     merge-base form and reports everything the branch carries, so one",
-  "      #     tooling commit would answer for a feature commit beside it.",
-  "      #",
-  "      # A commit that owes a record and carries none fails here; one that owes",
-  "      # none says so with a `No-ADR:` line in its body. Nothing is pinned to a",
-  "      # ref — the script resolves the merge base itself.",
-  "      #",
-  "      # An empty `AFK_ADR_BASE` is a FAILURE, not a downgrade to a report. The",
-  "      # expression below evaluates to \"\" when neither side exists, and a gate that",
-  "      # quietly becomes a report reads as passing at exactly the moment it is",
-  "      # misconfigured.",
-  "      - name: Verify decision records",
-  "        env:",
-  "          AFK_ADR_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}",
-  '        run: node .sandcastle/adr.check.mjs --base "$AFK_ADR_BASE"',
-  "",
-].join("\n");
-writeFileSync(path, src.replace(anchor, anchor + step));
-STEPJS
-    node "$STAGE/add-adr-step.mjs" "$POLICY" \
-      || { echo "afk-policy.yml: could not insert the check — refusing to guess" >&2; exit 1; }
+  elif cmp -s "$POLICY" "$S/scaffold/.github/workflows/afk-policy.yml"; then
+    note "afk-policy.yml: already the scaffold's current version"
+  elif python3 - "$POLICY" "$S/references/afk-policy.yml.1.7.12" \
+                   "$S/scaffold/.github/workflows/afk-policy.yml" <<'SAME'
+import sys
+
+
+def instructions(path):
+    """Non-comment, non-blank lines — what the file tells the runner to do."""
+    out = []
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                out.append(stripped)
+    return out
+
+
+candidate = instructions(sys.argv[1])
+pre_adr = instructions(sys.argv[2])
+current = [l for l in instructions(sys.argv[3]) if l != "fetch-depth: 0"]
+sys.exit(0 if candidate in (pre_adr, current) else 1)
+SAME
+  then
+    cp "$S/scaffold/.github/workflows/afk-policy.yml" "$POLICY"
     NEW_FILES="$NEW_FILES .github/workflows/afk-policy.yml"
-    note "afk-policy.yml: decision-record check added"
-
+    note "afk-policy.yml: replaced with the scaffold's version (checkout fetches history)"
   else
-    say "afk-policy.yml has no prepare-hook step to anchor on."
-    say "Add this step by hand:"
-    say "  - name: Verify decision records"
-    say "    run: node .sandcastle/adr.check.mjs --base \"\${AFK_ADR_BASE}\""
+    # Project-owned. Name BOTH pieces, not just the depth: a project that never
+    # received the decision-record step needs it too, and telling it only about the
+    # checkout would leave the gate uninstalled and unmentioned.
+    NEEDS="$(python3 - "$POLICY" <<'NEEDS'
+import sys
+
+try:
+    import yaml
+except ImportError:
+    print("the decision-record step and `fetch-depth: 0` (PyYAML unavailable, cannot check)")
+    sys.exit(0)
+
+try:
+    doc = yaml.safe_load(open(sys.argv[1], encoding="utf-8").read())
+except yaml.YAMLError:
+    print("the decision-record step and `fetch-depth: 0` (the file is not valid YAML)")
+    sys.exit(0)
+
+needs = []
+found_decision = None
+for job in (doc.get("jobs") or {}).values():
+    steps = [s for s in (job.get("steps") or []) if isinstance(s, dict)]
+    at = next((n for n, s in enumerate(steps) if s.get("name") == "Verify decision records"), None)
+    if at is None:
+        continue
+    found_decision = (steps, at)
+if found_decision is None:
+    needs.append("the decision-record step (`Verify decision records`)")
+else:
+    steps, at = found_decision
+    depth = None
+    for idx in range(at - 1, -1, -1):
+        if str(steps[idx].get("uses", "")).startswith("actions/checkout@"):
+            depth = (steps[idx].get("with") or {}).get("fetch-depth")
+            break
+    if depth != 0 and depth != "0":
+        needs.append("`fetch-depth: 0` on the checkout that runs before it")
+print(" and ".join(needs) if needs else "")
+NEEDS
+)"
+    if [ -n "$NEEDS" ]; then
+      say "afk-policy.yml has steps this scaffold does not recognise; left as the"
+      say "project's own. It is missing: $NEEDS."
+      say "Add those by hand — without them the decision-record gate never runs, or"
+      say "runs against a checkout that cannot resolve the base commit."
+    else
+      say "afk-policy.yml has steps this scaffold does not recognise; left as the"
+      say "project's own. It already carries the decision-record step and a"
+      say "full-history checkout, so nothing is missing there."
+    fi
   fi
 
-  # The checkout must carry the base commit, whatever branch above was taken.
-  # Anchored on the file, not on the step: a project that already carries the
-  # decision-record check took the "already wired" branch and would otherwise never
-  # receive the history it needs — and from 1.7.16 a shallow checkout FAILS rather
-  # than reporting that it cannot see the diff.
-  if [ -e "$POLICY" ]; then
-    python3 - "$POLICY" <<'FETCHDEPTH'
-import pathlib, re, sys
-p = pathlib.Path(sys.argv[1])
-t = p.read_text()
-# `fetch-depth: <n>` with n > 0 is still a shallow checkout, and the check needs
-# the base COMMIT — so the test is the value, not the key. The previous version
-# tested for the substring, which a comment mentioning `fetch-depth` satisfies.
-if re.search(r"^\s*fetch-depth:\s*0\s*$", t, re.M):
-    print("  afk-policy.yml: checkout already fetches full history")
-    sys.exit(0)
-anchor = """      - name: Check out repository
-        uses: actions/checkout@v4
-        with:
-          persist-credentials: false"""
-if anchor not in t:
-    sys.exit(3)
-# A different depth already present: replace the value rather than adding a second
-# key, which would leave the last one winning and this migration looking applied.
-if re.search(r"^\s*fetch-depth:", t, re.M):
-    t = re.sub(r"^(\s*fetch-depth:\s*)\S+\s*$", r"\g<1>0", t, count=1, flags=re.M)
-    print("  afk-policy.yml: checkout depth raised to a full fetch")
-else:
-    t = t.replace(anchor, anchor + """
-          # Required by the decision-record check: it resolves the PR's base sha
-          # against local history, and a shallow checkout cannot see that commit.
-          fetch-depth: 0""", 1)
-    print("  afk-policy.yml: checkout now fetches full history")
-p.write_text(t)
-FETCHDEPTH
-    case $? in
-      0) NEW_FILES="$NEW_FILES .github/workflows/afk-policy.yml" ;;
-      3) say "afk-policy.yml has no checkout step this step recognises; add"
-         say "  fetch-depth: 0" >&2
-         say "to it by hand — the decision-record check needs the base commit." ;;
-      *) echo "afk-policy.yml: could not add fetch-depth — refusing to guess" >&2; exit 1 ;;
-    esac
-  fi
 fi
 
 

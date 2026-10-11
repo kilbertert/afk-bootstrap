@@ -1234,7 +1234,16 @@ printf 'def f(): return 1\n' > "$P1713/src/owed.py"
 # check has to tell them apart — which is the whole point of judging per commit.
 printf '# Covered\n\nStatus: accepted\n\n## Alternatives considered\n\n- **B** — 否\n' > "$P1713/docs/adr/0002-covered.md"
 ( cd "$P1713" && git add -A && git commit -qm "feat: carries the record" )
-RANGE_OUT="$( cd "$P1713" && node .sandcastle/adr.check.mjs --base "$BASE_NOW" 2>&1 || true )"
+# `if` rather than `A && B || C`: the checker exits non-zero by design here, and
+# `|| C` would also run when `A` fails for an unrelated reason — shellcheck's
+# SC2015, and a real difference between "it flagged a commit" and "it did not run".
+if RANGE_OUT="$( cd "$P1713" && node .sandcastle/adr.check.mjs --base "$BASE_NOW" 2>&1 )"; then
+  RANGE_RC=0
+else
+  RANGE_RC=$?
+fi
+[ "$RANGE_RC" != "0" ] \
+  || { echo "the range with one owing commit exited 0" >&2; exit 1; }
 case "$RANGE_OUT" in
   *'1 flagged'*) ;;
   *) echo "the range report does not say one of two commits was flagged:" >&2

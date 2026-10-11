@@ -3075,10 +3075,13 @@ STEPJS
   # than reporting that it cannot see the diff.
   if [ -e "$POLICY" ]; then
     python3 - "$POLICY" <<'FETCHDEPTH'
-import pathlib, sys
+import pathlib, re, sys
 p = pathlib.Path(sys.argv[1])
 t = p.read_text()
-if "fetch-depth" in t:
+# `fetch-depth: <n>` with n > 0 is still a shallow checkout, and the check needs
+# the base COMMIT — so the test is the value, not the key. The previous version
+# tested for the substring, which a comment mentioning `fetch-depth` satisfies.
+if re.search(r"^\s*fetch-depth:\s*0\s*$", t, re.M):
     print("  afk-policy.yml: checkout already fetches full history")
     sys.exit(0)
 anchor = """      - name: Check out repository
@@ -3087,11 +3090,18 @@ anchor = """      - name: Check out repository
           persist-credentials: false"""
 if anchor not in t:
     sys.exit(3)
-p.write_text(t.replace(anchor, anchor + """
+# A different depth already present: replace the value rather than adding a second
+# key, which would leave the last one winning and this migration looking applied.
+if re.search(r"^\s*fetch-depth:", t, re.M):
+    t = re.sub(r"^(\s*fetch-depth:\s*)\S+\s*$", r"\g<1>0", t, count=1, flags=re.M)
+    print("  afk-policy.yml: checkout depth raised to a full fetch")
+else:
+    t = t.replace(anchor, anchor + """
           # Required by the decision-record check: it resolves the PR's base sha
           # against local history, and a shallow checkout cannot see that commit.
-          fetch-depth: 0""", 1))
-print("  afk-policy.yml: checkout now fetches full history")
+          fetch-depth: 0""", 1)
+    print("  afk-policy.yml: checkout now fetches full history")
+p.write_text(t)
 FETCHDEPTH
     case $? in
       0) NEW_FILES="$NEW_FILES .github/workflows/afk-policy.yml" ;;

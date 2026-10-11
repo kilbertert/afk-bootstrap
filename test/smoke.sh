@@ -1276,6 +1276,64 @@ for rel in .sandcastle/implement/prompt.md .sandcastle/implement-prd/prompt.md \
     || { echo "$rel never asks to search the records before writing" >&2; exit 1; }
 done
 
+# 1.7.14: three more holes, all found by Devin Review on the 1.7.13 PRs after it
+# had already been merged — which is the case for running the gate on the
+# scaffolder itself rather than trusting the review of the tool that reviews.
+P1714="$TMP/upgrade-1713-merge-$LANGUAGE"
+rm -rf "$P1714"
+mkdir -p "$P1714/.sandcastle" "$P1714/docs/adr" "$P1714/src"
+cp "$S/scaffold/.sandcastle/adr.check.mjs" "$P1714/.sandcastle/adr.check.mjs"
+printf '# M\n\nStatus: accepted\n\n## Alternatives considered\n\n- **B** — 否\n' > "$P1714/docs/adr/0002-m.md"
+( cd "$P1714" && git init -q -b main && git config user.email t@e.com && git config user.name t \
+  && git add -A && git checkout -q -b chore/seed && git commit -qm "chore: seed" \
+  && git branch -f main chore/seed && git checkout -q chore/seed )
+BASE_MERGE="$( cd "$P1714" && git rev-parse HEAD )"
+# A side branch carrying a source change, merged in with `--no-ff`. The MERGE
+# commit is the one under test: `git diff-tree` prints nothing for a two-parent
+# commit without `-m`, so before the fix the merge was waived in silence.
+( cd "$P1714" && git checkout -q -b side && printf 'x=1\n' > src/side.py \
+  && git add -A && git commit -qm "feat: side change" \
+  && git checkout -q chore/seed && git merge -q --no-ff side -m "chore: merge side" )
+( cd "$P1714" && node .sandcastle/adr.check.mjs --base "$BASE_MERGE" >/dev/null 2>&1 ) \
+  && { echo "a merge that brought in a record-worthy change was waived silently" >&2; exit 1; }
+# The regression this guards: `git diff-tree` with no `-m` on that merge.
+[ -z "$( cd "$P1714" && git diff-tree --no-commit-id --name-only -r --root "$(git rev-parse HEAD)" )" ] \
+  || { echo "the fixture's merge is not the two-parent shape this guards" >&2; exit 1; }
+[ -n "$( cd "$P1714" && git diff-tree --no-commit-id --name-only -r -m --first-parent --root "$(git rev-parse HEAD)" )" ] \
+  || { echo "-m --first-parent does not reach the merge's paths" >&2; exit 1; }
+
+# A duplicate serial is reported whatever the scope, and FAILS (a) always under
+# --all, (b) under --base only when the change touches one of the pair — so a
+# repository can adopt the rule before it retires a legacy collision.
+cp "$P1714/docs/adr/0002-m.md" "$P1714/docs/adr/0002-m-second.md"
+( cd "$P1714" && node .sandcastle/adr.check.mjs --all >/dev/null 2>&1 ) \
+  && { echo "--all accepted two records sharing a serial" >&2; exit 1; }
+( cd "$P1714" && env -u AFK_ADR_BASE node .sandcastle/adr.check.mjs >/dev/null 2>&1 ) \
+  || { echo "a bare run failed on a collision instead of reporting it" >&2; exit 1; }
+if COLLISION_OUT="$( cd "$P1714" && node .sandcastle/adr.check.mjs --all 2>&1 )"; then
+  COLLISION_RC=0
+else
+  COLLISION_RC=$?
+fi
+# The exit code IS the assertion — the collision must fail under --all. Capturing
+# it rather than discarding it is what makes "A && B || C" unnecessary here, and
+# avoids SC2015 by construction rather than by suppression.
+[ "$COLLISION_RC" != "0" ] \
+  || { echo "--all exited 0 on two records sharing a serial" >&2; exit 1; }
+case "$COLLISION_OUT" in
+  *'used by 2 records'*) ;;
+  *) echo "the collision report does not name both holders:" >&2
+     printf '%s\n' "$COLLISION_OUT" >&2; exit 1 ;;
+esac
+rm -f "$P1714/docs/adr/0002-m-second.md"
+
+# `--all` is a complete instruction and must not be blocked by an empty base ref.
+( cd "$P1714" && AFK_ADR_BASE="" node .sandcastle/adr.check.mjs --all >/dev/null 2>&1 ) \
+  || { echo "--all was blocked by an empty AFK_ADR_BASE; it needs no base" >&2; exit 1; }
+# ...while a run that ASKED for a diff and supplied nothing still fails.
+( cd "$P1714" && AFK_ADR_BASE="" node .sandcastle/adr.check.mjs >/dev/null 2>&1 ) \
+  && { echo "an empty AFK_ADR_BASE with no --all still reported success" >&2; exit 1; }
+
 for runner in .sandcastle/implement/implement.ts .sandcastle/implement-prd/implement-prd.ts; do
   grep -qF 'origin/main..' "$P174/$runner" \
     || { echo "$runner does not count commits on the branch" >&2; exit 1; }

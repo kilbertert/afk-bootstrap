@@ -61,3 +61,9 @@ edits instead of overwriting it.
 - `adr-0002-self-application.md` — the record the 1.7.13 step installs into
   consuming projects. It explains the three defects above, so a project that later
   wonders why its gate refuses an empty base has the answer in its own tree.
+
+- `adr.check.mjs.1.7.14` — the checker as 1.7.14 shipped it: `git diff-tree` was
+  called without `-m`, so a MERGE COMMIT reported no paths at all and any merge was
+  waived in silence. The 1.7.15 step replaces a project's copy only when it matches
+  this byte for byte — so a project older than 1.7.14 gets the merge fix and the
+  collision fix together, and one at 1.7.14 gets only the latter.

@@ -3163,12 +3163,30 @@ SEARCHJS
 
   # 4. This step's own record. The rule applies to itself — and the commit that
   #    adds it is judged by the very checker it installs, which is the point.
-  REL=docs/adr/0002-adr-check-scope-and-self-application.md
+  #
+  #    The NUMBER is computed, not shipped. A fixed `0002` collides in three of
+  #    the four repositories on this host, each of which already has a 0002 — and
+  #    the serial is the only thing a reader uses to cite a record. Next free
+  #    number, padding preserved from whatever this repository already uses.
+  REL="docs/adr/$(node -e '
+    const fs = require("fs");
+    const dir = process.argv[1];
+    let max = 0, pad = 4;
+    try {
+      for (const n of fs.readdirSync(dir)) {
+        const m = /^(\d+)-/.exec(n);
+        if (!m) continue;
+        pad = Math.max(pad, m[1].length);
+        max = Math.max(max, Number(m[1]));
+      }
+    } catch { /* no docs/adr yet */ }
+    process.stdout.write(String(max + 1).padStart(pad, "0") + "-adr-check-scope-and-self-application.md");
+  ' "$TARGET/docs/adr")"
   if [ -e "$TARGET/$REL" ]; then
     note "$REL: already present"
   else
     mkdir -p "$WORK/docs/adr"
-    cp "$S/references/adr-0002-self-application.md" "$WORK/$REL"
+    cp "$S/references/adr-self-application.md" "$WORK/$REL"
     NEW_FILES="$NEW_FILES $REL"
     note "added: $REL"
   fi

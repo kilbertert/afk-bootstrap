@@ -194,6 +194,11 @@ So the loop closes on itself. A change to how decisions get recorded is itself a
 decision, and it lands the same way any other one does: with the record, in the
 same commit, or with a `No-ADR:` line saying why not.
 
+The first such record is the one explaining this gate and why it refuses an empty
+`--base`: `*-adr-check-scope-and-self-application.md`, in `docs/adr/`. It is
+referenced by name here, not by number — the serial is assigned per repository
+when the record lands, so a number here would be wrong in most of them.
+
 ### The sweep
 
 `--all` is the sweep: run it when you want the whole list. On this repository

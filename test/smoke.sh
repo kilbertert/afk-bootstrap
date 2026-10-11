@@ -1254,9 +1254,21 @@ esac
 grep -qF 'coverage judged' "$P1713/.sandcastle/adr.check.mjs" \
   || { echo "the checker does not report what it judged" >&2; exit 1; }
 # 3. The rule owns itself: the step installs a record explaining the change, into
-#    the project's own docs/adr/.
-[ -e "$P1713/docs/adr/0002-adr-check-scope-and-self-application.md" ] \
+#    the project's own docs/adr/ — under the NEXT FREE number, not a fixed one.
+#    Three of the four repositories on this host already have a 0002, so a shipped
+#    serial collides in most of them, and the serial is how a record is cited.
+SELF_RECORD=""
+for f in "$P1713"/docs/adr/*-adr-check-scope-and-self-application.md; do
+  [ -e "$f" ] && SELF_RECORD="$(basename "$f")"
+done
+[ -n "$SELF_RECORD" ] \
   || { echo "1.7.13 did not install its own decision record" >&2; exit 1; }
+# At install time the fixture held exactly one record (0001-legacy), so the next
+# free number is 0002. The point is that the step COUNTED rather than assumed: a
+# shipped literal would be wrong in most repositories on this host, each of which
+# already has a 0002.
+[ "$SELF_RECORD" = "0002-adr-check-scope-and-self-application.md" ] \
+  || { echo "the installed record did not take the next free number (got $SELF_RECORD)" >&2; exit 1; }
 # 4. The search duty is now in all three live prompts.
 for rel in .sandcastle/implement/prompt.md .sandcastle/implement-prd/prompt.md \
            .sandcastle/implement.md; do

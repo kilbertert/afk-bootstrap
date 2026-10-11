@@ -83,7 +83,7 @@ const BASE = (baseFromArgv ? argv[argv.indexOf("--base") + 1] : undefined) ?? pr
 const ALL = argv.includes("--all");
 const ADR_DIR = join(REPO, "docs", "adr");
 
-if (baseRequested && BASE.trim() === "") {
+if (baseRequested && BASE.trim() === "" && !ALL) {
   const how = baseFromArgv ? "`--base` was passed with no ref" : "`AFK_ADR_BASE` is set but empty";
   console.error(
     `adr check failed: ${how}, so there is no diff to judge — refusing to report success.\n` +
@@ -366,12 +366,20 @@ if (!BASE) {
     let waived = 0;
     for (const sha of commits) {
       const { subject, body } = meta.get(sha) ?? { subject: "", body: "" };
-      // `diff-tree --root` rather than `diff <sha>^ <sha>`: the latter needs a
-      // parent, so a repository's first commit would be silently skipped — and
-      // the first commit is often exactly the one that decides the layout.
+      // Three flags, each load-bearing:
+      //   * `--root` — `diff <sha>^ <sha>` needs a parent, so a repository's first
+      //     commit would be skipped, and the first commit is often the one that
+      //     decides the layout.
+      //   * `-m` — WITHOUT it `diff-tree` prints NOTHING for a two-parent commit
+      //     (measured: `[]` for a merge, `[src/b.py src/c.py]` with it). A merge
+      //     that resolved a conflict into a record-worthy change would be waived
+      //     in silence.
+      //   * `--first-parent` — with `-m` alone, paths are emitted once per parent.
+      //     The question is what the merge brought in, which is the first-parent
+      //     difference, so that is the one reported.
       // `--no-commit-id -r` keeps the output to paths, one per line.
       const changed = (
-        tryGit(["diff-tree", "--no-commit-id", "--name-only", "-r", "--root", sha]) ?? ""
+        tryGit(["diff-tree", "--no-commit-id", "--name-only", "-r", "-m", "--first-parent", "--root", sha]) ?? ""
       )
         .split("\n")
         .filter(Boolean);

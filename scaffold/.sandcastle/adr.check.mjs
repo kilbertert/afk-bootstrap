@@ -222,7 +222,6 @@ const allEntries = readdirSync(ADR_DIR, { withFileTypes: true })
   .map((e) => e.name)
   .sort();
 
-const seen = new Map();
 let drafts = 0;
 
 /** Which records this run is allowed to judge. See the header for why. */
@@ -263,10 +262,6 @@ for (const name of recordsUnderReview()) {
     continue;
   }
   const num = m[1];
-  // Two records may share a number only if they are genuinely the same decision.
-  // Otherwise the collision is silent, and the reader who types the number gets
-  // whichever file their shell completes to.
-  seen.set(num, (seen.get(num) ?? 0) + 1);
 
   const raw = readFileSync(join(ADR_DIR, name), "utf8");
   const lines = proseLines(raw);
@@ -300,6 +295,43 @@ for (const name of recordsUnderReview()) {
   } else if (body.every((l) => EMPTY_RE.test(l))) {
     fail(`the alternatives section is a placeholder (${JSON.stringify(body[0])}) — it claims a weighing that did not happen`);
   }
+}
+
+// ── numbering ───────────────────────────────────────────────────────────────
+//
+// Two records sharing a serial is silent otherwise: the reader who types the
+// number gets whichever file their shell completes to, and a citation resolves to
+// the wrong decision. Measured on this host — three of the four consumer
+// repositories already carry a `0002`, and one of them carries two.
+//
+// Built from EVERY record, not from the ones under review: a collision is a
+// property of the numbering, and the other half of a pair is usually a record
+// this change never touched. Scoping it to the diff would see a one-record
+// "collision" and report nothing — which is how the first version of this table
+// managed to be empty for exactly the case it exists for.
+const numbering = new Map();
+for (const name of allEntries) {
+  const m = FILENAME_RE.exec(name);
+  if (!m) continue;
+  numbering.set(m[1], [...(numbering.get(m[1]) ?? []), name]);
+}
+// What counts as "this change's problem" depends on the scope, and it has to:
+// a repository carrying a legacy collision must be able to adopt the rule without
+// retiring that collision first. So
+//   * `--all`      — every collision is the tree's problem, and the tree was asked
+//                    about, so all of them fail;
+//   * `--base`     — only a collision involving a record this change TOUCHES
+//                    fails; the rest are reported, to be retired when someone next
+//                    edits the pair;
+//   * bare         — report only.
+const underReview = new Set(recordsUnderReview());
+for (const num of [...numbering.keys()].sort()) {
+  const holders = numbering.get(num);
+  if (holders.length < 2) continue;
+  const msg = `number ${num} is used by ${holders.length} records (${holders.join(", ")}) — cite the one you mean by filename, and give the newcomer the next free number`;
+  const isThisChange = !ALL && holders.some((h) => underReview.has(h));
+  if (ENFORCE && (ALL || isThisChange)) failures.push(msg);
+  else nudges.push(msg);
 }
 
 // ── coverage ────────────────────────────────────────────────────────────────

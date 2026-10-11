@@ -2917,6 +2917,11 @@ if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 12 ]; then
 
   # 1. The checker and the convention it enforces. New files: nothing to anchor
   #    on, and both are inert until the policy job below runs them.
+  # Copied from the SCAFFOLD, not from a reference: a project that never had this
+  # file should get the current one, not the one the introducing release shipped.
+  # The later steps that also edit this file then find its marker already present
+  # and skip — which is the expected path for an old project, and why each of them
+  # keys on a CONTENT marker rather than on a version.
   REL=.sandcastle/adr.check.mjs
   [ -e "$S/scaffold/$REL" ] || { echo "migration reference missing: $S/scaffold/$REL" >&2; exit 1; }
   cp "$S/scaffold/$REL" "$WORK/$REL"
@@ -3189,6 +3194,43 @@ SEARCHJS
     cp "$S/references/adr-self-application.md" "$WORK/$REL"
     NEW_FILES="$NEW_FILES $REL"
     note "added: $REL"
+  fi
+fi
+
+
+# ---- step: 1.7.14 -> 1.7.15 — duplicate serials are caught, --all unblocked --
+# Two more defects Devin Review found on the 1.7.13 PRs AFTER 1.7.13 had merged,
+# which is the argument for running the gate on the tool that reviews rather than
+# only reviewing the tool that gates.
+#
+#   1. Two records sharing a serial were counted and never reported. Three of the
+#      four repositories on this host already have a `0002`; one has two. The
+#      serial is the only thing a reader cites a record by.
+#   2. `--all` is a complete instruction and needs no base ref, but an empty
+#      `AFK_ADR_BASE` — which is what `${{ a || b }}` evaluates to when neither
+#      side of the expression exists — blocked it outright.
+#
+# (1.7.14 fixed the third one, `git diff-tree` on merge commits, in the same file;
+# this step's reference is 1.7.14 so both land together for anything older.)
+if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 15 ]; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: duplicate serials are caught, --all unblocked =="
+
+  REL=.sandcastle/adr.check.mjs
+  if [ ! -e "$WORK/$REL" ]; then
+    note "$REL absent; skipped"
+  elif grep -qF "number \${num} is used by" "$WORK/$REL"; then
+    note "$REL: already reports a shared serial"
+  elif cmp -s "$WORK/$REL" "$S/references/adr.check.mjs.1.7.14"; then
+    cp "$S/scaffold/$REL" "$WORK/$REL"
+    NEW_FILES="$NEW_FILES $REL"
+    note "$REL: restaged (collisions reported; --all needs no base)"
+  else
+    say ".sandcastle/$REL differs from what 1.7.14 shipped and this step will not"
+    say "overwrite an edited checker. Two things must be carried over:"
+    say "  1. two records sharing a serial must be reported — and fail under --all,"
+    say "     or under --base when the change touches one of the pair."
+    say "  2. an empty AFK_ADR_BASE must not block \`--all\`, which needs no base."
   fi
 fi
 

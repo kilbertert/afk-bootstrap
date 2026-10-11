@@ -25,6 +25,13 @@ jobs:
           # it cannot see the diff, and a gate that cannot see the diff is not a
           # gate.
           fetch-depth: 0
+          # On a pull request the HEAD must be the PR's own commit, not the merge
+          # ref GitHub checks out by default. That synthetic merge commit carries no
+          # `No-ADR:` line and its first-parent diff repeats the branch's changes,
+          # so a commit that correctly waived a record would be flagged again by
+          # the merge that carried it. Empty on a push, where checkout's default is
+          # right.
+          ref: ${{ github.event.pull_request.head.sha }}
       - name: Set up Node.js
         uses: actions/setup-node@v4
         with:

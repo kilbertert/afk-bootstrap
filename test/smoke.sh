@@ -1069,6 +1069,27 @@ grep -q 'adr.check.mjs' "$P1712/.github/workflows/afk-policy.yml" \
   && { echo "the 1.7.12 policy reference already carries the decision-record step — stale reference" >&2; exit 1; }
 grep -q 'fetch-depth' "$P1712/.github/workflows/afk-policy.yml" \
   && { echo "the 1.7.12 policy reference already fetches full history — stale reference" >&2; exit 1; }
+# The fixture must be the shape the live projects carry, not the pre-1.7.12 one:
+# a 1.7.12–1.7.15 project has BOTH the decision-record step and the depth line,
+# and an earlier version of the comparison missed exactly those. Built here rather
+# than referenced, because two earlier attempts at stripping a fixture silently
+# stopped matching and left it already-fixed.
+python3 - "$P1712/.github/workflows/afk-policy.yml" <<'SHAPE1712'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+t = p.read_text()
+anchor = "      - name: Repository-map generator self-check"
+assert anchor in t, "the 1.7.12 policy reference no longer has the generator step — stale reference"
+t = t.replace(anchor, """      - name: Verify decision records
+        env:
+          AFK_ADR_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: node .sandcastle/adr.check.mjs --base "$AFK_ADR_BASE"
+""" + anchor, 1)
+depth = "          persist-credentials: false"
+assert depth in t, "the 1.7.12 policy reference no longer has the checkout — stale reference"
+t = t.replace(depth, depth + "\n          fetch-depth: 0", 1)
+p.write_text(t)
+SHAPE1712
 # A 1.7.x project carries the scaffold's own prompts — the other half this step edits.
 mkdir -p "$P1712/.sandcastle/implement" "$P1712/.sandcastle/implement-prd"
 cp "$S/scaffold/.sandcastle/implement/prompt.md" "$P1712/.sandcastle/implement/prompt.md"
@@ -1114,6 +1135,8 @@ grep -q 'adr.check.mjs' "$P1712/.github/workflows/afk-policy.yml" \
 # Parsed, not grepped: the scaffold's own comments contain `fetch-depth: 0`, so a
 # textual assertion passes without an active setting. The claim is about the
 # checkout the decision-record step runs under, so that is what is read.
+grep -q 'github.event.pull_request.head.sha' "$P1712/.github/workflows/afk-policy.yml" \
+  || { echo "the checkout does not name the pull request's own head" >&2; exit 1; }
 python3 - "$P1712/.github/workflows/afk-policy.yml" <<'DEPTHCHK' \
   || { echo "the policy job's checkout cannot see the base commit" >&2; exit 1; }
 import sys, yaml

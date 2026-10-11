@@ -83,3 +83,10 @@ edits instead of overwriting it.
   1.7.12 step replaces wholesale, and the smoke fixture copies it rather than
   assembling it by stripping — a strip that silently stops matching leaves the
   fixture already-fixed, and the assertions then prove nothing. Measured twice.
+
+- `afk-policy.yml.1.7.12` — the policy workflow as 1.7.11 left it: the scaffold's
+  steps, no decision-record step, and a shallow checkout. The 1.7.12 step replaces
+  it wholesale, and it is also the shape table: a live project's instructions are
+  that list plus the lines later releases added to the checkout, so the comparison
+  removes those lines from BOTH sides before comparing. Leaving them in is what
+  made the first version miss every repository on this host.

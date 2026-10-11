@@ -3034,13 +3034,21 @@ ADRJS
   #    decision-record step and `fetch-depth: 0`:
   #
   #      * the pre-1.7.12 shape (`references/afk-policy.yml.1.7.12`);
-  #      * the 1.7.12–1.7.15 shape, whose instructions are the scaffold's minus
-  #        the depth line, since that step was inserted at the prepare-hook anchor
-  #        in the same position the scaffold has it.
+  #      * every later generated shape, whose instructions are the scaffold's
+  #        minus the lines later releases added to the checkout (`fetch-depth: 0`,
+  #        and the `ref:` that keeps a pull request's HEAD on its own commit).
+  #        Those steps were inserted at the prepare-hook anchor, in the position
+  #        the scaffold has them, so the remainder matches exactly.
   #
   #    Anything else is project-owned and is left alone — with the two things it
   #    needs named explicitly, because "left alone" would otherwise mean the gate
   #    silently never runs in that repository.
+  #
+  #    This step is not gated on `from`, so it runs for a project at ANY earlier
+  #    version — including one that already carries the 1.7.12 shape. That is what
+  #    makes later additions to the scaffold's policy workflow (1.7.17's `ref:`)
+  #    reach existing projects without a step of their own: the shape they carry
+  #    still matches, so the replacement happens again with the newer file.
   POLICY="$WORK/.github/workflows/afk-policy.yml"
   if [ ! -e "$POLICY" ]; then
     note "afk-policy.yml absent; the scaffold supplies it"
@@ -3064,7 +3072,21 @@ def instructions(path):
 
 candidate = instructions(sys.argv[1])
 pre_adr = instructions(sys.argv[2])
-current = [l for l in instructions(sys.argv[3]) if l != "fetch-depth: 0"]
+# The scaffold's own instruction set, minus the two lines 1.7.12 and 1.7.17 add:
+# `fetch-depth: 0`, and the `ref:` that keeps a pull request's HEAD on its own
+# commit rather than GitHub's merge ref. A project carrying the scaffold's steps
+# from either era matches one of these; anything else is project-owned.
+current = [
+    l
+    for l in instructions(sys.argv[3])
+    if l != "fetch-depth: 0" and not l.startswith("ref: ${{")
+]
+# ...and the DEPTH line is removed from the candidate too. A project that already
+# received the checkout fix (1.7.12 through 1.7.16 all shipped it) still carries
+# the scaffold's steps, and leaving that line in the candidate is what made the
+# comparison miss every one of these repositories: it matched the pre-1.7.12
+# shape exactly and the current one only without the depth.
+candidate = [l for l in candidate if l != "fetch-depth: 0"]
 sys.exit(0 if candidate in (pre_adr, current) else 1)
 SAME
   then

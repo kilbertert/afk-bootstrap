@@ -1069,6 +1069,27 @@ grep -q 'adr.check.mjs' "$P1712/.github/workflows/afk-policy.yml" \
   && { echo "the 1.7.12 policy reference already carries the decision-record step — stale reference" >&2; exit 1; }
 grep -q 'fetch-depth' "$P1712/.github/workflows/afk-policy.yml" \
   && { echo "the 1.7.12 policy reference already fetches full history — stale reference" >&2; exit 1; }
+# The fixture must be the shape the live projects carry, not the pre-1.7.12 one:
+# a 1.7.12–1.7.15 project has BOTH the decision-record step and the depth line,
+# and an earlier version of the comparison missed exactly those. Built here rather
+# than referenced, because two earlier attempts at stripping a fixture silently
+# stopped matching and left it already-fixed.
+python3 - "$P1712/.github/workflows/afk-policy.yml" <<'SHAPE1712'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+t = p.read_text()
+anchor = "      - name: Repository-map generator self-check"
+assert anchor in t, "the 1.7.12 policy reference no longer has the generator step — stale reference"
+t = t.replace(anchor, """      - name: Verify decision records
+        env:
+          AFK_ADR_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: node .sandcastle/adr.check.mjs --base "$AFK_ADR_BASE"
+""" + anchor, 1)
+depth = "          persist-credentials: false"
+assert depth in t, "the 1.7.12 policy reference no longer has the checkout — stale reference"
+t = t.replace(depth, depth + "\n          fetch-depth: 0", 1)
+p.write_text(t)
+SHAPE1712
 # A 1.7.x project carries the scaffold's own prompts — the other half this step edits.
 mkdir -p "$P1712/.sandcastle/implement" "$P1712/.sandcastle/implement-prd"
 cp "$S/scaffold/.sandcastle/implement/prompt.md" "$P1712/.sandcastle/implement/prompt.md"
@@ -1114,6 +1135,8 @@ grep -q 'adr.check.mjs' "$P1712/.github/workflows/afk-policy.yml" \
 # Parsed, not grepped: the scaffold's own comments contain `fetch-depth: 0`, so a
 # textual assertion passes without an active setting. The claim is about the
 # checkout the decision-record step runs under, so that is what is read.
+grep -q 'github.event.pull_request.head.sha' "$P1712/.github/workflows/afk-policy.yml" \
+  || { echo "the checkout does not name the pull request's own head" >&2; exit 1; }
 python3 - "$P1712/.github/workflows/afk-policy.yml" <<'DEPTHCHK' \
   || { echo "the policy job's checkout cannot see the base commit" >&2; exit 1; }
 import sys, yaml
@@ -1366,6 +1389,67 @@ rm -f "$P1714/docs/adr/0002-m-second.md"
 # ...while `--base <ref> --all` is a correctly configured pair and must run.
 ( cd "$P1714" && node .sandcastle/adr.check.mjs --base "$BASE_MERGE" --all >/dev/null 2>&1 ) \
   && { echo "--base <ref> --all was rejected; the ref is not a missing argument" >&2; exit 1; }
+
+# 1.7.17: a project-owned policy workflow is wired ADDITIVELY.
+#
+# Two designs failed here before. Patching by text left a different hole each
+# round; replacing the whole file cannot touch a workflow that has the project's
+# own steps in it, and the fallback only mentioned the checkout depth — so a valid
+# `No-ADR:` waiver kept failing on GitHub's synthetic merge commit. The wrier adds
+# what is missing, in place, and asserts the result.
+P1717="$TMP/upgrade-1716-policy-wire-$LANGUAGE"
+rm -rf "$P1717"
+mkdir -p "$P1717/.sandcastle" "$P1717/.github/workflows" "$P1717/docs/adr"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$P1717/"
+cp "$S/scaffold/.sandcastle/consensus-contract.json" "$P1717/.sandcastle/"
+printf 'FROM node:24\n' > "$P1717/.sandcastle/Dockerfile"
+cp "$S/scaffold/.sandcastle/repo-map.mjs" "$P1717/.sandcastle/repo-map.mjs"
+cp "$S/scaffold/.sandcastle/repo-map.check.mjs" "$P1717/.sandcastle/repo-map.check.mjs"
+cp "$S/references/afk-policy.yml.1.7.12" "$P1717/.github/workflows/afk-policy.yml"
+# A step of the project's own, and no decision-record step: the shape that must be
+# left alone apart from the two things it is missing.
+python3 - "$P1717/.github/workflows/afk-policy.yml" <<'OWNSTEP'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+t = p.read_text()
+anchor = "      - name: Verify AFK workflow boundaries"
+assert anchor in t, "the policy reference no longer has the workflow-boundary step — stale"
+p.write_text(t.replace(anchor, "      - name: Local lint\n        run: make lint\n" + anchor, 1))
+OWNSTEP
+node -e '
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  m.afk_template_version = "1.7.11";
+  m.templateVersion = 1;
+  fs.writeFileSync(process.argv[1], JSON.stringify(m, null, 2) + "\n");
+' "$P1717/.afk-bootstrap.json"
+printf '# Legacy\n\nprose only\n' > "$P1717/docs/adr/0001-legacy.md"
+"$S/upgrade-afk.sh" "$P1717" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project at 1.7.11" >&2; exit 1; }
+python3 - "$P1717/.github/workflows/afk-policy.yml" <<'WIREDCHK' \
+  || { echo "the policy workflow was not wired additively" >&2; exit 1; }
+import sys, yaml
+doc = yaml.safe_load(open(sys.argv[1]).read())
+names = [s.get("name") for j in doc["jobs"].values() for s in j["steps"]]
+if "Local lint" not in names:
+    sys.exit("the project's own step was lost")
+if "Verify decision records" not in names:
+    sys.exit("the decision-record step was not added")
+for job in doc["jobs"].values():
+    steps = [s for s in job["steps"] if isinstance(s, dict)]
+    at = next((n for n, s in enumerate(steps) if s.get("name") == "Verify decision records"), None)
+    if at is None:
+        continue
+    for idx in range(at - 1, -1, -1):
+        if str(steps[idx].get("uses", "")).startswith("actions/checkout@"):
+            have = steps[idx].get("with") or {}
+            if have.get("fetch-depth") != 0:
+                sys.exit("the checkout still cannot see the base commit")
+            if "github.event.pull_request.head.sha" not in str(have.get("ref", "")):
+                sys.exit("the checkout still lands on GitHub's merge ref")
+            sys.exit(0)
+sys.exit("no checkout found under the decision-record step")
+WIREDCHK
 
 for runner in .sandcastle/implement/implement.ts .sandcastle/implement-prd/implement-prd.ts; do
   grep -qF 'origin/main..' "$P174/$runner" \

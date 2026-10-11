@@ -3060,11 +3060,46 @@ STEPJS
       || { echo "afk-policy.yml: could not insert the check — refusing to guess" >&2; exit 1; }
     NEW_FILES="$NEW_FILES .github/workflows/afk-policy.yml"
     note "afk-policy.yml: decision-record check added"
+
   else
     say "afk-policy.yml has no prepare-hook step to anchor on."
     say "Add this step by hand:"
     say "  - name: Verify decision records"
     say "    run: node .sandcastle/adr.check.mjs --base \"\${AFK_ADR_BASE}\""
+  fi
+
+  # The checkout must carry the base commit, whatever branch above was taken.
+  # Anchored on the file, not on the step: a project that already carries the
+  # decision-record check took the "already wired" branch and would otherwise never
+  # receive the history it needs — and from 1.7.16 a shallow checkout FAILS rather
+  # than reporting that it cannot see the diff.
+  if [ -e "$POLICY" ]; then
+    python3 - "$POLICY" <<'FETCHDEPTH'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+t = p.read_text()
+if "fetch-depth" in t:
+    print("  afk-policy.yml: checkout already fetches full history")
+    sys.exit(0)
+anchor = """      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false"""
+if anchor not in t:
+    sys.exit(3)
+p.write_text(t.replace(anchor, anchor + """
+          # Required by the decision-record check: it resolves the PR's base sha
+          # against local history, and a shallow checkout cannot see that commit.
+          fetch-depth: 0""", 1))
+print("  afk-policy.yml: checkout now fetches full history")
+FETCHDEPTH
+    case $? in
+      0) NEW_FILES="$NEW_FILES .github/workflows/afk-policy.yml" ;;
+      3) say "afk-policy.yml has no checkout step this step recognises; add"
+         say "  fetch-depth: 0" >&2
+         say "to it by hand — the decision-record check needs the base commit." ;;
+      *) echo "afk-policy.yml: could not add fetch-depth — refusing to guess" >&2; exit 1 ;;
+    esac
   fi
 fi
 

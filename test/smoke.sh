@@ -1056,26 +1056,27 @@ MAPNEG
 # repository with a back catalogue can adopt it without editing that catalogue.
 P1712="$TMP/upgrade-1711-adr-$LANGUAGE"
 rm -rf "$P1712"
-mkdir -p "$P1712/.github/workflows" "$P1712/.sandcastle" "$P1712/docs/adr"
+mkdir -p "$P1712/.github/workflows" "$P1712/.sandcastle/implement" \
+         "$P1712/.sandcastle/implement-prd" "$P1712/docs/adr" "$P1712/docs/agents"
 cp -R "$S/test/fixtures/legacy-1.1.x/." "$P1712/"
 cp -R "$S/test/fixtures/workflows-1.7.4/." "$P1712/.github/workflows/"
-# A 1.7.x project carries the scaffold's own prompts and policy job — the two
-# files this step edits. Taken from the scaffold rather than from a fixture
-# because they are unmodified at this version and the step's anchors are written
-# against exactly that text.
+# The policy workflow as 1.7.11 left it: the scaffold's steps, no decision-record
+# step, and a SHALLOW checkout. Taken from references rather than assembled by
+# stripping, because a strip that stops matching leaves the fixture fixed and the
+# assertions below prove nothing — measured, twice.
+cp "$S/references/afk-policy.yml.1.7.12" "$P1712/.github/workflows/afk-policy.yml"
+grep -q 'adr.check.mjs' "$P1712/.github/workflows/afk-policy.yml" \
+  && { echo "the 1.7.12 policy reference already carries the decision-record step — stale reference" >&2; exit 1; }
+grep -q 'fetch-depth' "$P1712/.github/workflows/afk-policy.yml" \
+  && { echo "the 1.7.12 policy reference already fetches full history — stale reference" >&2; exit 1; }
+# A 1.7.x project carries the scaffold's own prompts — the other half this step edits.
 mkdir -p "$P1712/.sandcastle/implement" "$P1712/.sandcastle/implement-prd"
 cp "$S/scaffold/.sandcastle/implement/prompt.md" "$P1712/.sandcastle/implement/prompt.md"
 cp "$S/templates/prompt.node.md" "$P1712/.sandcastle/implement-prd/prompt.md"
 cp "$S/templates/implement.node.md" "$P1712/.sandcastle/implement.md"
-cp "$S/scaffold/.github/workflows/afk-policy.yml" "$P1712/.github/workflows/afk-policy.yml"
-# The map generator, because the new convention document is counted by it —
-# `docs() ` reports `docs/agents/ — N markdown file(s)`, so adding a file there
-# makes every project's committed map stale, and this step regenerates it.
 cp "$S/scaffold/.sandcastle/repo-map.mjs" "$P1712/.sandcastle/repo-map.mjs"
 cp "$S/scaffold/.sandcastle/repo-map.check.mjs" "$P1712/.sandcastle/repo-map.check.mjs"
-# Strip the duty this step adds, so the fixture is the version BEFORE it: without
-# this the step would find its own paragraph and skip, and the test would pass
-# while nothing had changed.
+# Strip the write duty, so the fixture is the version BEFORE it.
 python3 - "$P1712" <<'STRIPDUTY'
 import pathlib, sys
 root = pathlib.Path(sys.argv[1])
@@ -1084,30 +1085,10 @@ for rel in (".sandcastle/implement/prompt.md", ".sandcastle/implement-prd/prompt
     p = root / rel
     t = p.read_text()
     i = t.find("If this change settles something")
-    assert i != -1, f"{rel}: the scaffold prompt no longer carries the duty — this test is stale"
+    assert i != -1, f"{rel}: the scaffold prompt no longer carries the write duty — this test is stale"
     j = t.find("No-ADR: <why not>", i)
-    assert j != -1, f"{rel}: could not bound the duty paragraph"
-    # Drop the blank line before and the blank line after.
+    assert j != -1, f"{rel}: could not bound the write duty"
     p.write_text(t[:i - 1] + t[j + len("    No-ADR: <why not>") + 1:])
-for rel, needle in ((".github/workflows/afk-policy.yml", "Verify decision records"),):
-    p = root / rel
-    t = p.read_text()
-    i = t.find(needle)
-    assert i != -1, f"{rel}: the scaffold policy no longer carries the step — this test is stale"
-    start = t.rfind("      #", 0, i)
-    end = t.find('run: node .sandcastle/adr.check.mjs --base "$AFK_ADR_BASE"', i)
-    assert end != -1
-    t = t[:start] + t[end + len('run: node .sandcastle/adr.check.mjs --base "$AFK_ADR_BASE"'):].lstrip("\n")
-    # And the checkout's full history goes with it: the fixture must be the shape
-    # BEFORE this step, or the assertion below proves nothing.
-    import re as _re
-    before = t
-    t = _re.sub(r"          # `fetch-depth: 0`[\s\S]*?          fetch-depth: 0\n", "", t, count=1)
-    # A strip that silently stops matching leaves the fixture already-fixed and the
-    # assertion below proves nothing. Measured: that is exactly how the first
-    # version of this passed.
-    assert t != before, f"{rel}: the scaffold policy no longer carries the fetch-depth block — this test is stale"
-    p.write_text(t)
 STRIPDUTY
 # A back-catalogue record: no status line, no alternatives. It predates the
 # convention, which is the normal case in every repository on this host.

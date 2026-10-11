@@ -3015,213 +3015,62 @@ ADRJS
   #    next push for a reason the project did not cause.
   MAP_NEEDED=1
 
-  # 4. The policy job runs it. Anchored after the prepare-hook step, which every
-  #    project at this version carries.
+  # 4. The policy job. Replaced wholesale when it is still the shape this scaffold
+  #    generated, rather than patched step by step.
+  #
+  #    Four rounds of patching each left a different hole: a commented
+  #    `fetch-depth` counted as configured; an unrelated job's checkout answered
+  #    for this one; `fetch-depth: 1  # fast` was not replaced; a renamed step lost
+  #    the anchor and got a DUPLICATE depth key inserted after the shallow one —
+  #    and YAML takes the last, so the shallow value survived the "fix".
+  #
+  #    Every one of those came from matching text against a structure. Two
+  #    consequences:
+  #
+  #      * the check is `instructions == instructions`, ignoring comments and
+  #        blank lines. The 1.7.12 step inserted its own comment blocks here, so
+  #        every consumer's copy differs from the scaffold's in prose — what
+  #        decides ownership is whether the steps are still the scaffold's own.
+  #      * the patch is a replacement, which is what bootstrap already does for
+  #        this file (`cp --no-clobber scaffold/.`). A project whose instructions
+  #        differ keeps its version and is told the one thing that matters.
+  #
+  #    A workflow composed entirely of scaffold steps is not something a project
+  #    assembles; keeping those steps current is the whole point of the file.
   POLICY="$WORK/.github/workflows/afk-policy.yml"
   if [ ! -e "$POLICY" ]; then
     note "afk-policy.yml absent; the scaffold supplies it"
-  elif grep -qF "adr.check.mjs" "$POLICY"; then
-    note "afk-policy.yml: decision-record check already wired"
-  elif grep -qF "sandbox-prepare.check.ts" "$POLICY"; then
-    cat > "$STAGE/add-adr-step.mjs" <<'STEPJS'
-import { readFileSync, writeFileSync } from "node:fs";
-const [path] = process.argv.slice(2);
-const src = readFileSync(path, "utf8");
-const anchor = "      - name: Verify the sandbox prepare hook\n        run: npx --yes tsx .sandcastle/sandbox-prepare.check.ts\n";
-if (!src.includes(anchor)) process.exit(3);
-const step = [
-  "      # Whether a decision record is owed, and whether one was written.",
-  "      #",
-  "      # Two independent judgements, deliberately scoped differently:",
-  "      #   * STRUCTURE covers the records this change touches — so adopting the",
-  "      #     rule never requires backfilling a catalogue nobody edited.",
-  "      #   * COVERAGE covers each of this branch's commits, judged against its",
-  "      #     own parent. Per commit, not per diff: `git diff <ref> HEAD` is the",
-  "      #     merge-base form and reports everything the branch carries, so one",
-  "      #     tooling commit would answer for a feature commit beside it.",
-  "      #",
-  "      # A commit that owes a record and carries none fails here; one that owes",
-  "      # none says so with a `No-ADR:` line in its body. Nothing is pinned to a",
-  "      # ref — the script resolves the merge base itself.",
-  "      #",
-  "      # An empty `AFK_ADR_BASE` is a FAILURE, not a downgrade to a report. The",
-  "      # expression below evaluates to \"\" when neither side exists, and a gate that",
-  "      # quietly becomes a report reads as passing at exactly the moment it is",
-  "      # misconfigured.",
-  "      - name: Verify decision records",
-  "        env:",
-  "          AFK_ADR_BASE: ${{ github.event.pull_request.base.sha || github.event.before }}",
-  '        run: node .sandcastle/adr.check.mjs --base "$AFK_ADR_BASE"',
-  "",
-].join("\n");
-writeFileSync(path, src.replace(anchor, anchor + step));
-STEPJS
-    node "$STAGE/add-adr-step.mjs" "$POLICY" \
-      || { echo "afk-policy.yml: could not insert the check — refusing to guess" >&2; exit 1; }
-    NEW_FILES="$NEW_FILES .github/workflows/afk-policy.yml"
-    note "afk-policy.yml: decision-record check added"
-
-  else
-    say "afk-policy.yml has no prepare-hook step to anchor on."
-    say "Add this step by hand:"
-    say "  - name: Verify decision records"
-    say "    run: node .sandcastle/adr.check.mjs --base \"\${AFK_ADR_BASE}\""
-  fi
-
-  # The checkout must carry the base commit, whatever branch above was taken.
-  #
-  # This reads the YAML rather than the text, after three rounds of text matching
-  # each being wrong in a different way:
-  #   * `"fetch-depth" in text` matched a COMMENT;
-  #   * `^\s*fetch-depth:\s*0\s*$` let an unrelated job's checkout answer for this
-  #     job's;
-  #   * replacing only `fetch-depth: <EOL>` missed `fetch-depth: 1  # keep it fast`.
-  # Every one of those reported success while leaving the policy job shallow — and
-  # from 1.7.16 a shallow policy job FAILS its decision-record check.
-  #
-  # So: parse to decide, then edit the ONE step's lines, then re-parse and assert
-  # the result. The assertion is the part that matters — each earlier version
-  # printed a success message for an edit that had not happened.
-  if [ -e "$POLICY" ]; then
-    python3 - "$POLICY" <<'FETCHDEPTH'
+  elif cmp -s "$POLICY" "$S/scaffold/.github/workflows/afk-policy.yml"; then
+    note "afk-policy.yml: already the scaffold's current version"
+  elif python3 - "$POLICY" "$S/references/afk-policy.yml.1.7.12" <<'SAME'
 import sys
 
-try:
-    import yaml
-except ImportError:
-    print("  afk-policy.yml: PyYAML unavailable; cannot check the checkout depth", file=sys.stderr)
-    sys.exit(2)
 
-path = sys.argv[1]
-with open(path, encoding="utf-8") as fh:
-    text = fh.read()
-lines = text.split("\n")
-try:
-    doc = yaml.safe_load(text)
-except yaml.YAMLError as exc:
-    print(f"  afk-policy.yml: not valid YAML ({exc})", file=sys.stderr)
-    sys.exit(2)
+def instructions(path):
+    """Non-comment, non-blank lines — what the file tells the runner to do."""
+    out = []
+    with open(path, encoding="utf-8") as fh:
+        for line in fh:
+            stripped = line.strip()
+            if stripped and not stripped.startswith("#"):
+                out.append(stripped)
+    return out
 
-# The decision-record step, then the checkout that precedes it IN THE SAME JOB.
-# Parsing rather than matching on the step's display name is what makes a renamed
-# `Check out repository` still resolve.
-decision = None
-decision_job = None
-for job in (doc.get("jobs") or {}).values():
-    for step in job.get("steps") or []:
-        if isinstance(step, dict) and step.get("name") == "Verify decision records":
-            decision, decision_job = step, job
-if decision is None:
-    print("  afk-policy.yml: no decision-record step; nothing to do")
-    sys.exit(0)
 
-steps = [s for s in (decision_job.get("steps") or []) if isinstance(s, dict)]
-at = steps.index(decision)
-checkout = None
-for idx in range(at - 1, -1, -1):
-    if str(steps[idx].get("uses", "")).startswith("actions/checkout@"):
-        checkout = steps[idx]
-        break
-if checkout is None:
-    print("  afk-policy.yml: no checkout before it; refusing to guess", file=sys.stderr)
-    sys.exit(3)
-
-if (checkout.get("with") or {}).get("fetch-depth") in (0, "0"):
-    print("  afk-policy.yml: the decision-record job already fetches full history")
-    sys.exit(0)
-
-# Locate that step's lines. Anchored on the checkout's own `uses:` line, walking
-# back from the decision step, and bounded by the step that PRECEDES the checkout
-# — not by the decision step, which is what made the scan pass over `with:` and
-# insert a second key beside the shallow one. YAML resolves duplicate keys last-
-# wins, so the shallow value would have survived the "fix".
-decision_line = next(
-    (n for n, l in enumerate(lines) if l.strip() == "- name: Verify decision records"), None
-)
-if decision_line is None:
-    print("  afk-policy.yml: cannot locate the decision-record step in the text", file=sys.stderr)
-    sys.exit(3)
-
-uses_line = None
-for n in range(decision_line - 1, -1, -1):
-    if "actions/checkout@" in lines[n]:
-        uses_line = n
-        break
-if uses_line is None:
-    print("  afk-policy.yml: cannot locate its checkout in the text", file=sys.stderr)
-    sys.exit(3)
-
-# A step starts at its `- name:` line; scan that whole span, so a depth key AFTER
-# `with:` is found rather than being skipped over.
-step_start = uses_line
-for n in range(uses_line, -1, -1):
-    if lines[n].lstrip().startswith("- "):
-        step_start = n
-        break
-span = range(step_start, decision_line)
-
-depth_line = next((n for n in span if lines[n].strip().startswith("fetch-depth:")), None)
-if depth_line is not None:
-    # Replace the scalar only, keeping any trailing YAML comment.
-    line = lines[depth_line]
-    indent = line[: len(line) - len(line.lstrip())]
-    tail = line.partition("fetch-depth:")[2]
-    comment = "  " + tail[tail.index("#"):].strip() if "#" in tail else ""
-    lines[depth_line] = f"{indent}fetch-depth: 0{comment}"
-else:
-    with_line = next((n for n in span if lines[n].strip() == "with:"), None)
-    if with_line is None:
-        print("  afk-policy.yml: its checkout has no `with:` to extend", file=sys.stderr)
-        sys.exit(3)
-    indent = lines[with_line][: len(lines[with_line]) - len(lines[with_line].lstrip())]
-    lines[with_line + 1 : with_line + 1] = [
-        f"{indent}  # Required by the decision-record check: it resolves the PR's",
-        f"{indent}  # base sha against local history, and a shallow checkout cannot",
-        f"{indent}  # see that commit.",
-        f"{indent}  fetch-depth: 0",
-    ]
-
-# Re-parse and assert. Every earlier version of this printed a success line for an
-# edit that had not happened; this is what makes that impossible to do again.
-edited = "\n".join(lines)
-try:
-    again = yaml.safe_load(edited)
-except yaml.YAMLError as exc:
-    print(f"  afk-policy.yml: the edit produced invalid YAML ({exc})", file=sys.stderr)
-    sys.exit(2)
-found = None
-for job in (again.get("jobs") or {}).values():
-    for step in job.get("steps") or []:
-        if isinstance(step, dict) and step.get("name") == "Verify decision records":
-            found = job
-if found is None:
-    print("  afk-policy.yml: the edit lost the decision-record step", file=sys.stderr)
-    sys.exit(2)
-after = None
-steps2 = [s for s in (found.get("steps") or []) if isinstance(s, dict)]
-at2 = next(n for n, s in enumerate(steps2) if s.get("name") == "Verify decision records")
-for idx in range(at2 - 1, -1, -1):
-    if str(steps2[idx].get("uses", "")).startswith("actions/checkout@"):
-        after = (steps2[idx].get("with") or {}).get("fetch-depth")
-        break
-if after not in (0, "0"):
-    print(f"  afk-policy.yml: after the edit the job still has fetch-depth={after!r}", file=sys.stderr)
-    sys.exit(2)
-
-with open(path, "w", encoding="utf-8") as fh:
-    fh.write(edited)
-print("  afk-policy.yml: the decision-record job now fetches full history")
-FETCHDEPTH
-    case $? in
-      0) NEW_FILES="$NEW_FILES .github/workflows/afk-policy.yml" ;;
-      2) say "afk-policy.yml could not be parsed, or the edit did not take; add"
-         say "\`fetch-depth: 0\` to the checkout in its decision-record job by hand." ;;
-      3) say "afk-policy.yml has no checkout this step recognises; add"
-         say "\`fetch-depth: 0\` to the checkout that runs before"
-         say "'Verify decision records' by hand." ;;
-      *) echo "afk-policy.yml: could not set the checkout depth — refusing to guess" >&2; exit 1 ;;
-    esac
+sys.exit(0 if instructions(sys.argv[1]) == instructions(sys.argv[2]) else 1)
+SAME
+  then
+    cp "$S/scaffold/.github/workflows/afk-policy.yml" "$POLICY"
+    NEW_FILES="$NEW_FILES .github/workflows/afk-policy.yml"
+    note "afk-policy.yml: replaced with the scaffold's version (checkout fetches history)"
+  else
+    say "afk-policy.yml has steps this scaffold does not recognise; left as the"
+    say "project's own. It needs a checkout that fetches the base commit:"
+    say "  give the \`actions/checkout\` step that runs before"
+    say "  'Verify decision records' \`fetch-depth: 0\`."
+    say "A shallow checkout makes that check fail with 'cannot resolve …'."
   fi
+
 fi
 
 

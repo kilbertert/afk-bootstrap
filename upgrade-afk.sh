@@ -3257,17 +3257,19 @@ if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 16 ]; then
   REL=.sandcastle/adr.check.mjs
   if [ ! -e "$WORK/$REL" ]; then
     note "$REL absent; skipped"
-  elif grep -qF "emptyBaseIsFatal" "$WORK/$REL"; then
-    note "$REL: already distinguishes the two empty-base sources"
+  elif grep -qF "baseArgMissing" "$WORK/$REL"; then
+    note "$REL: already refuses a base it cannot resolve"
   elif cmp -s "$WORK/$REL" "$S/references/adr.check.mjs.1.7.15"; then
     cp "$S/scaffold/$REL" "$WORK/$REL"
     NEW_FILES="$NEW_FILES $REL"
     note "$REL: restaged (a --base with no ref is fatal even beside --all)"
   else
     say ".sandcastle/$REL differs from what 1.7.15 shipped and this step will not"
-    say "overwrite an edited checker. Carry this over by hand:"
-    say "  \`--base \"\"\` is an error even when \`--all\` is also given, while an empty"
-    say "  AFK_ADR_BASE alongside \`--all\` proceeds — the two sources are not equivalent."
+    say "overwrite an edited checker. Carry these over by hand:"
+    say "  1. \`--base \"\"\` is an error even when \`--all\` is also given, while an empty"
+    say "     AFK_ADR_BASE alongside \`--all\` proceeds — the two sources differ."
+    say "  2. a base that cannot be RESOLVED fails rather than judging nothing."
+    say "  3. \`--base\` never falls through to AFK_ADR_BASE when it has no value."
   fi
 fi
 

@@ -1333,6 +1333,15 @@ rm -f "$P1714/docs/adr/0002-m-second.md"
 # ...while a run that ASKED for a diff and supplied nothing still fails.
 ( cd "$P1714" && AFK_ADR_BASE="" node .sandcastle/adr.check.mjs >/dev/null 2>&1 ) \
   && { echo "an empty AFK_ADR_BASE with no --all still reported success" >&2; exit 1; }
+# The combination is its own case, and the one that failed open: `--all` scopes
+# the STRUCTURE rules, it does not license skipping the coverage half that `--base`
+# was also asked for. Measured before this was fixed: `--all --base ""` exited 0
+# with coverage silently unevaluated.
+( cd "$P1714" && node .sandcastle/adr.check.mjs --all --base "" >/dev/null 2>&1 ) \
+  && { echo "--all --base with no ref skipped the coverage half and reported success" >&2; exit 1; }
+# ...and with a real ref, the combination judges BOTH halves.
+( cd "$P1714" && node .sandcastle/adr.check.mjs --all --base "$BASE_MERGE" >/dev/null 2>&1 ) \
+  && { echo "--all --base with a real ref did not judge the commits" >&2; exit 1; }
 
 for runner in .sandcastle/implement/implement.ts .sandcastle/implement-prd/implement-prd.ts; do
   grep -qF 'origin/main..' "$P174/$runner" \

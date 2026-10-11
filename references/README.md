@@ -67,3 +67,13 @@ edits instead of overwriting it.
   waived in silence. The 1.7.15 step replaces a project's copy only when it matches
   this byte for byte — so a project older than 1.7.14 gets the merge fix and the
   collision fix together, and one at 1.7.14 gets only the latter.
+
+- `adr.check.mjs.1.7.15` — the checker as 1.7.15 shipped it: the empty-base guard
+  was `!ALL`, treating `--base ""` and an empty `AFK_ADR_BASE` as one case. So
+  `--all --base ""` exited 0 with coverage silently unevaluated — someone asked
+  for a diff and the coverage half was skipped without a word. The 1.7.16 step
+  replaces a project's copy only when it matches this byte for byte.
+
+  Three consecutive releases fixed the same three lines, each time closing the
+  case that had been measured and leaving a sibling open. That is the argument for
+  the combination tests now in `test/smoke.sh`: the pairs, not the cases.

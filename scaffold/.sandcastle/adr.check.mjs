@@ -83,12 +83,28 @@ const BASE = (baseFromArgv ? argv[argv.indexOf("--base") + 1] : undefined) ?? pr
 const ALL = argv.includes("--all");
 const ADR_DIR = join(REPO, "docs", "adr");
 
-if (baseRequested && BASE.trim() === "" && !ALL) {
+// When an empty base is a configuration error, and when it is not.
+//
+// The two sources are not equivalent, and treating them alike is how this was
+// wrong twice in a row:
+//
+//   * `--base ""` on the command line is someone asking for a diff and handing
+//     over nothing. Always an error, `--all` or not: `--all` scopes the STRUCTURE
+//     rules, it does not license skipping the coverage half that `--base` was
+//     also asked for. Measured before this was fixed: `--all --base ""` exited 0
+//     with coverage silently unevaluated.
+//   * `AFK_ADR_BASE=""` is what a workflow's `${{ a || b }}` produces when neither
+//     side exists, for every step that exports it. With `--all` there is a
+//     complete instruction and nothing is missing, so it proceeds.
+//
+// A gate that silently downgrades to a report reads as passing exactly when it is
+// misconfigured, which is the one moment it was needed.
+const emptyBaseIsFatal = baseFromArgv ? true : !ALL;
+if (baseRequested && BASE.trim() === "" && emptyBaseIsFatal) {
   const how = baseFromArgv ? "`--base` was passed with no ref" : "`AFK_ADR_BASE` is set but empty";
   console.error(
     `adr check failed: ${how}, so there is no diff to judge — refusing to report success.\n` +
-      "  A gate that silently downgrades to a report reads as passing whenever it is\n" +
-      "  misconfigured. Supply one of:\n" +
+      "  Supply one of:\n" +
       "    --base <ref>            e.g. `--base origin/main`, or the PR's base sha\n" +
       "    --all                   judge the whole tree instead of a diff\n" +
       "    (neither)               run locally for a report; exits 0 by design",

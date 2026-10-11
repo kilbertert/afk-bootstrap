@@ -3235,6 +3235,43 @@ if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 15 ]; then
 fi
 
 
+# ---- step: 1.7.15 -> 1.7.16 — a requested base is never quietly skipped ------
+# Devin Review, on the 1.7.15 PRs, at the exact line 1.7.15 had just changed.
+#
+# `--all --base ""` exited 0 with coverage unevaluated. The 1.7.15 guard was
+# `!ALL` alone, which treated the two sources of an empty base as one:
+#
+#   * `--base ""` on the command line is someone asking for a diff and supplying
+#     nothing. `--all` scopes the STRUCTURE rules; it does not license dropping
+#     the coverage half that `--base` was also asked for.
+#   * `AFK_ADR_BASE=""` is what `${{ a || b }}` yields when neither side exists,
+#     for every step that exports it. Alongside `--all` there is a complete
+#     instruction and nothing is missing, so it proceeds.
+#
+# Two rounds on the same three lines is the pattern worth naming: each fix closed
+# the case that was measured and left a sibling open.
+if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 16 ]; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: a requested base is never quietly skipped =="
+
+  REL=.sandcastle/adr.check.mjs
+  if [ ! -e "$WORK/$REL" ]; then
+    note "$REL absent; skipped"
+  elif grep -qF "emptyBaseIsFatal" "$WORK/$REL"; then
+    note "$REL: already distinguishes the two empty-base sources"
+  elif cmp -s "$WORK/$REL" "$S/references/adr.check.mjs.1.7.15"; then
+    cp "$S/scaffold/$REL" "$WORK/$REL"
+    NEW_FILES="$NEW_FILES $REL"
+    note "$REL: restaged (a --base with no ref is fatal even beside --all)"
+  else
+    say ".sandcastle/$REL differs from what 1.7.15 shipped and this step will not"
+    say "overwrite an edited checker. Carry this over by hand:"
+    say "  \`--base \"\"\` is an error even when \`--all\` is also given, while an empty"
+    say "  AFK_ADR_BASE alongside \`--all\` proceeds — the two sources are not equivalent."
+  fi
+fi
+
+
 if [ "$STEP_RAN" = "0" ]; then
   echo "no upgrade step defined from $FROM to $TEMPLATE_VERSION" >&2
   exit 1

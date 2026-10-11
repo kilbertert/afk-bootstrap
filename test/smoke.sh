@@ -1101,7 +1101,12 @@ for rel, needle in ((".github/workflows/afk-policy.yml", "Verify decision record
     # And the checkout's full history goes with it: the fixture must be the shape
     # BEFORE this step, or the assertion below proves nothing.
     import re as _re
+    before = t
     t = _re.sub(r"          # `fetch-depth: 0`[\s\S]*?          fetch-depth: 0\n", "", t, count=1)
+    # A strip that silently stops matching leaves the fixture already-fixed and the
+    # assertion below proves nothing. Measured: that is exactly how the first
+    # version of this passed.
+    assert t != before, f"{rel}: the scaffold policy no longer carries the fetch-depth block — this test is stale"
     p.write_text(t)
 STRIPDUTY
 # A back-catalogue record: no status line, no alternatives. It predates the

@@ -3167,6 +3167,8 @@ SEARCHJS
   #    the four repositories on this host, each of which already has a 0002 — and
   #    the serial is the only thing a reader uses to cite a record. Next free
   #    number, padding preserved from whatever this repository already uses.
+  # Computed only when a write is actually going to happen — the guard below
+  # keys on the slug, so a run that finds an existing copy never needs a number.
   REL="docs/adr/$(node -e '
     const fs = require("fs");
     const dir = process.argv[1];
@@ -3181,8 +3183,25 @@ SEARCHJS
     } catch { /* no docs/adr yet */ }
     process.stdout.write(String(max + 1).padStart(pad, "0") + "-adr-check-scope-and-self-application.md");
   ' "$TARGET/docs/adr")"
-  if [ -e "$TARGET/$REL" ]; then
-    note "$REL: already present"
+  # The marker is the SLUG, not the path this run computed. The number is
+  # recomputed from the target directory on every run, so yesterday's copy is
+  # never the path today's run picks — and every upgrade that passes through
+  # this step writes another one. Measured: all four consumer repositories carry
+  # exactly THREE copies of this record, one per upgrade since 1.7.13, and
+  # `--all` reports each extra as a shared serial.
+  #
+  # The extras are reported, not removed. They are identical, and they are also
+  # cited by filename in commits and in the convention document, so which of
+  # them a reader follows is the project's to decide.
+  dupes="$(ls "$TARGET/docs/adr"/*-adr-check-scope-and-self-application.md 2>/dev/null || true)"
+  if [ -n "$dupes" ]; then
+    note "docs/adr/…-adr-check-scope-and-self-application.md: already present"
+    count="$(printf '%s\n' "$dupes" | wc -l | tr -d ' ')"
+    if [ "$count" -gt 1 ]; then
+      say "  $count copies exist, written by earlier runs of this same step."
+      say "  They are identical; removing the extras is safe and is yours to do:"
+      printf '%s\n' "$dupes" | sed 's/^/    /'
+    fi
   else
     mkdir -p "$WORK/docs/adr"
     cp "$S/references/adr-self-application.md" "$WORK/$REL"
@@ -3268,9 +3287,162 @@ if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 16 ]; then
 fi
 
 
-if [ "$STEP_RAN" = "0" ]; then
-  echo "no upgrade step defined from $FROM to $TEMPLATE_VERSION" >&2
-  exit 1
+# ---- step: 1.7.17 -> 1.7.18 — a ticket has to be one an agent can finish ----
+# The workflow has always had a SHAPE gate: `agent-implement.yml` refuses a PRD,
+# a sub-issue, and an issue with an open native blocker. Every one of those is a
+# fact about the ticket's POSITION. Nothing has ever asked whether the ticket
+# says what to build and what "done" looks like — so `agent:implement` opens a
+# door whose other side is judged by nobody.
+#
+# Measured on this host before writing the check (open issues with a body):
+#
+#   repo              open   has acceptance   has non-goals
+#   Health-Flow          0                –               –
+#   genesis-evidence     5              3/5             3/5
+#   AI-Ops              14             3/14            8/14
+#   Auto_Test           27            11/27           11/27
+#
+# and on the `ready-for-agent` label — the one a planner treats as "run it":
+# twelve tickets across three repositories, ONE carrying acceptance criteria.
+#
+# The forcing case came from outside GitHub. This host's ZenTao instance holds
+# requirement tickets whose only field is a title — measured 20/20 in one product
+# and 14/14 in one project with an empty `spec` AND an empty `verify`. A ticket
+# like "视频详情页面主图需要调整大小(需出原型给开发)" cannot be started, because
+# there is no observable outcome to build toward; an agent handed it invents one,
+# and the invention is the cost. So the first thing a requirements platform needs
+# is not a connector — it is a judgement about the ticket.
+#
+# Where this sits in the file: AFTER the metadata rewrite at the end of the step
+# sequence, because it is the only step that edits a workflow wholesale rather
+# than through an anchor. Leaving it among the anchored steps would have those
+# anchors match against the post-execution tree on a re-run from the same
+# `from` — which is the "already the target shape" path, and it reports that as
+# "does not differ from what 0 shipped" on a tree that still needs the edit.
+# The metadata rewrite is not a step, so it cannot be ordered against; none of
+# the steps below this point read or write `$WORK` files at all.
+#
+# It stays before `STEP_RAN` is checked, because it is a step: it sets that flag
+# and a version bump with no step defined is a hard error.
+if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 18 ]; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: a ticket has to be one an agent can finish =="
+
+  # 1. The check. Copied from the SCAFFOLD: a project that does not have it
+  #    should get the current one, not whatever the introducing release shipped.
+  REL=.sandcastle/ticket-check.mjs
+  if [ ! -e "$S/scaffold/$REL" ]; then
+    echo "migration reference missing: $S/scaffold/$REL" >&2
+    exit 1
+  fi
+  if [ ! -e "$TARGET/$REL" ]; then
+    cp "$S/scaffold/$REL" "$WORK/$REL"
+    NEW_FILES="$NEW_FILES $REL"
+    note "added: $REL"
+  elif grep -qF "BARE_CHECKBOX_RE" "$TARGET/$REL"; then
+    # Already current. Reported rather than copied, so a project's own edit
+    # inside the current shape is not overwritten by a re-run.
+    note "$REL: already present"
+  else
+    # A project that has written its own checker, or is carrying an earlier one,
+    # keeps it. Overwriting would delete a rule its author added — and unlike a
+    # prompt, this file is executable: the rules in it are the ones the gate
+    # actually applies. Same policy as the ADR checker: replace only a copy that
+    # still matches a shape this template shipped.
+    say "$REL differs from what this template ships; left as the project's own."
+    say "  The new pre-flight runs whatever is at that path. If it is an earlier"
+    say "  ticket-check.mjs, merge these in by hand:"
+    say "    - a bare \`- [ ]\` is not a criterion (BARE_CHECKBOX_RE)"
+    say "    - the criteria list stops at the first blank line"
+    say "    - a populated ZenTao \`verify\` fills an empty acceptance section"
+  fi
+
+  # 2. The write-back duty, in two prompts.
+  #
+  #    The PRD prompt is the one that carries a sub-issue's spec, so it is where
+  #    "the sub-issue is where the spec was written" belongs; the single-issue
+  #    prompt is the plain "this work came from somewhere" form. Fixed, plain
+  #    UTF-8 text is inserted, never copied from a template — the rendering
+  #    problem an earlier draft created for itself (a template contains
+  #    placeholders a rendered file does not) disappears when nothing is
+  #    rendered at all.
+  #
+  #    Anchored on a whole line, not on a sentence with its punctuation: the
+  #    1.7.12 migration anchored on ``...commit`.`` and matched one repository,
+  #    because the same sentence is written three ways across these prompts.
+  #    Measured: each anchor below appears exactly once in all four consumer
+  #    repositories.
+  for spec in \
+    ".sandcastle/implement-prd/prompt.md|Do not touch work that belongs to a different sub-issue.|this sub-issue" \
+    ".sandcastle/implement.md|The host runner owns delivery.|this work"; do
+    REL="$(printf '%s' "$spec" | cut -d'|' -f1)"
+    ANCHOR="$(printf '%s' "$spec" | cut -d'|' -f2)"
+    SUBJECT="$(printf '%s' "$spec" | cut -d'|' -f3)"
+    if [ ! -e "$WORK/$REL" ]; then
+      note "$REL absent; skipped"
+      continue
+    fi
+    node "$S/tools/add-ticket-duty.mjs" "$WORK/$REL" "$ANCHOR" "$SUBJECT" || rc=$?
+    case ${rc:-0} in
+      0) NEW_FILES="$NEW_FILES $REL"; note "$REL: asks for the write-back" ;;
+      4) note "$REL: already asks for the write-back" ;;
+      3) say "$REL has no anchor this step recognises; add by hand: a paragraph"
+         say "naming the commit-body line \`Source ticket:\` and what to write there." ;;
+      *) echo "$REL: could not add the write-back duty — refusing to guess" >&2; exit 1 ;;
+    esac
+    rc=0
+  done
+
+  # 4. The workflow wiring. Additive and asserted, like `policy-wire.py`, and for
+  #    the same reason: five rounds of reconciling the policy file by text each
+  #    closed the case that was measured and left a sibling open. Exit 3 is a
+  #    report, not a failure — a project whose workflows have diverged keeps its
+  #    file and is told what to add.
+  for pair in "agent-implement.yml|single" "agent-implement-prd.yml|prd"; do
+    WF="${pair%%|*}"; MODE="${pair##*|}"
+    if [ ! -e "$WORK/.github/workflows/$WF" ]; then
+      note ".github/workflows/$WF absent; skipped"
+      continue
+    fi
+    OUT="$(python3 "$S/tools/ticket-wire.py" "$WORK/.github/workflows/$WF" "$MODE" 2>&1)" || WIRE_RC=$?
+    WIRE_RC="${WIRE_RC:-0}"
+    case "$WIRE_RC" in
+      0) note ".github/workflows/$WF: $OUT" ;;
+      2|3) say ".github/workflows/$WF could not be wired automatically: $OUT"
+           say "By hand: add the ticket-check pre-flight — the scaffold's own copy of"
+           say "this workflow has both shapes (single issue, PRD sub-issue loop)." ;;
+      *) echo ".github/workflows/$WF: could not be wired — refusing to guess" >&2; exit 1 ;;
+    esac
+    unset WIRE_RC OUT
+  done
+
+  # 5. The convention document — its OWN file, not a section added to
+  #    `issue-tracker.md`.
+  #
+  #    Measured: all four consumer repositories already own an
+  #    `issue-tracker.md` (their copies predate this template), so a step that
+  #    writes a file only when it is absent would reach none of them. Appending
+  #    to a project-owned document is the 1.7.12 mistake in the other direction,
+  #    and they DO share their text for a reason — their copies differ. A new
+  #    file is the one shape that reaches every project without editing prose
+  #    the project wrote.
+  #
+  #    A project that has already written this document keeps it: the checker
+  #    reads the ticket, not this file, so a divergence costs a reader only.
+  REL=docs/agents/ticket-contract.md
+  if [ -e "$TARGET/$REL" ]; then
+    note "$REL: already present; left as the project's own"
+  elif [ -e "$S/scaffold/$REL" ]; then
+    mkdir -p "$WORK/docs/agents"
+    cp "$S/scaffold/$REL" "$WORK/$REL"
+    NEW_FILES="$NEW_FILES $REL"
+    note "added: $REL"
+  fi
+
+  # 6. The map. A new `.sandcastle/` file and a new `docs/agents/` file both make
+  #    every project's committed map stale, and the policy job goes red on a
+  #    stale map for a reason the project did not cause.
+  MAP_NEEDED=1
 fi
 
 # The staged metadata is rewritten here, before the change report, so a dry run
@@ -3283,6 +3455,12 @@ node -e '
   metadata.afk_template_version = version;
   fs.writeFileSync(path, JSON.stringify(metadata, null, 2) + "\n");
 ' "$WORK/.afk-bootstrap.json" "$TEMPLATE_VERSION"
+
+if [ "$STEP_RAN" = "0" ]; then
+  echo "no upgrade step defined from $FROM to $TEMPLATE_VERSION" >&2
+  exit 1
+fi
+
 
 # ---- report and publish ----------------------------------------------------
 # What changed is derived by comparing staged against original, so it cannot

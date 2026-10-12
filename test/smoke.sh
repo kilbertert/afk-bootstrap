@@ -2783,3 +2783,52 @@ sys.exit(0 if "Pre-flight — refuse if the ticket is not implementable" in name
 NEGCHK
   echo "negative control: the pre-flight survived being stripped" >&2; exit 1
 fi
+
+# The 1.7.13 step's record is named by a number it recomputes on every run, so
+# its guard could never hit: measured, all four consumer repositories carry
+# exactly THREE copies, one per upgrade since 1.7.13, and `--all` reports each
+# extra as a shared serial. The guard keys on the slug now, and a fourth copy is
+# never written.
+DUP="$TMP/adr-record-duplicate-$LANGUAGE"
+rm -rf "$DUP"
+mkdir -p "$DUP/.sandcastle" "$DUP/.github/workflows" "$DUP/docs/adr"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$DUP/"
+cp "$S/scaffold/.sandcastle/consensus-contract.json" "$DUP/.sandcastle/"
+printf 'FROM node:24\n' > "$DUP/.sandcastle/Dockerfile"
+cp "$S/scaffold/.sandcastle/repo-map.mjs" "$S/scaffold/.sandcastle/repo-map.check.mjs" "$DUP/.sandcastle/"
+for n in 0007 0008 0009; do
+  cp "$S/references/adr-self-application.md" "$DUP/docs/adr/$n-adr-check-scope-and-self-application.md"
+done
+node -e '
+  const fs = require("fs");
+  const p = process.argv[1];
+  const m = JSON.parse(fs.readFileSync(p, "utf8"));
+  m.afk_template_version = "1.7.12";
+  m.templateVersion = 1;
+  fs.writeFileSync(p, JSON.stringify(m, null, 2) + "\n");
+' "$DUP/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$DUP" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project already carrying the record" >&2; exit 1; }
+count_records() {
+  n=0
+  for f in "$DUP"/docs/adr/*adr-check-scope-and-self-application.md; do
+    [ -e "$f" ] && n=$((n + 1))
+  done
+  printf '%s' "$n"
+}
+[ "$(count_records)" = "3" ] \
+  || { echo "the step wrote a fourth copy of the self-application record" >&2; exit 1; }
+# Negative control: with no copy present, one is still written — otherwise the
+# guard above proves only that the step does nothing at all.
+rm -f "$DUP"/docs/adr/*adr-check-scope*
+node -e '
+  const fs = require("fs");
+  const p = process.argv[1];
+  const m = JSON.parse(fs.readFileSync(p, "utf8"));
+  m.afk_template_version = "1.7.12";
+  fs.writeFileSync(p, JSON.stringify(m, null, 2) + "\n");
+' "$DUP/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$DUP" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project with no record" >&2; exit 1; }
+[ "$(count_records)" = "1" ] \
+  || { echo "the step did not write the record it still owes a project" >&2; exit 1; }

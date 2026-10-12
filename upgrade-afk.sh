@@ -3167,6 +3167,8 @@ SEARCHJS
   #    the four repositories on this host, each of which already has a 0002 — and
   #    the serial is the only thing a reader uses to cite a record. Next free
   #    number, padding preserved from whatever this repository already uses.
+  # Computed only when a write is actually going to happen — the guard below
+  # keys on the slug, so a run that finds an existing copy never needs a number.
   REL="docs/adr/$(node -e '
     const fs = require("fs");
     const dir = process.argv[1];
@@ -3181,8 +3183,25 @@ SEARCHJS
     } catch { /* no docs/adr yet */ }
     process.stdout.write(String(max + 1).padStart(pad, "0") + "-adr-check-scope-and-self-application.md");
   ' "$TARGET/docs/adr")"
-  if [ -e "$TARGET/$REL" ]; then
-    note "$REL: already present"
+  # The marker is the SLUG, not the path this run computed. The number is
+  # recomputed from the target directory on every run, so yesterday's copy is
+  # never the path today's run picks — and every upgrade that passes through
+  # this step writes another one. Measured: all four consumer repositories carry
+  # exactly THREE copies of this record, one per upgrade since 1.7.13, and
+  # `--all` reports each extra as a shared serial.
+  #
+  # The extras are reported, not removed. They are identical, and they are also
+  # cited by filename in commits and in the convention document, so which of
+  # them a reader follows is the project's to decide.
+  dupes="$(ls "$TARGET/docs/adr"/*-adr-check-scope-and-self-application.md 2>/dev/null || true)"
+  if [ -n "$dupes" ]; then
+    note "docs/adr/…-adr-check-scope-and-self-application.md: already present"
+    count="$(printf '%s\n' "$dupes" | wc -l | tr -d ' ')"
+    if [ "$count" -gt 1 ]; then
+      say "  $count copies exist, written by earlier runs of this same step."
+      say "  They are identical; removing the extras is safe and is yours to do:"
+      printf '%s\n' "$dupes" | sed 's/^/    /'
+    fi
   else
     mkdir -p "$WORK/docs/adr"
     cp "$S/references/adr-self-application.md" "$WORK/$REL"

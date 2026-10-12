@@ -2742,6 +2742,27 @@ WIRED
 
 # Negative control: strip the pre-flight and the same predicate must stop
 # holding. Without this the block only proves the YAML parses.
+# The PRD loop carries the same judgement for each of its leaves, and it must
+# SKIP the leaf rather than refuse the PRD: one vaguely-written sub-issue must
+# not stop every sibling behind it.
+python3 - "$P1718/.github/workflows/agent-implement-prd.yml" <<'PRDWIRED' \
+  || { echo "the PRD workflow was not wired" >&2; exit 1; }
+import sys, yaml
+steps = list(yaml.safe_load(open(sys.argv[1]))["jobs"].values())[0]["steps"]
+names = [s.get("name") for s in steps]
+skip = "Skip — the selected sub-issue is not implementable"
+if skip not in names:
+    sys.exit("the skip step is missing")
+shape = next(s["run"] for s in steps if str(s.get("name", "")).startswith("Detect"))
+for needle in ("ticket-check.mjs --json --strict", 'mode="skip-unimplementable"',
+               "ticket_report<<AFK_TICKET_REPORT"):
+    if needle not in shape:
+        sys.exit(f"the shape step does not carry {needle}")
+always = next(s for s in steps if str(s.get("name", "")).startswith("Always remove in-progress"))
+if "skip-unimplementable" not in str(always.get("if")):
+    sys.exit("a skipped leaf would leave the PRD labelled agent:in-progress forever")
+PRDWIRED
+
 NEGW="$TMP/ticket-wire-negative-$LANGUAGE.yml"
 cp "$P1718/.github/workflows/agent-implement.yml" "$NEGW"
 python3 - "$NEGW" <<'STRIP'

@@ -88,28 +88,15 @@ jobs:
             next_open_title=$(echo "$next_open" | jq -r '.title')
           fi
 
-          # The sub-issue about to be implemented must itself be implementable.
+          # The sub-issue about to be implemented must itself be implementable. The
+          # verdict comes from the exit code and the report is captured separately, so
+          # the two never share a stream: `--strict` prints the same lines a report run
+          # does, and reading stdout for the verdict is how a passing ticket gets read
+          # as a failing one.
           #
-          # This is the write-back the single-issue pre-flight cannot do, and it
-          # is NOT merely "also check the parent": a sub-issue that fails here is
-          # skipped with a comment and the loop moves to the next open one. The
-          # alternative — refusing the whole PRD — would let one vaguely-written
-          # leaf stop every sibling behind it, which is a gate that costs more
-          # than it catches.
-          #
-          # `implementable=yes` on an empty number: the `run` branch is only
-          # reached when there IS a next open sub-issue, so an empty string here
-          # means the selection was already refused for another reason. Treating
-          # it as unimplementable would report a ticket nobody selected.
-          # The verdict is taken from the exit code and the report is captured
-          # separately, so the two never share a stream: a `--strict` run prints
-          # the same lines a report run does, and reading its stdout for the
-          # answer is how a passing ticket gets read as a failing one.
-          #
-          # `--strict` does NOT change the verdict — the report already fails on
-          # the same findings. It is passed to say out loud that this call is a
-          # gate, so a later change to the reporting default cannot turn this
-          # step into one that always proceeds.
+          # `--strict` is passed to say out loud that this call is a gate, so a later
+          # change to the reporting default cannot silently turn this step into one
+          # that always proceeds.
           implementable="yes"
           ticket_report=""
           if [ -n "$next_open_number" ]; then
@@ -153,8 +140,9 @@ jobs:
             echo "next_open_title<<EOF"
             echo "$next_open_title"
             echo "EOF"
-            # The check's report is multi-line; the delimiter is on its own line
-            # by construction, which is what the heredoc form needs.
+            # The check's report is multi-line; the delimiter is on its own line by
+            # construction, which is what the heredoc form needs. Kept in the same group
+            # as the title so this is still one redirect to one file (SC2129).
             echo "ticket_report<<AFK_TICKET_REPORT"
             echo "$ticket_report"
             echo "AFK_TICKET_REPORT"
@@ -162,6 +150,7 @@ jobs:
 
       # Skip the leaf, not the PRD. Its siblings stay eligible, and the comment
       # names the ticket so whoever wrote it can fix it and re-add the label.
+
       - name: Skip — the selected sub-issue is not implementable
         if: steps.shape.outputs.mode == 'skip-unimplementable'
         env:

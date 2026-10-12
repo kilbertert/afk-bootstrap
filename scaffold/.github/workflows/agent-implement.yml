@@ -101,6 +101,7 @@ jobs:
           gh issue edit "$ISSUE_NUMBER" --add-label "agent:blocked" || true
           gh issue comment "$ISSUE_NUMBER" --body "Refused to run: this issue is a sub-issue of #${PARENT_NUMBER}. Sub-issues are not labeled directly — add \`agent:implement\` to the parent PRD instead. Cleared \`agent:implement\` and added \`agent:blocked\`."
 
+
       # The shape gate above judges the ticket's POSITION — is it a leaf, is it
       # blocked, is it a PRD. This one judges the ticket ITSELF, which nothing
       # has ever done: whether it says what to build and what "done" looks like.
@@ -157,7 +158,7 @@ jobs:
           exit 0
 
       - name: Pre-flight — refuse if an open PR already exists for this issue
-        if: steps.shape.outputs.proceed == 'true'
+        if: steps.shape.outputs.proceed == 'true' && steps.ticket.outputs.implementable != 'false'
         id: preflight
         run: |
           set -euo pipefail

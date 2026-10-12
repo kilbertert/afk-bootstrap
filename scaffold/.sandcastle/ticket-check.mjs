@@ -141,6 +141,17 @@ const PROBLEM_RE = /^#{1,6} *(problem|背景|问题|为什么|动机|rationale|w
 const EMPTY_RE = /^(?:tbd|todo|n\/?a|none|无|待定|-{2,}|\.{3,}|—+)$/i;
 /** A checkbox or a bulleted/numbered line — the two shapes a criterion takes. */
 const ITEM_RE = /^\s*(?:[-*+] +\[[ xX]\]|[-*+] +|\d+[.)] +)\S/;
+/**
+ * A checkbox with nothing after it.
+ *
+ * `ITEM_RE`'s generic bullet arm matches `- [ ]` — the checkbox arm fails for
+ * lack of a `\S`, so the bullet arm takes it and the `[ ]` becomes "criterion
+ * text". Measured before this existed: a ticket whose whole acceptance section
+ * was one empty checkbox passed, once it named a file anywhere else in the body.
+ * An empty checkbox claims an outcome that was never written, which is the exact
+ * thing the empty-section rule exists to catch.
+ */
+const BARE_CHECKBOX_RE = /^\s*[-*+] +\[[ xX]\]\s*$/;
 /** Something a reader can check mechanically: a code span, or a path/command. */
 const CHECKABLE_RE = /`[^`\n]+`|(?:^|\s)(?:src|tests?|docs|app|lib|pkg|internal|cmd|scripts|\.[a-z]+)\/[\w./-]+/;
 
@@ -227,7 +238,36 @@ function sectionBody(lines, startIndex) {
 
 /** Is this list of lines a criterion — non-empty, and not a placeholder? */
 function itemLines(body) {
-  return body.filter((l) => ITEM_RE.test(l) && !EMPTY_RE.test(l.replace(ITEM_RE, "").trim()));
+  return body.filter(
+    (l) =>
+      ITEM_RE.test(l) &&
+      !BARE_CHECKBOX_RE.test(l) &&
+      !EMPTY_RE.test(l.replace(ITEM_RE, "").trim()),
+  );
+}
+
+/**
+ * The criteria under a heading, stopping where the list stops.
+ *
+ * A section runs to the next heading of the same or higher level, but a
+ * criterion list is contiguous: prose that follows a blank line is the next
+ * thought, not another criterion. Without the second rule, `## Acceptance
+ * criteria` followed by a note about a related file swallows the note, and the
+ * rule "there is at least one criterion" is answered by text that is not one.
+ */
+function criteriaBody(lines, startIndex) {
+  const body = sectionBody(lines, startIndex);
+  const out = [];
+  for (let i = 0; i < body.length; i++) {
+    if (!body[i].trim()) {
+      // A blank line only continues the list when an item follows it.
+      const next = body.slice(i + 1).find((l) => l.trim());
+      if (next === undefined || !ITEM_RE.test(next)) break;
+      continue;
+    }
+    out.push(body[i]);
+  }
+  return out;
 }
 
 /**
@@ -244,7 +284,7 @@ function itemLines(body) {
 function acceptance(lines) {
   const at = lines.findIndex((l) => ACCEPTANCE_RE.test(l));
   if (at >= 0) {
-    const items = itemLines(sectionBody(lines, at));
+    const items = itemLines(criteriaBody(lines, at));
     return items.length > 0
       ? { ok: true, how: "section" }
       : { ok: false, how: "section-empty", section: lines[at].trim() };
@@ -390,8 +430,24 @@ function normalise(item) {
   // `verify` is ZenTao's own acceptance field. When it is filled in, it IS the
   // answer, and the check should read it rather than report it missing.
   const verify = typeof item.verify === "string" ? item.verify.trim() : "";
-  if (verify && !ACCEPTANCE_RE.test(body) && !ACCEPTANCE_LABEL_RE.test(body)) {
-    body = `${body}\n\n## Acceptance criteria\n\n${verify}\n`;
+  // `verify` is ZenTao's own acceptance field, so when it is filled in it IS the
+  // answer. Asking whether the body has an acceptance HEADING is not the same
+  // question: a `## Acceptance criteria` over nothing is exactly the case where
+  // the sibling field carries the content, and testing for the heading discarded
+  // it. Ask the real predicate instead.
+  if (verify && !acceptance(proseLines(body)).ok) {
+    // Filled into the section that is already there, not appended as a second
+    // heading. `## Acceptance criteria` followed by an empty one is not a
+    // duplicate a reader can read past — the check looks at the FIRST heading of
+    // that shape, finds nothing under it, and reports the ticket as empty while
+    // the answer sits two lines below. Measured, after an earlier version did
+    // exactly that.
+    const lines = body.split("\n");
+    const at = lines.findIndex((l) => ACCEPTANCE_RE.test(l));
+    body =
+      at >= 0
+        ? [...lines.slice(0, at + 1), "", verify, ...lines.slice(at + 1)].join("\n")
+        : `${body}\n\n## Acceptance criteria\n\n${verify}\n`;
   }
   return { title: String(title), body, label: item.number !== undefined ? `#${item.number}` : String(title).slice(0, 48) };
 }
@@ -485,8 +541,16 @@ if (SELF_CHECK) {
     hollow: { title: "调整 `src/app.ts` 启动顺序", body: "## Acceptance criteria\n\nTBD\n" },
     // No anchor: prose about a change with no location.
     anonchor: { title: "让系统更快", body: "## Acceptance criteria\n\n- [ ] 快 20%\n" },
-    // Empty criteria under a filled section is fine; an EMPTY bullet is not.
-    emptybullet: { title: "调整 `src/app.ts`", body: "## Acceptance criteria\n\n- [ ]\n" },
+    // An empty checkbox, WITH a valid anchor elsewhere in the body — the shape
+    // that made the first version pass. The earlier fixture had no anchor, so it
+    // failed the anchor rule and proved nothing about the acceptance rule.
+    emptybullet: { title: "调整 `src/app.ts` 启动顺序", body: "改 `src/app.ts` 里的顺序。\n\n## Acceptance criteria\n\n- [ ]\n" },
+    // A valid criterion list, then a note. The note is not a criterion, and a
+    // section that swallows it answers "is there a criterion" from prose.
+    noteAfterList: { title: "调整 `src/app.ts`", body: "改 `src/app.ts`。\n\n## Acceptance criteria\n\n- [ ] a.ts 行为变更已断言\n\n## Notes\n\n- 顺便看 `src/b.ts`。\n" },
+    // ZenTao's `verify` beside a `spec` that has an EMPTY acceptance heading.
+    // The field is the answer; the heading is not.
+    zentaoVerify: { title: "需求名", body: "## Acceptance criteria\n", verify: "- [ ] 行为变更已断言" },
   };
 
   expect("criteria passes", judge(F.criteria).ok, true);
@@ -502,7 +566,15 @@ if (SELF_CHECK) {
   expect("a waiver is recorded", judge(F.waived).waived, true);
   expect("a hollow section fails", judge(F.hollow).ok, false);
   expect("a missing anchor fails", judge(F.anonchor).ok, false);
-  expect("an empty bullet fails", judge(F.emptybullet).ok, false);
+  expect("an empty checkbox fails", judge(F.emptybullet).ok, false);
+  // ...and the acceptance rule is what fails it. The earlier fixture failed on
+  // the anchor too, so it could not tell the two apart.
+  expect(
+    "an empty checkbox fails on the acceptance rule",
+    judge(F.emptybullet).findings.some((f) => f.id === "acceptance" && f.level === "fail"),
+    true,
+  );
+  expect("a note after the list is a pass", judge(F.noteAfterList).ok, true);
   // Warnings must never decide the verdict, or the gate gets switched off.
   expect("warnings do not fail a ticket", judge(F.criteria).findings.some((f) => f.level === "warn"), true);
   // An unresolved fork is a failure, and a waiver does not cover it: the waiver
@@ -528,6 +600,10 @@ if (SELF_CHECK) {
   expect("zentao `spec` is the body", zt[0].body.includes("src/a.ts"), true);
   expect("zentao HTML is stripped", /<p>/.test(zt[0].body), false);
   expect("zentao `verify` becomes acceptance", judge(zt[0]).ok, true);
+  // `verify` filled in beside a `spec` that has an EMPTY acceptance heading —
+  // the case a heading test discarded, because the heading was present.
+  const ztEmpty = ticketsFrom({ data: [{ id: 10, name: "需求名", spec: "<p>改 <code>src/a.ts</code></p><h2>Acceptance criteria</h2>", verify: "- [ ] a.ts 行为变更已断言" }] });
+  expect("zentao `verify` survives an empty heading in `spec`", judge(ztEmpty[0]).ok, true);
 
   // The manifest aggregation, driven through the same `ticketsFrom` + `judge`
   // path the CLI uses — not by counting strings in the output.

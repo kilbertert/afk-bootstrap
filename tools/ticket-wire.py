@@ -91,6 +91,10 @@ CHECK_STEP_TEMPLATE = r"""      # The shape gate above judges the ticket's POSIT
             echo "AFK_TICKET_REPORT"
           } >> "$GITHUB_OUTPUT"
 
+      # No `exit 0` here. It would only end THIS step — measured: the job runs
+      # on and implements the ticket anyway. The refusal registers itself in the
+      # same `refused` output the open-PR pre-flight uses, and every step that
+      # does work already gates on that one signal.
       - name: Refuse — the ticket is not one an agent can finish
         if: steps.shape.outputs.proceed == 'true' && steps.ticket.outputs.implementable == 'false'
         env:
@@ -108,7 +112,6 @@ CHECK_STEP_TEMPLATE = r"""      # The shape gate above judges the ticket's POSIT
           what to build and what "done" looks like.
           EOF
           )"
-          exit 0
 
 """
 
@@ -162,8 +165,19 @@ if [ -n "$next_open_number" ]; then
   rc_check=0
   node .sandcastle/ticket-check.mjs --json --strict <<<"$sub_json" >/dev/null 2>&1 || rc_check=$?
   if [ "$rc_check" != "0" ]; then
-    implementable="no"
-    ticket_report=$(node .sandcastle/ticket-check.mjs --json <<<"$sub_json" 2>&1 || true)
+    if [ ! -f .sandcastle/ticket-check.mjs ]; then
+      # The checker is not here, so its exit code says nothing about this ticket
+      # — and letting it stand would report EVERY leaf as unimplementable, which
+      # is how a gate gets removed. Say so and run; `agent-review` still sees the
+      # pull request. Measured: a migration publishes into a project whose
+      # `.sandcastle/` is its own, so "the script is always there" is not a fact
+      # this workflow can rely on.
+      echo "::warning::ticket-check.mjs is absent, so this leaf was not screened"
+      implementable="yes"
+    else
+      implementable="no"
+      ticket_report=$(node .sandcastle/ticket-check.mjs --json <<<"$sub_json" 2>&1 || true)
+    fi
   fi
 fi
 """,
@@ -273,6 +287,27 @@ def replace_body(text, name, new_body):
     return text.replace(old_block, new_block, 1)
 
 
+# Carried into the open-PR pre-flight, so a refused ticket stops the job there
+# rather than only ending its own refusal step. One signal for two refusal
+# reasons: every later step already gates on `preflight.refused`.
+CARRY_FORWARD_OLD = """        id: preflight
+        run: |
+          set -euo pipefail
+"""
+CARRY_FORWARD_NEW = """        id: preflight
+        run: |
+          set -euo pipefail
+          # The ticket refusal is carried forward into this step's own output, so
+          # `preflight.refused` is the single signal every later step already
+          # gates on. Two refusal reasons, one concept — a second output would
+          # mean touching every downstream `if:` and getting one of them wrong.
+          if [ "${{ steps.ticket.outputs.implementable }}" = "false" ]; then
+            echo "refused=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+"""
+
+
 def wire_single(path, text, doc):
     if MARKER in text:
         return None, "already wired"
@@ -282,11 +317,13 @@ def wire_single(path, text, doc):
     anchor = f"      - name: {OPEN_PR_STEP_NAME}\n"
     if text.count(anchor) != 1:
         die(3, f"{path}: expected exactly one `{OPEN_PR_STEP_NAME}` step, found {text.count(anchor)}")
-    text = text.replace(
-        anchor,
-        CHECK_STEP_TEMPLATE + anchor,
-        1,
-    )
+    text = text.replace(anchor, CHECK_STEP_TEMPLATE + anchor, 1)
+
+    # The carry-forward goes into the open-PR step, which the file already has,
+    # so it is a second edit rather than part of the template above.
+    if text.count(CARRY_FORWARD_OLD) != 1:
+        die(3, f"{path}: could not locate the open-PR pre-flight's run block")
+    text = text.replace(CARRY_FORWARD_OLD, CARRY_FORWARD_NEW, 1)
 
     open_pr = find_step(yaml.safe_load(text), OPEN_PR_STEP_NAME)
     condition = str(open_pr.get("if"))

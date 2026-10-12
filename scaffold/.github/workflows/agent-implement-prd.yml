@@ -104,8 +104,19 @@ jobs:
             rc_check=0
             node .sandcastle/ticket-check.mjs --json --strict <<<"$sub_json" >/dev/null 2>&1 || rc_check=$?
             if [ "$rc_check" != "0" ]; then
-              implementable="no"
-              ticket_report=$(node .sandcastle/ticket-check.mjs --json <<<"$sub_json" 2>&1 || true)
+              if [ ! -f .sandcastle/ticket-check.mjs ]; then
+                # The checker is not here, so its exit code says nothing about this ticket
+                # — and letting it stand would report EVERY leaf as unimplementable, which
+                # is how a gate gets removed. Say so and run; `agent-review` still sees the
+                # pull request. Measured: a migration publishes into a project whose
+                # `.sandcastle/` is its own, so "the script is always there" is not a fact
+                # this workflow can rely on.
+                echo "::warning::ticket-check.mjs is absent, so this leaf was not screened"
+                implementable="yes"
+              else
+                implementable="no"
+                ticket_report=$(node .sandcastle/ticket-check.mjs --json <<<"$sub_json" 2>&1 || true)
+              fi
             fi
           fi
 

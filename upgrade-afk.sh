@@ -3316,9 +3316,27 @@ if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 18 ]; then
     echo "migration reference missing: $S/scaffold/$REL" >&2
     exit 1
   fi
-  cp "$S/scaffold/$REL" "$WORK/$REL"
-  NEW_FILES="$NEW_FILES $REL"
-  note "added: $REL"
+  if [ ! -e "$TARGET/$REL" ]; then
+    cp "$S/scaffold/$REL" "$WORK/$REL"
+    NEW_FILES="$NEW_FILES $REL"
+    note "added: $REL"
+  elif grep -qF "BARE_CHECKBOX_RE" "$TARGET/$REL"; then
+    # Already current. Reported rather than copied, so a project's own edit
+    # inside the current shape is not overwritten by a re-run.
+    note "$REL: already present"
+  else
+    # A project that has written its own checker, or is carrying an earlier one,
+    # keeps it. Overwriting would delete a rule its author added — and unlike a
+    # prompt, this file is executable: the rules in it are the ones the gate
+    # actually applies. Same policy as the ADR checker: replace only a copy that
+    # still matches a shape this template shipped.
+    say "$REL differs from what this template ships; left as the project's own."
+    say "  The new pre-flight runs whatever is at that path. If it is an earlier"
+    say "  ticket-check.mjs, merge these in by hand:"
+    say "    - a bare \`- [ ]\` is not a criterion (BARE_CHECKBOX_RE)"
+    say "    - the criteria list stops at the first blank line"
+    say "    - a populated ZenTao \`verify\` fills an empty acceptance section"
+  fi
 
   # 2. The write-back duty, in two prompts.
   #

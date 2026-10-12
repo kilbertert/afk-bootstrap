@@ -79,6 +79,18 @@ CHECK_STEP_TEMPLATE = r"""      # The shape gate above judges the ticket's POSIT
         run: |
           set -uo pipefail
           gh issue view "$ISSUE_NUMBER" --json title,body > "$AFK_TICKET_TMP"
+          # Clear these before node loads the checker. Other hooks in this
+          # workflow (codebase-memory, serena) write their own caches and
+          # node_modules here, and a stale one makes `node` exit non-zero before
+          # the checker's first line — which reads as "the ticket is not
+          # implementable". A non-zero exit means the ticket failed ONLY if the
+          # checker is actually there and actually ran.
+          rm -rf node_modules/.cache .serena 2>/dev/null || true
+          if [ ! -f .sandcastle/ticket-check.mjs ]; then
+            echo "::warning::ticket-check.mjs is absent, so this ticket was not screened"
+            echo "implementable=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if node .sandcastle/ticket-check.mjs --json --strict < "$AFK_TICKET_TMP"; then
             echo "implementable=true" >> "$GITHUB_OUTPUT"
             exit 0
@@ -112,6 +124,16 @@ CHECK_STEP_TEMPLATE = r"""      # The shape gate above judges the ticket's POSIT
           what to build and what "done" looks like.
           EOF
           )"
+
+"""
+
+# A skipped leaf leaves `agent:implement` ON THE PRD. GitHub cannot emit another
+# labeled event for a label that is already present, so re-adding it after the
+# leaf is repaired does nothing and the loop never resumes — the comment on the
+# skip step promises otherwise. Clearing it is what makes that promise true.
+PRD_CLEAR_STEP = """      - name: Clear the PRD's implement label so the loop can resume
+        if: steps.shape.outputs.mode == 'skip-unimplementable'
+        run: gh issue edit \"$PRD_NUMBER\" --remove-label \"agent:implement\" || true
 
 """
 
@@ -162,19 +184,19 @@ implementable="yes"
 ticket_report=""
 if [ -n "$next_open_number" ]; then
   sub_json=$(gh issue view "$next_open_number" --json title,body)
-  rc_check=0
-  node .sandcastle/ticket-check.mjs --json --strict <<<"$sub_json" >/dev/null 2>&1 || rc_check=$?
-  if [ "$rc_check" != "0" ]; then
-    if [ ! -f .sandcastle/ticket-check.mjs ]; then
-      # The checker is not here, so its exit code says nothing about this ticket
-      # — and letting it stand would report EVERY leaf as unimplementable, which
-      # is how a gate gets removed. Say so and run; `agent-review` still sees the
-      # pull request. Measured: a migration publishes into a project whose
-      # `.sandcastle/` is its own, so "the script is always there" is not a fact
-      # this workflow can rely on.
-      echo "::warning::ticket-check.mjs is absent, so this leaf was not screened"
-      implementable="yes"
-    else
+  rm -rf node_modules/.cache .serena 2>/dev/null || true
+  if [ ! -f .sandcastle/ticket-check.mjs ]; then
+    # No checker: its exit code would say nothing about this ticket, and letting
+    # it stand reports EVERY leaf as unimplementable — which is how a gate gets
+    # removed. Say so and run; `agent-review` still sees the pull request. A
+    # migration publishes into a project whose `.sandcastle/` is its own, so
+    # "the script is always there" is not a fact this workflow can rely on.
+    echo "::warning::ticket-check.mjs is absent, so this leaf was not screened"
+    implementable="yes"
+  else
+    rc_check=0
+    node .sandcastle/ticket-check.mjs --json --strict <<<"$sub_json" >/dev/null 2>&1 || rc_check=$?
+    if [ "$rc_check" != "0" ]; then
       implementable="no"
       ticket_report=$(node .sandcastle/ticket-check.mjs --json <<<"$sub_json" 2>&1 || true)
     fi
@@ -325,23 +347,16 @@ def wire_single(path, text, doc):
         die(3, f"{path}: could not locate the open-PR pre-flight's run block")
     text = text.replace(CARRY_FORWARD_OLD, CARRY_FORWARD_NEW, 1)
 
-    open_pr = find_step(yaml.safe_load(text), OPEN_PR_STEP_NAME)
-    condition = str(open_pr.get("if"))
-    if "steps.ticket.outputs.implementable" not in condition:
-        # Anchored on the step's NAME line together with its `if:`, not on the
-        # `if:` alone. The check step just inserted carries the same condition
-        # string at the same indent, so a bare `if:` anchor matches twice and
-        # `replace(…, 1)` rewrites the check instead of the gate it was aimed at
-        # — leaving the open-PR pre-flight ungated while printing success.
-        old = f"      - name: {OPEN_PR_STEP_NAME}\n        if: {condition}\n"
-        if text.count(old) != 1:
-            die(3, f"{path}: could not re-anchor the open-PR pre-flight's `if:` (matched {text.count(old)})")
-        text = text.replace(
-            old,
-            f"      - name: {OPEN_PR_STEP_NAME}\n"
-            f"        if: {condition} && steps.ticket.outputs.implementable != 'false'\n",
-            1,
-        )
+    # The open-PR step keeps its own condition and gains NOTHING. Gating it on
+    # `implementable != 'false'` was the defect, twice over: a refused ticket
+    # then SKIPS this step, so the carry-forward below never runs, `refused`
+    # never becomes `true`, and every step that gates on `preflight.refused`
+    # proceeds to implement the ticket the refusal just refused. The guard
+    # disabled the mechanism it was supposed to feed.
+    #
+    # Nothing needs to be added here — the step already carries the scaffold's
+    # own `if: steps.shape.outputs.proceed == 'true'`, and the carry-forward is
+    # what makes a refusal visible to it.
     return text, "wired"
 
 
@@ -375,7 +390,7 @@ def wire_prd(path, text, doc):
     anchor = f"      - name: {NESTED_PRD_STEP_NAME}\n"
     if text.count(anchor) != 1:
         die(3, f"{path}: expected exactly one `{NESTED_PRD_STEP_NAME}` step, found {text.count(anchor)}")
-    text = text.replace(anchor, SKIP_STEP_TEMPLATE + anchor, 1)
+    text = text.replace(anchor, PRD_CLEAR_STEP + SKIP_STEP_TEMPLATE + anchor, 1)
     return text, "wired"
 
 
@@ -387,9 +402,25 @@ def assert_single(path, text):
             die(2, f"{path}: `{required}` is not in the parsed result")
     if names.index(CHECK_STEP_NAME) > names.index(OPEN_PR_STEP_NAME):
         die(2, f"{path}: the check landed after the open-PR pre-flight")
+
+    # What has to be true of the open-PR step is the OPPOSITE of what an earlier
+    # version asserted. It must NOT be gated on the ticket check: a refused
+    # ticket would skip it, the carry-forward inside it would never run, and
+    # `preflight.refused` — the one signal every later step gates on — would
+    # stay `false` while the refusal's own step reported success. Assert the
+    # guard is ABSENT and the carry-forward is PRESENT; asserting the guard was
+    # present is what let this ship twice.
     open_pr = find_step(doc, OPEN_PR_STEP_NAME)
-    if "steps.ticket.outputs.implementable" not in str(open_pr.get("if")):
-        die(2, f"{path}: the open-PR pre-flight is not gated on the check")
+    if "steps.ticket.outputs.implementable" in str(open_pr.get("if")):
+        die(2, f"{path}: the open-PR pre-flight is gated on the check, so a refused ticket skips it and never records the refusal")
+    if "steps.ticket.outputs.implementable" not in str(open_pr.get("run")):
+        die(2, f"{path}: the open-PR pre-flight does not carry the ticket refusal forward")
+
+    transition = find_step(doc, "Transition labels — remove implement/blocked, add in-progress")
+    if transition is None:
+        die(2, f"{path}: no `Transition labels` step to gate")
+    if "preflight.outputs.refused" not in str(transition.get("if")):
+        die(2, f"{path}: the transition step does not gate on the refusal signal")
 
 
 def assert_prd(path, text):

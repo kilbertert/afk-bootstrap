@@ -236,14 +236,26 @@ function sectionBody(lines, startIndex) {
   return body;
 }
 
+/**
+ * An item's text, with the marker removed.
+ *
+ * `ITEM_RE` ends in `\S`, so `replace(ITEM_RE, "")` strips the marker AND one
+ * character of the content — enough to turn `- TBD` into `BD`, which is not a
+ * placeholder any more and passed as a real criterion. Measured. The marker is
+ * captured separately instead, and the text is whatever follows it.
+ */
+function itemText(line) {
+  const m = /^\s*(?:[-*+] +\[[ xX]\]|[-*+] +|\d+[.)] +)([\s\S]*)$/.exec(line);
+  return m ? m[1].trim() : "";
+}
+
 /** Is this list of lines a criterion — non-empty, and not a placeholder? */
 function itemLines(body) {
-  return body.filter(
-    (l) =>
-      ITEM_RE.test(l) &&
-      !BARE_CHECKBOX_RE.test(l) &&
-      !EMPTY_RE.test(l.replace(ITEM_RE, "").trim()),
-  );
+  return body.filter((l) => {
+    if (!ITEM_RE.test(l) || BARE_CHECKBOX_RE.test(l)) return false;
+    const text = itemText(l);
+    return text !== "" && !EMPTY_RE.test(text);
+  });
 }
 
 /**
@@ -419,6 +431,11 @@ function normalise(item) {
       .replace(/<li[^>]*>/gi, "- ")
       .replace(/<h([1-6])[^>]*>/gi, (_m, n) => "\n" + "#".repeat(Number(n)) + " ")
       .replace(/<br\s*\/?>/gi, "\n")
+      // `<code>`/`<pre>` is how ZenTao marks a symbol or a literal — the same
+      // thing a markdown backtick marks — so dropping the tag loses the anchor
+      // and a symbol-bearing ticket reads as one that names nothing. Convert it
+      // to the spelling ANCHOR_RE already recognises, before the tags go.
+      .replace(/<(code|pre)[^>]*>([\s\S]*?)<\/\1>/gi, (_m, _t, inner) => `\`${inner.trim()}\``)
       .replace(/<[^>]+>/g, "")
       .replace(/&nbsp;/g, " ")
       .replace(/&lt;/g, "<")
@@ -442,12 +459,23 @@ function normalise(item) {
     // that shape, finds nothing under it, and reports the ticket as empty while
     // the answer sits two lines below. Measured, after an earlier version did
     // exactly that.
+    // A list or a checkbox is already a criterion; prose is not, so it is given
+    // the marker the rule asks for. ZenTao's `verify` field is written by hand
+    // and often a sentence ("报告显示更新后的数值"), and inserting that verbatim
+    // under the heading left the ticket failing the rule that the field exists
+    // to answer. Each non-empty line becomes one criterion.
+    const crit = verify
+      .split("\n")
+      .map((l) => l.trim())
+      .filter(Boolean)
+      .map((l) => (ITEM_RE.test(l) ? l : `- ${l}`))
+      .join("\n");
     const lines = body.split("\n");
     const at = lines.findIndex((l) => ACCEPTANCE_RE.test(l));
     body =
       at >= 0
-        ? [...lines.slice(0, at + 1), "", verify, ...lines.slice(at + 1)].join("\n")
-        : `${body}\n\n## Acceptance criteria\n\n${verify}\n`;
+        ? [...lines.slice(0, at + 1), "", crit, ...lines.slice(at + 1)].join("\n")
+        : `${body}\n\n## Acceptance criteria\n\n${crit}\n`;
   }
   return { title: String(title), body, label: item.number !== undefined ? `#${item.number}` : String(title).slice(0, 48) };
 }
@@ -551,6 +579,17 @@ if (SELF_CHECK) {
     // ZenTao's `verify` beside a `spec` that has an EMPTY acceptance heading.
     // The field is the answer; the heading is not.
     zentaoVerify: { title: "需求名", body: "## Acceptance criteria\n", verify: "- [ ] 行为变更已断言" },
+    // The same field written as PROSE, which is how people actually fill it in.
+    // Inserting it verbatim left the ticket failing the rule the field exists to
+    // answer, because the criteria rule wants list items.
+    zentaoProse: { title: "需求名", body: "改 `app/report.py`。\n", verify: "报告显示更新后的数值" },
+    // Placeholders: the bullet arm of `ITEM_RE` eats one content character, so
+    // `- TBD` became `BD` and passed as a real criterion. Measured.
+    placeholder: { title: "调整 `src/app.ts`", body: "改 `src/app.ts`。\n\n## Acceptance criteria\n\n- TBD\n" },
+    placeholderCheckbox: { title: "调整 `src/app.ts`", body: "改 `src/app.ts`。\n\n## Acceptance criteria\n\n- [ ] TODO\n" },
+    // A symbol inside ZenTao's `<code>` is the same anchor a markdown backtick
+    // is, and stripping the tag lost it.
+    zentaoCode: { title: "需求名", body: "<p>改 <code>ScopeContext</code></p>", verify: "行为变更已断言" },
   };
 
   expect("criteria passes", judge(F.criteria).ok, true);
@@ -575,6 +614,21 @@ if (SELF_CHECK) {
     true,
   );
   expect("a note after the list is a pass", judge(F.noteAfterList).ok, true);
+  // Placeholders are not criteria, whatever marker they carry.
+  expect("`- TBD` is not a criterion", judge(F.placeholder).ok, false);
+  expect("`- [ ] TODO` is not a criterion", judge(F.placeholderCheckbox).ok, false);
+  expect(
+    "a placeholder fails on the acceptance rule",
+    judge(F.placeholder).findings.some((f) => f.id === "acceptance" && f.level === "fail"),
+    true,
+  );
+  // Prose `verify` is an answer; `<code>` is a code span. Both go through
+  // `normalise` — that is where the `verify` mapping lives, and judging the raw
+  // fixture would measure nothing (which is how the earlier `zentaoVerify`
+  // fixture passed while its field was never read at all).
+  expect("a prose `verify` is acceptance", judge(normalise(F.zentaoProse)).ok, true);
+  expect("a `<code>` symbol is an anchor", judge(normalise(F.zentaoCode)).ok, true);
+  expect("a prose `verify` is not left raw", judge(F.zentaoProse).ok, false);
   // Warnings must never decide the verdict, or the gate gets switched off.
   expect("warnings do not fail a ticket", judge(F.criteria).findings.some((f) => f.level === "warn"), true);
   // An unresolved fork is a failure, and a waiver does not cover it: the waiver

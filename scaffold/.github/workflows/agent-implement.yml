@@ -101,8 +101,6 @@ jobs:
           gh issue edit "$ISSUE_NUMBER" --add-label "agent:blocked" || true
           gh issue comment "$ISSUE_NUMBER" --body "Refused to run: this issue is a sub-issue of #${PARENT_NUMBER}. Sub-issues are not labeled directly — add \`agent:implement\` to the parent PRD instead. Cleared \`agent:implement\` and added \`agent:blocked\`."
 
-
-
       # The shape gate above judges the ticket's POSITION — is it a leaf, is it
       # blocked, is it a PRD. This one judges the ticket ITSELF, which nothing
       # has ever done: whether it says what to build and what "done" looks like.
@@ -127,6 +125,18 @@ jobs:
         run: |
           set -uo pipefail
           gh issue view "$ISSUE_NUMBER" --json title,body > "$AFK_TICKET_TMP"
+          # Clear these before node loads the checker. Other hooks in this
+          # workflow (codebase-memory, serena) write their own caches and
+          # node_modules here, and a stale one makes `node` exit non-zero before
+          # the checker's first line — which reads as "the ticket is not
+          # implementable". A non-zero exit means the ticket failed ONLY if the
+          # checker is actually there and actually ran.
+          rm -rf node_modules/.cache .serena 2>/dev/null || true
+          if [ ! -f .sandcastle/ticket-check.mjs ]; then
+            echo "::warning::ticket-check.mjs is absent, so this ticket was not screened"
+            echo "implementable=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
           if node .sandcastle/ticket-check.mjs --json --strict < "$AFK_TICKET_TMP"; then
             echo "implementable=true" >> "$GITHUB_OUTPUT"
             exit 0
@@ -162,7 +172,7 @@ jobs:
           )"
 
       - name: Pre-flight — refuse if an open PR already exists for this issue
-        if: steps.shape.outputs.proceed == 'true' && steps.ticket.outputs.implementable != 'false'
+        if: steps.shape.outputs.proceed == 'true'
         id: preflight
         run: |
           set -euo pipefail

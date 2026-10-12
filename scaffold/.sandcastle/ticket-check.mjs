@@ -664,6 +664,10 @@ if (SELF_CHECK) {
   const many = ticketsFrom({ data: [{ title: F.criteria.title, spec: F.criteria.body }, { title: F.zentao.title, spec: "" }] });
   expect("manifest counts every ticket", many.length, 2);
   expect("manifest counts passes", many.filter((t) => judge(t).ok).length, 1);
+  // An empty list is a complete instruction on its own; an empty list WITH a
+  // threshold is a gate that judged nothing. The two are not the same answer,
+  // and the difference is the whole reason `--min-pass` exists.
+  expect("an empty manifest judges nothing", ticketsFrom({ data: [] }).length, 0);
 
   // Negative controls. Each must turn a green assertion red — a self-check that
   // cannot fail is a self-check that proves nothing.
@@ -700,6 +704,17 @@ try {
     const raw = MANIFEST === "-" || MANIFEST === "" ? readStdin() : readFileSync(MANIFEST, "utf8");
     const tickets = ticketsFrom(JSON.parse(raw));
     if (tickets.length === 0) {
+      // An empty list with a threshold is a gate that judged nothing — the same
+      // shape as an empty `--base`. Without a threshold it is just an empty
+      // list, and reporting that is the honest answer.
+      if (MIN_PASS_RAW !== undefined && MIN_PASS_RAW !== "") {
+        console.error(
+          "ticket check failed: the list is empty, so the threshold was never applied —\n" +
+            "  a gate that judged nothing is not a passing gate. Widen the query, or drop\n" +
+            "  `--min-pass` if an empty list is the expected result.",
+        );
+        process.exit(1);
+      }
       console.log("ticket check: the list is empty — nothing to judge");
       process.exit(0);
     }

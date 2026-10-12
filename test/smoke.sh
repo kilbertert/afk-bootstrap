@@ -2645,3 +2645,120 @@ grep -qF 'old notes/team terms.md' <<<"$SPACED_OUT" \
   || { echo "a spaced document path was not reported intact" >&2; exit 1; }
 
 echo "$LANGUAGE smoke test passed"
+
+# 1.7.18: the ticket-eligibility pre-flight.
+#
+# The shape gate refuses a ticket by its POSITION — a leaf, unblocked, not a
+# PRD. Nothing ever judged the ticket ITSELF: whether it says what to build and
+# what "done" looks like. So `agent:implement` opened a door whose other side
+# nobody checked, and — measured across the four consumer repositories — of
+# twelve tickets carrying `ready-for-agent`, ONE had acceptance criteria.
+#
+# Built from the CURRENT scaffold with the added parts removed, not from
+# `legacy-1.1.x`: that snapshot predates `implement-prd/`, so a tree built from
+# it would exercise the "file absent" path and never the insert itself.
+P1718="$TMP/upgrade-1717-ticket-gate-$LANGUAGE"
+rm -rf "$P1718"
+mkdir -p "$P1718/.sandcastle/implement-prd" "$P1718/.github/workflows" "$P1718/docs/adr"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$P1718/"
+cp "$S/scaffold/.sandcastle/consensus-contract.json" "$P1718/.sandcastle/"
+printf 'FROM node:24\n' > "$P1718/.sandcastle/Dockerfile"
+cp "$S/scaffold/.sandcastle/repo-map.mjs" "$S/scaffold/.sandcastle/repo-map.check.mjs" "$P1718/.sandcastle/"
+python3 - "$S" "$P1718" <<'PREMIG' || { echo "could not build the pre-1.7.18 fixture" >&2; exit 1; }
+import pathlib, sys
+S, dst = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+
+prd = (S / "scaffold/.sandcastle/implement-prd/prompt.md").read_text()
+lines = prd.split("\n")
+at = next(i for i, l in enumerate(lines) if "Do not touch work that belongs" in l)
+end = at
+while end + 1 < len(lines) and not lines[end + 1].startswith("# "):
+    end += 1
+out = "\n".join(lines[: at + 1] + lines[end + 1 :])
+assert "Source ticket:" not in out, "the strip left the write-back paragraph behind"
+(dst / ".sandcastle/implement-prd/prompt.md").write_text(out)
+
+node_md = (S / "templates/implement.node.md").read_text()
+out = "\n".join(node_md.split("\n")[:-9])
+assert "Source ticket:" not in out, "the strip left the write-back paragraph behind"
+(dst / ".sandcastle/implement.md").write_text(out)
+PREMIG
+node -e '
+  const fs = require("fs");
+  const p = process.argv[1];
+  const m = JSON.parse(fs.readFileSync(p, "utf8"));
+  m.afk_template_version = "1.7.17";
+  m.templateVersion = 1;
+  fs.writeFileSync(p, JSON.stringify(m, null, 2) + "\n");
+' "$P1718/.afk-bootstrap.json"
+
+"$S/upgrade-afk.sh" "$P1718" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project at 1.7.17" >&2; exit 1; }
+
+for f in .sandcastle/ticket-check.mjs docs/agents/ticket-contract.md; do
+  [ -f "$P1718/$f" ] || { echo "1.7.18 did not add $f" >&2; exit 1; }
+done
+grep -qF 'Source ticket:' "$P1718/.sandcastle/implement-prd/prompt.md" \
+  || { echo "the PRD prompt does not ask for the write-back" >&2; exit 1; }
+grep -qF 'Source ticket:' "$P1718/.sandcastle/implement.md" \
+  || { echo "the local implement prompt does not ask for the write-back" >&2; exit 1; }
+
+# The insert must land the SAME bytes the scaffold carries. A freshly
+# bootstrapped project and an upgraded one have to agree about this rule, or the
+# two drift and the divergence is invisible until the next upgrade.
+python3 - "$P1718" "$S" <<'IDENT' || { echo "the migrated paragraph differs from the scaffold's" >&2; exit 1; }
+import pathlib, sys
+def block(p):
+    lines = pathlib.Path(p).read_text().split("\n")
+    at = next(i for i, l in enumerate(lines) if "came from an outside ticket" in l)
+    end = next(i for i in range(at, len(lines)) if lines[i].startswith("reach;"))
+    return lines[at : end + 1]
+dst, src = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+if block(dst / ".sandcastle/implement-prd/prompt.md") != block(
+    src / "scaffold/.sandcastle/implement-prd/prompt.md"
+):
+    sys.exit(1)
+IDENT
+
+# The published checker, run where it was published.
+node "$P1718/.sandcastle/ticket-check.mjs" --self-check >/dev/null \
+  || { echo "the published ticket-check fails its own self-check" >&2; exit 1; }
+
+# The workflow pre-flight, asserted on the PARSE rather than on the bytes.
+python3 - "$P1718/.github/workflows/agent-implement.yml" <<'WIRED' \
+  || { echo "the single-issue workflow was not wired" >&2; exit 1; }
+import sys, yaml
+steps = list(yaml.safe_load(open(sys.argv[1]))["jobs"].values())[0]["steps"]
+names = [s.get("name") for s in steps]
+check = "Pre-flight — refuse if the ticket is not implementable"
+openpr = "Pre-flight — refuse if an open PR already exists for this issue"
+if check not in names or names.index(check) > names.index(openpr):
+    sys.exit("the check is missing, or landed after the open-PR pre-flight")
+if "ticket-check.mjs --json --strict" not in steps[names.index(check)]["run"]:
+    sys.exit("the check step does not run the checker")
+if "steps.ticket.outputs.implementable" not in str(steps[names.index(openpr)]["if"]):
+    sys.exit("a refused ticket would still go on to open a pull request")
+WIRED
+
+# Negative control: strip the pre-flight and the same predicate must stop
+# holding. Without this the block only proves the YAML parses.
+NEGW="$TMP/ticket-wire-negative-$LANGUAGE.yml"
+cp "$P1718/.github/workflows/agent-implement.yml" "$NEGW"
+python3 - "$NEGW" <<'STRIP'
+import pathlib, sys, yaml
+p = pathlib.Path(sys.argv[1])
+doc = yaml.safe_load(p.read_text())
+job = list(doc["jobs"].values())[0]
+job["steps"] = [s for s in job["steps"] if not str(s.get("name", "")).startswith("Pre-flight — refuse if the ticket")]
+p.write_text(yaml.safe_dump(doc, allow_unicode=True, sort_keys=False))
+STRIP
+if python3 - "$NEGW" <<'NEGCHK' >/dev/null 2>&1; then
+import sys, yaml
+names = [
+    s.get("name")
+    for s in list(yaml.safe_load(open(sys.argv[1]))["jobs"].values())[0]["steps"]
+]
+sys.exit(0 if "Pre-flight — refuse if the ticket is not implementable" in names else 1)
+NEGCHK
+  echo "negative control: the pre-flight survived being stripped" >&2; exit 1
+fi

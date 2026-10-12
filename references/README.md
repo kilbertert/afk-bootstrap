@@ -90,3 +90,20 @@ edits instead of overwriting it.
   that list plus the lines later releases added to the checkout, so the comparison
   removes those lines from BOTH sides before comparing. Leaving them in is what
   made the first version miss every repository on this host.
+
+- `implement-prd-prompt.1.7.17.md` — the PRD implement prompt as 1.7.17 shipped
+  it: the sub-issue's spec is pulled in and nothing says what to do with the
+  result once the work is done. The 1.7.18 step does not compare against this —
+  it INSERTS a paragraph after a line the prompt still contains, and the smoke
+  fixture builds the pre-migration shape by removing what 1.7.18 adds from the
+  current scaffold. Kept anyway as the before-picture: an anchor that drifts is
+  easier to see next to the text it used to be, and the step's "already present"
+  path keys on `Source ticket:`, so this file is what a project at 1.7.17 has.
+
+- `implement.node.1.7.17.md` — the local-run implement prompt as 1.7.17 shipped
+  it. The 1.7.18 write-back paragraph is appended after the document's closing
+  line, which is where `templates/implement.*.md` now carry it too, so a fresh
+  bootstrap and an upgrade produce the same file for the same rule. Rendered
+  prompts are project-owned after bootstrap (a project may reword them), which is
+  why the step anchors on the closing line and inserts a fixed paragraph rather
+  than copying a template over the result.

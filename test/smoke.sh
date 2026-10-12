@@ -2736,8 +2736,13 @@ if check not in names or names.index(check) > names.index(openpr):
     sys.exit("the check is missing, or landed after the open-PR pre-flight")
 if "ticket-check.mjs --json --strict" not in steps[names.index(check)]["run"]:
     sys.exit("the check step does not run the checker")
-if "steps.ticket.outputs.implementable" not in str(steps[names.index(openpr)]["if"]):
-    sys.exit("a refused ticket would still go on to open a pull request")
+if "steps.ticket.outputs.implementable" in str(steps[names.index(openpr)]["if"]):
+    sys.exit("the open-PR step is gated on the ticket check, so a refused ticket skips it")
+if "steps.ticket.outputs.implementable" not in str(steps[names.index(openpr)]["run"]):
+    sys.exit("the open-PR step does not carry the refusal into `refused`")
+transition = "Transition labels — remove implement/blocked, add in-progress"
+if "preflight.outputs.refused" not in str(steps[names.index(transition)]["if"]):
+    sys.exit("the transition step does not gate on the refusal signal")
 WIRED
 
 # Negative control: strip the pre-flight and the same predicate must stop

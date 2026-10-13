@@ -3387,3 +3387,195 @@ NEGWB
 fi
 
 echo "1.7.21 handoff checks passed"
+
+# 1.7.22: the alternatives detector accepts an inline carrier, and the sweep
+# stops demanding the one fix its own convention forbids.
+#
+# Two defects, both measured:
+#
+#   1. `ALTERNATIVES_RE` required a HEADING. AI-Ops 0006 line 15 carries
+#      "- 被否掉的替代形态：(a) …；(b) …；(c) …" — the exact phrase the regex hunts
+#      for, with three rejected options and their reasons — and the check reported
+#      "no alternatives section … a record of what was chosen and not what was
+#      rejected". The message was false about that record. 3 records on this host
+#      are in that shape; the other 11 genuinely have no weighing.
+#
+#   2. `--all` FAILED on a record whose alternatives section is absent, while the
+#      convention says those records "are not worth a mechanical rewrite, and
+#      nobody should invent alternatives a record never weighed just to turn a
+#      check green". A gate whose only honest exits are fabrication or deletion is
+#      enforcing the opposite of the rule.
+P1722="$TMP/adr-tiers-$LANGUAGE"
+rm -rf "$P1722"
+mkdir -p "$P1722/docs/adr"
+cp "$S/scaffold/.sandcastle/adr.check.mjs" "$P1722/adr.check.mjs"
+git -C "$P1722" init -q -b work
+git -C "$P1722" config user.email t@e.x
+git -C "$P1722" config user.name t
+cat > "$P1722/docs/adr/0001-baseline.md" <<'ADR'
+# Baseline
+
+Status: Accepted
+
+## Decision
+x
+
+## Alternatives Considered
+- Option B: its strongest case is …, and it lost because …
+ADR
+git -C "$P1722" add -A
+git -C "$P1722" -c commit.gpgsign=false commit -qm "chore: baseline"
+git -C "$P1722" branch -q main
+
+adr_run() { ( cd "$P1722" && node adr.check.mjs "$@" ) >/tmp/adr-out 2>&1; echo $?; }
+
+# (a) An inline carrier counts. No heading; the phrase rides a list item.
+cat > "$P1722/docs/adr/0002-inline.md" <<'ADR'
+# Inline carrier
+
+Status: Accepted
+
+## Decision
+x
+
+## Consequences
+- 被否掉的替代形态：(a) 由入口中介——多一次往返；(b) 维护白名单——需要一份不在我们手里的清单。
+ADR
+[ "$(adr_run --all)" = "0" ] \
+  || { echo "an inline alternatives carrier was not recognised" >&2; cat /tmp/adr-out >&2; exit 1; }
+grep -q "0002-inline" /tmp/adr-out \
+  && { echo "a record with an inline carrier was still reported" >&2; cat /tmp/adr-out >&2; exit 1; }
+rm "$P1722/docs/adr/0002-inline.md"
+
+# (b) A record with `Status:` and NO weighing: advisory under the sweep, failure
+#     when the diff touches it. One fixture, two modes — that IS the tier.
+cat > "$P1722/docs/adr/0003-nostatus-alt.md" <<'ADR'
+# No weighing at all
+
+Status: Accepted
+
+## Decision
+x
+ADR
+[ "$(adr_run --all)" = "0" ] \
+  || { echo "the sweep failed on a record it may not honestly ask anyone to finish" >&2; cat /tmp/adr-out >&2; exit 1; }
+grep -q "advisory: 0003-nostatus-alt" /tmp/adr-out \
+  || { echo "the sweep dropped the finding instead of reporting it" >&2; cat /tmp/adr-out >&2; exit 1; }
+git -C "$P1722" add -A
+git -C "$P1722" -c commit.gpgsign=false commit -qm "chore: record"
+[ "$(adr_run --base main)" != "0" ] \
+  || { echo "a touched record with no weighing passed the diff gate" >&2; cat /tmp/adr-out >&2; exit 1; }
+
+# (c) A heading over nothing claims a weighing — that fails in BOTH modes, and
+#     needs no memory to see or to fix.
+cat > "$P1722/docs/adr/0004-empty-heading.md" <<'ADR'
+# Claimed weighing
+
+Status: Accepted
+
+## Decision
+x
+
+## Alternatives Considered
+
+ADR
+[ "$(adr_run --all)" != "0" ] \
+  || { echo "an empty alternatives heading passed the sweep" >&2; exit 1; }
+[ "$(adr_run --base main)" != "0" ] \
+  || { echo "an empty alternatives heading passed the diff gate" >&2; exit 1; }
+rm "$P1722/docs/adr/0004-empty-heading.md"
+
+# (d) No `Status:` is a FACT, not a memory — it fails in both modes so the sweep
+#     cannot be used to drift away from it. Asserted, because it was demoted in
+#     an earlier draft of this change and a later reader deserves the reason.
+cat > "$P1722/docs/adr/0005-nostatus.md" <<'ADR'
+# No status
+
+## Decision
+x
+
+## Alternatives Considered
+- Option B: …, lost because …
+ADR
+[ "$(adr_run --all)" != "0" ] \
+  || { echo "a record with no Status passed the sweep" >&2; exit 1; }
+[ "$(adr_run --base main)" != "0" ] \
+  || { echo "a record with no Status passed the diff gate" >&2; exit 1; }
+
+# Negative control: put the inline carrier back under a heading and the same
+# predicate must stop holding — otherwise (a) would pass on a detector that
+# simply accepts everything.
+cat > "$P1722/docs/adr/0006-fake.md" <<'ADR'
+# Fake
+
+Status: Accepted
+
+## Decision
+x
+
+## Consequences
+- nothing about rejected options is written here
+ADR
+if grep -qE '^(?:[-*+]\s+|\*\*|__)?\s*(?:alternatives\b|rejected\b|备选方案|替代方案|被否)' \
+   "$P1722/docs/adr/0006-fake.md"; then
+  echo "negative control: an unrelated bullet matched the inline-carrier pattern" >&2; exit 1
+fi
+
+echo "1.7.22 alternatives-detector checks passed"
+
+# 1.7.22 also fixes a latent bug it found on the way: the 1.7.12 step replaced
+# `.sandcastle/adr.check.mjs` UNCONDITIONALLY.
+#
+# Its gate is `to_patch -ge 12`, which is true on every later upgrade too, so it
+# re-runs for a project already at 1.7.21 — and an unconditional `cp` then
+# overwrites a checker the project had edited, before any later step can read it.
+# Measured: a project-edited checker came out of a 1.7.21 -> 1.7.22 run
+# byte-identical to the template, and the 1.7.22 step then reported "already
+# reads more than a heading" about a file whose edit that `cp` had destroyed.
+# The comment said "a project that never had this file"; the code did not say it.
+#
+# The four live repositories all carry an unedited copy, so this never bit in
+# production — it is a defect that only fires for a project that edits its own
+# checker, which is exactly the case the surrounding machinery exists to protect.
+PGUARD="$TMP/adr-guard-edit-$LANGUAGE"
+rm -rf "$PGUARD"
+mkdir -p "$PGUARD/.sandcastle" "$PGUARD/.github/workflows"
+git -C "$PGUARD" init -q -b work
+git -C "$PGUARD" config user.email t@e.x
+git -C "$PGUARD" config user.name t
+cp "$S/references/adr.check.mjs.1.7.21" "$PGUARD/.sandcastle/adr.check.mjs"
+printf '\n// PROJECT-EDIT-MARKER\n' >> "$PGUARD/.sandcastle/adr.check.mjs"
+printf '{"afk_template_version":"1.7.21","templateVersion":1,"repository":"kilbertert/guard","cron_hour":13}\n' > "$PGUARD/.afk-bootstrap.json"
+printf 'FROM node:24\n' > "$PGUARD/.sandcastle/Dockerfile"
+cp "$S/scaffold/.sandcastle/repo-map.mjs" "$S/scaffold/.sandcastle/repo-map.check.mjs" \
+   "$S/scaffold/.sandcastle/consensus-contract.json" "$PGUARD/.sandcastle/"
+"$S/upgrade-afk.sh" "$PGUARD" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project with an edited checker" >&2; exit 1; }
+grep -q 'PROJECT-EDIT-MARKER' "$PGUARD/.sandcastle/adr.check.mjs" \
+  || { echo "an upgrade destroyed a project's own edit to its checker" >&2; exit 1; }
+if grep -q 'INLINE_ALTERNATIVES_RE' "$PGUARD/.sandcastle/adr.check.mjs"; then
+  echo "the template overwrote a project-edited checker instead of reporting it" >&2; exit 1
+fi
+
+# Negative control: an UNEDITED checker still gets restaged. Without this the
+# guard above proves only that the migration skips the file for every project.
+PCLEAN="$TMP/adr-guard-clean-$LANGUAGE"
+rm -rf "$PCLEAN"
+mkdir -p "$PCLEAN/.sandcastle" "$PCLEAN/.github/workflows" "$PCLEAN/docs/agents"
+git -C "$PCLEAN" init -q -b work
+git -C "$PCLEAN" config user.email t@e.x
+git -C "$PCLEAN" config user.name t
+cp "$S/references/adr.check.mjs.1.7.21" "$PCLEAN/.sandcastle/adr.check.mjs"
+cp "$S/references/architecture-decisions.md.1.7.21" "$PCLEAN/docs/agents/architecture-decisions.md"
+printf '{"afk_template_version":"1.7.21","templateVersion":1,"repository":"kilbertert/clean","cron_hour":13}\n' > "$PCLEAN/.afk-bootstrap.json"
+printf 'FROM node:24\n' > "$PCLEAN/.sandcastle/Dockerfile"
+cp "$S/scaffold/.sandcastle/repo-map.mjs" "$S/scaffold/.sandcastle/repo-map.check.mjs" \
+   "$S/scaffold/.sandcastle/consensus-contract.json" "$PCLEAN/.sandcastle/"
+"$S/upgrade-afk.sh" "$PCLEAN" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project with an unedited checker" >&2; exit 1; }
+grep -q 'INLINE_ALTERNATIVES_RE' "$PCLEAN/.sandcastle/adr.check.mjs" \
+  || { echo "an unedited checker was not restaged" >&2; exit 1; }
+grep -q 'needs its' "$PCLEAN/docs/agents/architecture-decisions.md" \
+  || { echo "an unedited convention document was not restaged" >&2; exit 1; }
+
+echo "1.7.22 project-edit guard checks passed"

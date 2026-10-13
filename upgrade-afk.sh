@@ -2922,11 +2922,25 @@ if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 12 ]; then
   # The later steps that also edit this file then find its marker already present
   # and skip — which is the expected path for an old project, and why each of them
   # keys on a CONTENT marker rather than on a version.
+  #
+  # `if [ ! -e "$TARGET/$REL" ]` is load-bearing and was missing. The gate below
+  # is `to_patch -ge 12`, which is true on EVERY later upgrade too, so this step
+  # re-runs for a project already at 1.7.21 — and an unconditional `cp` then
+  # REPLACES a checker the project had edited, before any later step can see it.
+  # Measured: a project-edited `adr.check.mjs` came out of a 1.7.21 -> 1.7.22 run
+  # byte-identical to the template, and the 1.7.22 step reported "already reads
+  # more than a heading" — about a file whose edit had just been destroyed by
+  # this line. The comment said "a project that never had this file" and the code
+  # did not say it.
   REL=.sandcastle/adr.check.mjs
   [ -e "$S/scaffold/$REL" ] || { echo "migration reference missing: $S/scaffold/$REL" >&2; exit 1; }
-  cp "$S/scaffold/$REL" "$WORK/$REL"
-  NEW_FILES="$NEW_FILES $REL"
-  note "added: $REL"
+  if [ -e "$TARGET/$REL" ]; then
+    note "$REL: already present; left as the project's own (later steps restage it only if unedited)"
+  else
+    cp "$S/scaffold/$REL" "$WORK/$REL"
+    NEW_FILES="$NEW_FILES $REL"
+    note "added: $REL"
+  fi
 
   REL=docs/agents/architecture-decisions.md
   [ -e "$S/scaffold/$REL" ] || { echo "migration reference missing: $S/scaffold/$REL" >&2; exit 1; }
@@ -3716,6 +3730,94 @@ HANDOFF
     say "$REL differs from what 1.7.18 shipped; left as the project's own. It is"
     say "worth rewriting its handoff sentence by hand: the pull request does not"
     say "exist when the commit is made, and the host posts the link itself."
+  fi
+fi
+
+
+# ---- step: 1.7.21 -> 1.7.22 — the alternatives check reads more than a heading,
+#                             and the sweep stops demanding a forbidden fix -----
+# Two defects in `adr.check.mjs`, both measured across the four consumer
+# repositories, and they are independent of each other.
+#
+#   1. `ALTERNATIVES_RE` matched a HEADING only. AI-Ops 0006 line 15 reads:
+#
+#        - 被否掉的替代形态：(a) 由统一助手入口中介跳转——…；(b) 后端维护路由白名单——…；(c) 显式判别类型字段——见上。
+#
+#      That is the exact phrase the regex hunts for, carrying three rejected
+#      options with their reasons — and the check reported "no alternatives
+#      section … a record of what was chosen and not what was rejected". The
+#      MESSAGE WAS FALSE about that record, which is worse than a missed finding:
+#      a later reader is told a weighing is missing when it is on line 15.
+#      Measured: 3 of the 14 back-catalogue findings are in that shape
+#      (AI-Ops 0006 / 0007 / 0010); the other 11 genuinely have no weighing.
+#
+#   2. `--all` FAILED on a record whose alternatives section is absent — while
+#      the convention says those records "are not worth a mechanical rewrite, and
+#      nobody should invent alternatives a record never weighed just to turn a
+#      check green". Two ways to a green sweep: fabricate the rejected options, or
+#      delete the record. The convention forbids the first and this migration will
+#      not do the second, so the gate had no honest exit. `--base` is untouched:
+#      there the author of the touched record is present, and "someone next
+#      touches the decision they describe" is exactly what `--base` means.
+#
+# What is NOT tiered, deliberately:
+#   * an alternatives heading standing over nothing — it claims a weighing that
+#     did not happen, needs no memory to see, and none to fix;
+#   * a missing `Status:` — a FACT about the tree, reachable by reading the code
+#     the record is about (the `trusted-pr-control-plane` records: `.github/`
+#     shows the control plane shipped), and AI-Ops 0003's `Status: Accepted` over
+#     an "unimplemented" blockquote is why branching on the line's VALUE matters;
+#   * a malformed filename, a duplicated serial.
+if [ "$to_minor" -ge 7 ] &&
+   { [ "$from_minor" -lt 7 ] ||
+     { [ "$from_minor" -eq 7 ] && [ "$from_patch" -lt 22 ]; }; }; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: the records check stops lying and stops asking for the impossible =="
+
+  # 1. The checker. `cmp` against what 1.7.21 shipped, like every step before it:
+  #    a project that edited this file keeps its version and is told what to
+  #    carry over by hand, because the checker is executable — the rules in it are
+  #    the rules the gate applies.
+  REL=.sandcastle/adr.check.mjs
+  if [ ! -e "$WORK/$REL" ]; then
+    note "$REL absent; skipped"
+  elif grep -qF "INLINE_ALTERNATIVES_RE" "$WORK/$REL"; then
+    note "$REL: already reads more than a heading"
+  elif cmp -s "$WORK/$REL" "$S/references/adr.check.mjs.1.7.21"; then
+    cp "$S/scaffold/$REL" "$WORK/$REL"
+    NEW_FILES="$NEW_FILES $REL"
+    note "$REL: restaged (inline carriers count; the sweep tiers two findings)"
+  else
+    say "$REL differs from what 1.7.21 shipped; left as the project's own."
+    say "  Carry these over by hand:"
+    say "    - a line beginning with the rejected-options vocabulary counts as the"
+    say "      weighing, not only a heading over it (INLINE_ALTERNATIVES_RE)"
+    say "    - on the SWEEP only, a record whose alternatives are absent is an"
+    say "      advisory, not a failure; under --base it still fails"
+  fi
+
+  # 2. The convention document. Project-owned like the rest of `docs/`, so it is
+  #    replaced only when it still matches what this template shipped, and staged
+  #    into $WORK first — `$WORK` carries only `.sandcastle/` and
+  #    `.github/workflows/`, so a `docs/` path has no source until it is copied
+  #    there. That omission is a bug this repository has already shipped once.
+  REL=docs/agents/architecture-decisions.md
+  if [ -e "$TARGET/$REL" ]; then
+    mkdir -p "$WORK/docs/agents"
+    cp "$TARGET/$REL" "$WORK/$REL"
+  fi
+  if [ ! -e "$WORK/$REL" ]; then
+    note "$REL absent; skipped"
+  elif grep -qF "One structural finding is tiered, because fixing it needs its" "$WORK/$REL"; then
+    note "$REL: already describes the tier"
+  elif cmp -s "$WORK/$REL" "$S/references/architecture-decisions.md.1.7.21"; then
+    cp "$S/scaffold/$REL" "$WORK/$REL"
+    NEW_FILES="$NEW_FILES $REL"
+    note "$REL: restaged (the tier is written down)"
+  else
+    say "$REL differs from what this template shipped; left as the project's own."
+    say "  Worth writing down by hand: the sweep reports an absent alternatives"
+    say "  section as an advisory and does not fail on it; --base still fails."
   fi
 fi
 

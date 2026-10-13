@@ -143,7 +143,7 @@ buys is that a human reading the log sees a reason.
 ```sh
 node .sandcastle/adr.check.mjs                     # report; never blocks
 node .sandcastle/adr.check.mjs --base origin/main  # gate: structure of touched records + coverage of this branch's commits
-node .sandcastle/adr.check.mjs --all               # gate: every record in the repo
+node .sandcastle/adr.check.mjs --all               # sweep: every record, two findings tiered (see below)
 node .sandcastle/adr.check.mjs --base origin/main --all   # both
 ```
 
@@ -158,6 +158,25 @@ Structure is scoped to touched records on purpose. Gating every record on every
 change would mean a back catalogue has to be backfilled before this rule can be
 adopted at all — and inventing alternatives a record never weighed is exactly
 what the rule exists to prevent.
+
+**One structural finding is tiered, because fixing it needs its author.** A record
+whose alternatives section is *absent* — or whose `Status:` line is missing — is
+incomplete, and finishing it means recalling what was rejected, which nobody but
+the author can do. A record whose alternatives section *exists and is empty or a
+placeholder* claims a weighing that did not happen, and checking that needs no
+memory at all. So:
+
+- **Under `--base` both are failures.** The author of the touched record is at the
+  keyboard; that is what "someone next touches the decision they describe" means,
+  and a new record is always touched by the change that adds it.
+- **Under `--all` only the second is a failure.** The first is printed as an
+  `advisory` and does not set the exit code, because the honest fixes are "its
+  author writes it" or "leave it", and a gate that demands either fabrication or
+  deletion is not enforcing the rule — it is inverting it.
+
+The distinction is the one above, applied to the sweep: an *absent* section is
+incompleteness; a *claimed* section over nothing is the dishonesty this check
+exists to catch.
 
 Coverage is judged **per commit**, each against its own parent. Not as one
 `git diff <ref> HEAD`: that is the merge-base form, and it reports everything the
@@ -207,3 +226,13 @@ status line with nothing under them. Those are worth a pass when someone next
 touches the decision they describe; they are not worth a mechanical rewrite, and
 nobody should invent alternatives a record never weighed just to turn a check
 green.
+
+The sweep therefore reports those under `advisory:` rather than failing on them,
+and that is a statement about **who can act**: the author of a pre-convention
+record is not the person reading the sweep, so the sweep's job is to keep the
+item visible and to leave it fixable, not to make a green run impossible. Fixing
+one is a `--base` run's business — that is the mode where the author of the
+touched record is present — so the same record is a failure there and an advisory
+here. A malformed filename, a duplicated serial, or an alternatives heading
+standing over nothing fails in **both** modes: none of those needs anyone's
+memory.

@@ -57,3 +57,11 @@ run it, say so and why in the commit body; do not report it as done.
 Make one or more git commits on `{{BRANCH}}`. Use conventional-commit messages (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`). Do NOT use a `RALPH:` prefix — that prefix is reserved for the RALPH loop.
 
 Do not close the issue yourself.
+
+If this work came from an outside ticket — a requirements platform, a chat
+thread, a support queue — that ticket is where someone is waiting. When the work
+is done, write back to it: the branch, the pull request, and which acceptance
+criteria this change satisfies. You cannot post to a system this sandbox does not
+reach; record the text in the commit body under `Source ticket:` and the host
+runner or the human who owns that ticket posts it. A result that stays in this
+repository is one the next person to open that ticket has to rediscover.

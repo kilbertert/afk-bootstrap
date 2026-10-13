@@ -2837,3 +2837,234 @@ node -e '
   || { echo "upgrade refused a project with no record" >&2; exit 1; }
 [ "$(count_records)" = "1" ] \
   || { echo "the step did not write the record it still owes a project" >&2; exit 1; }
+
+# 1.7.19: both duties reach every live prompt, and the search insert stops
+# stacking copies.
+#
+# Three defects in what 1.7.18 shipped, all measured on the four consumer
+# repositories. The fixture is built from the CURRENT scaffold and then broken
+# in exactly the ways those repositories were broken: the search duty
+# quadrupled in the three prompts 1.7.13 reached, absent from the two it did
+# not; the write-back duty present only in the two 1.7.18 named.
+P1719="$TMP/upgrade-1718-all-prompts-$LANGUAGE"
+rm -rf "$P1719"
+mkdir -p "$P1719/.sandcastle/implement-prd" "$P1719/.sandcastle/implement" \
+         "$P1719/.sandcastle/implement-pr" "$P1719/.github/workflows" "$P1719/docs/adr"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$P1719/"
+cp "$S/scaffold/.sandcastle/consensus-contract.json" "$P1719/.sandcastle/"
+printf 'FROM node:24\n' > "$P1719/.sandcastle/Dockerfile"
+cp "$S/scaffold/.sandcastle/repo-map.mjs" "$S/scaffold/.sandcastle/repo-map.check.mjs" "$P1719/.sandcastle/"
+python3 - "$S" "$P1719" "$LANGUAGE" <<'BREAK1718' || { echo "could not build the 1.7.18-state fixture" >&2; exit 1; }
+import pathlib, sys
+S, dst, lang = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
+
+SEARCH_HEAD = "Before you settle on an approach, search what this repository has already"
+SEARCH_TAIL = "yourself — do not spend a human's time on them."
+WRITE_MID = " came from an outside ticket"
+WRITE_TAIL = "repository is one the next person to open that ticket has to rediscover."
+
+# `.sandcastle/implement.md` is the per-language render of
+# `templates/implement.<lang>.md` (bootstrap copies it there); the other four
+# ship from `scaffold/`. Reading each from where it actually comes from is the
+# point of the test — a fixture built from the wrong source exercises the wrong
+# insert.
+SCAFFOLD = S / "scaffold/.sandcastle"
+SOURCE = {
+    "implement.md": S / f"templates/implement.{lang}.md",
+    "implement-prompt.md": SCAFFOLD / "implement-prompt.md",
+    "implement/prompt.md": SCAFFOLD / "implement/prompt.md",
+    "implement-pr/prompt.md": SCAFFOLD / "implement-pr/prompt.md",
+    "implement-prd/prompt.md": SCAFFOLD / "implement-prd/prompt.md",
+}
+
+
+def span(t, head, tail):
+    """(start, end) of the paragraph from `head` through `tail`, blank line first."""
+    i = t.index(head)
+    if t[i - 1] == "\n" and t[i - 2] == "\n":
+        i -= 1
+    return i, t.index(tail, i) + len(tail)
+
+
+def drop(t, head, tail):
+    while head in t:
+        i, j = span(t, head, tail)
+        if t[j : j + 1] == "\n":
+            j += 1
+        t = t[:i] + t[j:]
+    return t
+
+
+def drop_write(t):
+    # The paragraph opens with "If " — but so does the sentence before it in
+    # some prompts, so the start is found from the phrase that identifies it
+    # and then walked back to the paragraph break.
+    while WRITE_MID in t:
+        k = t.index(WRITE_MID)
+        i = t.rindex("\n\n", 0, k) + 2
+        j = t.index(WRITE_TAIL, k) + len(WRITE_TAIL)
+        if t[j : j + 1] == "\n":
+            j += 1
+        t = t[:i] + t[j:]
+    return t
+
+
+for rel, src in SOURCE.items():
+    p = dst / ".sandcastle" / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    t = src.read_text()
+
+    if rel in ("implement.md", "implement/prompt.md", "implement-prd/prompt.md"):
+        # 1.7.13 reached these: keep the duty, add the duplicates it left. The
+        # count is what the four consumer repositories actually carry.
+        i, j = span(t, SEARCH_HEAD, SEARCH_TAIL)
+        block = t[i:j]
+        t = t[:j] + "\n\n" + block + "\n\n" + block + "\n\n" + block + t[j:]
+    else:
+        t = drop(t, SEARCH_HEAD, SEARCH_TAIL)
+
+    if rel not in ("implement.md", "implement-prd/prompt.md"):
+        t = drop_write(t)
+
+    p.write_text(t)
+
+for rel, n_search, n_write in (
+    ("implement.md", 4, 1),
+    ("implement/prompt.md", 4, 0),
+    ("implement-prd/prompt.md", 4, 1),
+    ("implement-prompt.md", 0, 0),
+    ("implement-pr/prompt.md", 0, 0),
+):
+    t = (dst / ".sandcastle" / rel).read_text()
+    assert t.count("do not spend a human's time on them.") == n_search, (rel, t.count("do not spend"))
+    assert t.count("Source ticket:") == n_write, (rel, t.count("Source ticket:"))
+BREAK1718
+node -e '
+  const fs = require("fs");
+  const p = process.argv[1];
+  const m = JSON.parse(fs.readFileSync(p, "utf8"));
+  m.afk_template_version = "1.7.18";
+  m.templateVersion = 1;
+  fs.writeFileSync(p, JSON.stringify(m, null, 2) + "\n");
+' "$P1719/.afk-bootstrap.json"
+
+"$S/upgrade-afk.sh" "$P1719" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project at 1.7.18" >&2; exit 1; }
+
+# Every live prompt carries both duties exactly once. `exactly once` is the
+# assertion, not `at least once`: the defect being fixed is the duplicate, and
+# an `at least` test would have passed on all four damaged repositories.
+python3 - "$P1719" <<'BOTH' || { echo "1.7.19 did not give every prompt both duties" >&2; exit 1; }
+import pathlib, sys
+root = pathlib.Path(sys.argv[1]) / ".sandcastle"
+# The five promptFiles an AFK run actually loads, and who loads each.
+LIVE = {
+    "implement.md": "main.ts — local `npm run afk`",
+    "implement-prompt.md": "planner.ts",
+    "implement/prompt.md": "implement.ts — the labelled issue (Actions)",
+    "implement-pr/prompt.md": "implement-pr.ts — PR feedback",
+    "implement-prd/prompt.md": "implement-prd.ts — PRD loop (Actions)",
+}
+for rel, who in LIVE.items():
+    t = (root / rel).read_text()
+    assert t.count("do not spend a human's time on them.") == 1, (
+        f"{rel} ({who}): search duty appears {t.count('do not spend a human' + chr(39) + 's time on them.')} times, not once"
+    )
+    assert t.count("Source ticket:") == 1, (
+        f"{rel} ({who}): write-back duty appears {t.count('Source ticket:')} times, not once"
+    )
+BOTH
+
+# The paragraph the migration inserts must be the SAME BYTES the bootstrap
+# renders, or a freshly bootstrapped project and an upgraded one disagree about
+# the rule. Compared against the template, which is what bootstrap copies.
+python3 - "$P1719" "$S" <<'SAME' || { echo "the migrated duties differ from the scaffold's" >&2; exit 1; }
+import pathlib, sys
+dst, src = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+
+def para(path, head, tail):
+    t = path.read_text()
+    i = t.index(head)
+    j = t.index(tail, i) + len(tail)
+    return t[i:j]
+
+for rel in ("implement-prompt.md", "implement/prompt.md", "implement-pr/prompt.md"):
+    for head, tail in (
+        ("Before you settle on an approach", "do not spend a human's time on them."),
+        ("came from an outside ticket", "has to rediscover."),
+    ):
+        got = para(dst / ".sandcastle" / rel, head, tail)
+        want = para(src / "scaffold/.sandcastle" / rel, head, tail)
+        assert got == want, f"{rel}: {head[:30]}… differs from the scaffold"
+SAME
+
+# Negative control: with the duties already in place and correct, a second run
+# is a no-op — it must not add a second copy. Without this the block above
+# proves only that one run inserts something.
+cp -R "$P1719" "$P1719-again"
+node -e '
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  m.afk_template_version = "1.7.18";
+  fs.writeFileSync(process.argv[1], JSON.stringify(m, null, 2) + "\n");
+' "$P1719-again/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$P1719-again" --cron-hour 13 >/dev/null \
+  || { echo "the re-run refused a project it had just migrated" >&2; exit 1; }
+python3 - "$P1719-again" <<'IDEM' || { echo "a second run stacked a duplicate duty" >&2; exit 1; }
+import pathlib, sys
+root = pathlib.Path(sys.argv[1]) / ".sandcastle"
+for rel in ("implement.md", "implement-prompt.md", "implement/prompt.md",
+            "implement-pr/prompt.md", "implement-prd/prompt.md"):
+    t = (root / rel).read_text()
+    assert t.count("do not spend a human's time on them.") == 1, rel
+    assert t.count("Source ticket:") == 1, rel
+IDEM
+
+echo "1.7.19 smoke checks passed"
+
+# 1.7.19 negative control on the markdown tool itself: a project that reworded
+# the paragraph keeps its wording and does NOT get the template's copy added on
+# top. The first version of `add-search-duty.mjs` keyed its presence test on the
+# paragraph's CLOSING line; against a copy whose last line had been replaced it
+# did not match, and the tool appended a second paragraph beside the project's
+# own. Measured, not hypothesised — which is why the assertion is here.
+PWORD="$TMP/search-duty-reworded-$LANGUAGE"
+rm -rf "$PWORD"
+mkdir -p "$PWORD"
+git -C "$S" show HEAD:scaffold/.sandcastle/implement/prompt.md > "$PWORD/prompt.md" \
+  || { echo "could not read the scaffold prompt from HEAD" >&2; exit 1; }
+# Give it the duty the way an upgrade would, then let the project reword it.
+# `|| true` because this script runs under `set -e` and this tool exits 4 —
+# "already present" — which is a SUCCESS here, not a failure to abort on.
+node "$S/tools/add-search-duty.mjs" "$PWORD/prompt.md" \
+  "node .sandcastle/policy-check.mjs commit" >/dev/null 2>&1 || true
+python3 - "$PWORD/prompt.md" <<'REWORD' || { echo "could not reword the fixture" >&2; exit 1; }
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+# The OPENING line, which is the case that defeats a single nominated marker:
+# the first version of this test reworded the CLOSING line, and the tool's
+# replacement marker was the OPENING — so the test passed while the defect it
+# was meant to catch (reword one line, get a second copy) still reproduced.
+old = "Before you settle on an approach, search what this repository has already"
+t = p.read_text()
+assert t.count(old) == 1, "the fixture did not carry the duty exactly once"
+p.write_text(t.replace(old, "Before choosing an approach, review the repository's ADRs"))
+REWORD
+node "$S/tools/add-search-duty.mjs" "$PWORD/prompt.md" \
+  "node .sandcastle/policy-check.mjs commit" >/dev/null 2>&1 || true
+# rc is 4 (already there); the assertion is on the CONTENT, because rc alone
+# would also be 4 for a file the tool wrongly recognised as untouched.
+python3 - "$PWORD/prompt.md" <<'KEPT' || { echo "a reworded prompt was given a second copy of the duty" >&2; exit 1; }
+import pathlib, sys
+t = pathlib.Path(sys.argv[1]).read_text()
+assert t.count("Before choosing an approach, review the repository's ADRs") == 1, (
+    "the project's wording was moved or duplicated"
+)
+# The template's own opening must NOT be present: its absence is what proves no
+# second paragraph was inserted beside the project's.
+assert "Before you settle on an approach, search what this repository has already" not in t, (
+    "the template's copy was added beside the project's reworded one"
+)
+KEPT
+
+echo "1.7.19 markdown-tool checks passed"

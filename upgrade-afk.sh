@@ -3107,7 +3107,12 @@ if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 13 ]; then
   REL=docs/agents/architecture-decisions.md
   if [ ! -e "$WORK/$REL" ]; then
     note "$REL absent; skipped"
-  elif grep -qF "search what this repository has already decided" "$WORK/$REL"; then
+  # The marker is the SECTION HEADING this scaffold ships, not the phrase that
+  # describes it. The phrase — "search what this repository has already decided"
+  # — appears in neither this file nor the scaffold, so the test was inert from
+  # the day it was written and the `cmp` fallback below did all the work. A
+  # marker that cannot match is worse than no marker: it reads as a check.
+  elif grep -qF "## Before writing: search what is already there" "$WORK/$REL"; then
     note "$REL: already asks for a search first"
   elif cmp -s "$WORK/$REL" "$S/references/architecture-decisions.md.1.7.12"; then
     cp "$S/scaffold/$REL" "$WORK/$REL"
@@ -3123,25 +3128,19 @@ if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 13 ]; then
   # 3. The prompts: the SEARCH duty is new, so it is inserted by the same anchor
   #    machinery the 1.7.12 step uses. The write duty is already there, which is
   #    why this cannot reuse that step — its marker is `No-ADR` and it would skip.
-  cat > "$STAGE/add-search-duty.mjs" <<'SEARCHJS'
-import { readFileSync, writeFileSync } from "node:fs";
-const [path, needle] = process.argv.slice(2);
-const src = readFileSync(path, "utf8");
-if (src.includes("search what this repository has already decided")) process.exit(4);
-const lines = src.split("\n");
-const at = lines.findIndex((l) => l.includes(needle));
-if (at < 0) process.exit(3);
-const duty = [
-  "",
-  "Before you settle on an approach, search what this repository has already",
-  "decided: `rg -i \"<机制名或关键词>\" docs/adr/`, and read the two or three records",
-  "whose titles touch the area. Facts the code or those records can answer, answer",
-  "yourself — do not spend a human's time on them.",
-];
-lines.splice(at + 1, 0, ...duty);
-writeFileSync(path, lines.join("\n"));
-SEARCHJS
-
+  #
+  #    The insert lives in `tools/add-search-duty.mjs`, not in a heredoc here.
+  #    It was a heredoc, and its presence test read
+  #
+  #        src.includes("search what this repository has already decided")
+  #
+  #    while the paragraph is inserted as LINES with that phrase split across
+  #    two of them ("has already" / "decided:"). The marker never matched, so
+  #    `exit 4` never fired and every run at or above 1.7.13 stacked another
+  #    copy: measured, four identical copies in each of the three prompts below,
+  #    in all four consumer repositories. `tools/` is the one copy of this rule —
+  #    the 1.7.19 step calls the same file, and a single marker that is known to
+  #    match is what stops the two from disagreeing again.
   for REL in \
     .sandcastle/implement/prompt.md \
     .sandcastle/implement-prd/prompt.md \
@@ -3150,14 +3149,23 @@ SEARCHJS
       note "$REL absent; skipped"
       continue
     fi
-    node "$STAGE/add-search-duty.mjs" "$WORK/$REL" "node .sandcastle/policy-check.mjs commit" || rc=$?
+    OUT="$(node "$S/tools/add-search-duty.mjs" "$WORK/$REL" "node .sandcastle/policy-check.mjs commit" 2>&1)" || rc=$?
     case ${rc:-0} in
-      0) NEW_FILES="$NEW_FILES $REL"; note "$REL: asks to search the records first" ;;
+      0) NEW_FILES="$NEW_FILES $REL"
+         # The tool reports the duplicates it collapsed, so a project that runs
+         # this step twice is told what the second run repaired rather than
+         # nothing at all.
+         if [ -n "$OUT" ]; then
+           note "$REL: repaired — $OUT"
+         else
+           note "$REL: asks to search the records first"
+         fi ;;
       3) say "$REL has no anchor this step recognises; add the search duty by hand." ;;
       4) note "$REL: already asks for a search first" ;;
       *) echo "$REL: could not add the duty — refusing to guess" >&2; exit 1 ;;
     esac
     rc=0
+    unset OUT
   done
 
   # 4. This step's own record. The rule applies to itself — and the commit that
@@ -3443,6 +3451,117 @@ if [ "$to_minor" -ge 7 ] && [ "$to_patch" -ge 18 ]; then
   #    every project's committed map stale, and the policy job goes red on a
   #    stale map for a reason the project did not cause.
   MAP_NEEDED=1
+fi
+
+
+# ---- step: 1.7.18 -> 1.7.19 — every live prompt gets both duties, and the
+#                             search insert stops stacking copies -------------
+# Three defects, all measured, all in work 1.7.18 shipped earlier the same day.
+# They share one root: a rule was delivered to the paths the author had in mind
+# rather than to the paths that actually load it, and nothing checked the
+# difference.
+#
+#   1. THE WRITE-BACK DUTY REACHED 2 OF 5 PROMPTS. `add-ticket-duty.mjs` was
+#      called with two hardcoded specs. But the workflow that runs a single
+#      labelled issue executes `.sandcastle/implement/implement.ts`
+#      (`agent-implement.yml:290`), whose `promptFile` is
+#      `.sandcastle/implement/prompt.md` — the ONE path in the live set the step
+#      did not touch. So the label-driven single-issue path, the whole point of
+#      the exercise, was the only one that never asked for the write-back.
+#      Measured across the four consumer repositories, `grep -c 'Source ticket:'`:
+#
+#        .sandcastle/implement.md            1   (main.ts — local `npm run afk`)
+#        .sandcastle/implement-prd/prompt.md 1   (implement-prd.ts — PRD loop)
+#        .sandcastle/implement-prompt.md     0   (planner.ts)
+#        .sandcastle/implement/prompt.md     0   (implement.ts — labelled issue)
+#        .sandcastle/implement-pr/prompt.md  0   (implement-pr — PR feedback)
+#
+#   2. THE SEARCH DUTY STACKED A COPY PER UPGRADE. The 1.7.13 insert's presence
+#      test searched for a phrase its own paragraph splits across two lines
+#      ("has already" / "decided:"), so it never matched and `exit 4` never
+#      fired. Measured, the same four repositories carry FOUR identical copies
+#      in each of the three prompts that step touched — one per upgrade.
+#
+#   3. THE SAME TEST GUARDED THE CONVENTION DOCUMENT, against a phrase
+#      (`search what this repository has already decided`) that appears in
+#      neither the file it guards nor the scaffold. It was inert; the `cmp`
+#      fallback behind it is what actually did the work.
+#
+# Where the anchors come from: each is the last line of the section that already
+# ends where the paragraph belongs, and each was measured to occur EXACTLY once
+# in the corresponding file in all four consumer repositories. They are stated
+# as whole lines because the 1.7.12 migration anchored on a sentence WITH its
+# trailing punctuation and matched one repository out of four.
+#
+# The gate reads `from`, not `to_patch`. The 1.7.12-1.7.18 steps all test
+# `to_patch -ge N`, which is true only while the template's own patch level is
+# still climbing through 1.7: the moment TEMPLATE_VERSION becomes 1.8.0 the
+# term is `0 >= N`, false, and every one of those steps disappears for a project
+# arriving from 1.7.5. That is the documented 1.3.1 defect, reintroduced. The
+# condition wanted is "the project is below the version that introduced this" —
+# the 1.6.x steps below get this right with `from_patch -lt N`. This is that
+# form, widened so a project arriving from 1.6.x still runs it.
+if [ "$to_minor" -ge 7 ] &&
+   { [ "$from_minor" -lt 7 ] ||
+     { [ "$from_minor" -eq 7 ] && [ "$from_patch" -lt 19 ]; }; }; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: both duties reach every live prompt =="
+
+  # 1. Collapse the copies 1.7.13 left. The same tool adds the missing ones in
+  #    step 2 below, so a file that has four copies and a file that has none are
+  #    both handled by one pass — and a project that edited the wording keeps it,
+  #    because the marker only matches the text this template wrote.
+  for REL in \
+    .sandcastle/implement.md \
+    .sandcastle/implement-prompt.md \
+    .sandcastle/implement/prompt.md \
+    .sandcastle/implement-pr/prompt.md \
+    .sandcastle/implement-prd/prompt.md ; do
+    if [ ! -e "$WORK/$REL" ]; then
+      note "$REL absent; skipped"
+      continue
+    fi
+    OUT="$(node "$S/tools/add-search-duty.mjs" "$WORK/$REL" "node .sandcastle/policy-check.mjs commit" 2>&1)" || rc=$?
+    case ${rc:-0} in
+      0) NEW_FILES="$NEW_FILES $REL"
+         if [ -n "$OUT" ]; then
+           note "$REL: $OUT"
+         else
+           note "$REL: asks to search the records first"
+         fi ;;
+      3) say "$REL has no anchor this step recognises; add the search duty by hand." ;;
+      4) note "$REL: already asks for a search first" ;;
+      *) echo "$REL: could not add the duty — refusing to guess" >&2; exit 1 ;;
+    esac
+    rc=0
+    unset OUT
+  done
+
+  # 2. The write-back duty, now over the whole live set. Same anchor discipline:
+  #    the line the paragraph follows, not a sentence with punctuation. The
+  #    subject differs by prompt because the sentence names it — "this work" for
+  #    a single issue, "this sub-issue" for a leaf of a PRD — and the tool takes
+  #    it as an argument rather than carrying two near-identical copies.
+  while IFS='|' read -r REL ANCHOR SUBJECT; do
+    [ -n "$REL" ] || continue
+    if [ ! -e "$WORK/$REL" ]; then
+      note "$REL absent; skipped"
+      continue
+    fi
+    node "$S/tools/add-ticket-duty.mjs" "$WORK/$REL" "$ANCHOR" "$SUBJECT" || rc=$?
+    case ${rc:-0} in
+      0) NEW_FILES="$NEW_FILES $REL"; note "$REL: asks for the write-back" ;;
+      4) note "$REL: already asks for the write-back" ;;
+      3) say "$REL has no anchor this step recognises; add by hand: a paragraph"
+         say "naming the commit-body line \`Source ticket:\` and what to write there." ;;
+      *) echo "$REL: could not add the write-back duty — refusing to guess" >&2; exit 1 ;;
+    esac
+    rc=0
+  done <<'DUTIES'
+.sandcastle/implement-prompt.md|the planner loop handles delivery.|this work
+.sandcastle/implement/prompt.md|Do not close the issue yourself.|this work
+.sandcastle/implement-pr/prompt.md|Resolution is the reviewer's job.|this change
+DUTIES
 fi
 
 # The staged metadata is rewritten here, before the change report, so a dry run

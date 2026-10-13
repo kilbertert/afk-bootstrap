@@ -3618,6 +3618,107 @@ if [ "$to_minor" -ge 7 ] &&
   done
 fi
 
+
+# ---- step: 1.7.20 -> 1.7.21 — the source-ticket handoff names something that
+#                             exists, and the host keeps its side of it -------
+# The write-back paragraph asked the agent for "the branch, the pull request, and
+# which acceptance criteria this change satisfies" — and the pull request does
+# not exist when the commit is made. The host opens it afterwards, from that
+# commit. Measured on the text 1.7.18 introduced and 1.7.19/1.7.20 delivered to
+# all five live prompts: the agent was instructed to record a fact it could not
+# have. Its second hole: it named the commit body as the only carrier, and
+# `implement-pr` accepts a run with replies and zero commits.
+#
+# The replacement asks only for what the agent knows and names a carrier that
+# exists on both paths, and the host now does its half for real — the write-back
+# script posts the delivery link to the issue after `gh pr create`, which is what
+# the new sentence "the host posts that link to the issue itself" describes.
+if [ "$to_minor" -ge 7 ] &&
+   { [ "$from_minor" -lt 7 ] ||
+     { [ "$from_minor" -eq 7 ] && [ "$from_patch" -lt 21 ]; }; }; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: the handoff names something that exists =="
+
+  # 1. The paragraph, in the five live prompts. Replaced rather than inserted:
+  #    the old text is already in every one of them.
+  while IFS='|' read -r REL SUBJECT ANCHOR; do
+    [ -n "$REL" ] || continue
+    if [ ! -e "$WORK/$REL" ]; then
+      note "$REL absent; skipped"
+      continue
+    fi
+    node "$S/tools/replace-ticket-duty.mjs" "$WORK/$REL" "$SUBJECT" "$ANCHOR" || rc=$?
+    case ${rc:-0} in
+      0) NEW_FILES="$NEW_FILES $REL"; note "$REL: the handoff now names what the agent knows" ;;
+      4) note "$REL: already carries the corrected handoff" ;;
+      3) say "$REL has neither the old paragraph nor the anchor; left as the project's own." ;;
+      *) echo "$REL: could not replace the handoff — refusing to guess" >&2; exit 1 ;;
+    esac
+    rc=0
+  done <<'HANDOFF'
+.sandcastle/implement.md|this work|host runner owns delivery.
+.sandcastle/implement-prompt.md|this work|the planner loop handles delivery.
+.sandcastle/implement/prompt.md|this work|Do not close the issue yourself.
+.sandcastle/implement-pr/prompt.md|this change|Resolution is the reviewer's job.
+.sandcastle/implement-prd/prompt.md|this sub-issue|Do not touch work that belongs to a different sub-issue.
+HANDOFF
+
+  # 2. The host's half. Without this the new sentence is a promise nobody keeps,
+  #    which is the defect this step exists to remove rather than relocate.
+  REL=.sandcastle/ticket-writeback.sh
+  if [ -e "$TARGET/$REL" ]; then
+    note "$REL: already present; left as the project's own"
+  elif [ -e "$S/scaffold/$REL" ]; then
+    cp "$S/scaffold/$REL" "$WORK/$REL"
+    chmod 750 "$WORK/$REL"
+    NEW_FILES="$NEW_FILES $REL"
+    note "added: $REL"
+  fi
+
+  # 3. The workflow step that calls it, additive and asserted like the rest of
+  #    this repository's workflow edits. Exit 2/3 is a report: a project whose
+  #    workflows have diverged keeps its file and is told what to add.
+  if [ -e "$WORK/.github/workflows/agent-implement.yml" ]; then
+    OUT="$(python3 "$S/tools/ticket-writeback-wire.py" "$WORK/.github/workflows/agent-implement.yml" 2>&1)" || WIRE_RC=$?
+    case "${WIRE_RC:-0}" in
+      0) note ".github/workflows/agent-implement.yml: $OUT" ;;
+      2|3) say ".github/workflows/agent-implement.yml could not be wired automatically: $OUT"
+           say "By hand: add a step after Open PR that runs"
+           say "  bash .sandcastle/ticket-writeback.sh \"\$ISSUE_NUMBER\" \"\$PR_URL\" \"\$BRANCH\"" ;;
+      *) echo "agent-implement.yml: could not be wired — refusing to guess" >&2; exit 1 ;;
+    esac
+    unset WIRE_RC OUT
+  else
+    note ".github/workflows/agent-implement.yml absent; skipped"
+  fi
+
+  # 4. The convention document, if it still matches what 1.7.18 shipped.
+  #
+  #    $WORK stages `.sandcastle/` and `.github/workflows/` only, so a file under
+  #    `docs/` has no source to copy until it is staged here. Without this the
+  #    guard below reads "absent" on every project and the restage never happens.
+  #    Measured: the smoke caught it, because the copy stayed at 1.7.18 wording
+  #    while every assertion about it passed vacuously.
+  REL=docs/agents/ticket-contract.md
+  if [ -e "$TARGET/$REL" ]; then
+    mkdir -p "$WORK/docs/agents"
+    cp "$TARGET/$REL" "$WORK/$REL"
+  fi
+  if [ ! -e "$WORK/$REL" ]; then
+    note "$REL absent; skipped"
+  elif grep -qF "Do not try to name the pull request" "$WORK/$REL"; then
+    note "$REL: already says the PR is not the agent's to name"
+  elif cmp -s "$WORK/$REL" "$S/references/ticket-contract.1.7.18.md"; then
+    cp "$S/scaffold/$REL" "$WORK/$REL"
+    NEW_FILES="$NEW_FILES $REL"
+    note "$REL: restaged (the handoff names what exists)"
+  else
+    say "$REL differs from what 1.7.18 shipped; left as the project's own. It is"
+    say "worth rewriting its handoff sentence by hand: the pull request does not"
+    say "exist when the commit is made, and the host posts the link itself."
+  fi
+fi
+
 # The staged metadata is rewritten here, before the change report, so a dry run
 # lists .afk-bootstrap.json like every other file it would touch.
 node -e '

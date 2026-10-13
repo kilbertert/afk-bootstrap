@@ -2711,7 +2711,11 @@ import pathlib, sys
 def block(p):
     lines = pathlib.Path(p).read_text().split("\n")
     at = next(i for i, l in enumerate(lines) if "came from an outside ticket" in l)
-    end = next(i for i in range(at, len(lines)) if lines[i].startswith("reach;"))
+    # Ends on the paragraph's last line. That line changed in 1.7.21 (the
+    # handoff was rewritten), so the marker is the closing phrase both versions
+    # share rather than a leading word of one of them — the assertion is about
+    # the two files agreeing, not about which version they carry.
+    end = next(i for i in range(at, len(lines)) if lines[i].endswith("has to rediscover."))
     return lines[at : end + 1]
 dst, src = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
 if block(dst / ".sandcastle/implement-prd/prompt.md") != block(
@@ -2861,7 +2865,9 @@ S, dst, lang = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
 SEARCH_HEAD = "Before you settle on an approach, search what this repository has already"
 SEARCH_TAIL = "yourself — do not spend a human's time on them."
 WRITE_MID = " came from an outside ticket"
-WRITE_TAIL = "repository is one the next person to open that ticket has to rediscover."
+# The paragraph's closing phrase, shared by every version of it — the 1.7.21
+# rewrite changed the lines above it, not that one.
+WRITE_TAIL = "has to rediscover."
 
 # `.sandcastle/implement.md` is the per-language render of
 # `templates/implement.<lang>.md` (bootstrap copies it there); the other four
@@ -2944,7 +2950,12 @@ for rel, n_search, n_write in (
 ):
     t = (dst / ".sandcastle" / rel).read_text()
     assert t.count("do not spend a human's time on them.") == n_search, (rel, t.count("do not spend"))
-    assert t.count("Source ticket:") == n_write, (rel, t.count("Source ticket:"))
+    # Counts PARAGRAPHS, not occurrences of `Source ticket:`. The 1.7.21 rewrite
+    # names that line twice inside one paragraph (the commit body, and the
+    # top-level comment for a reply-only run), so a token count would read 2 for
+    # a file that carries the duty once. Measured; this assertion is what caught
+    # the difference between "the duty is present" and "the string occurs".
+    assert t.count("came from an outside ticket") == n_write, (rel, t.count("came from an outside ticket"))
 BREAK1718
 node -e '
   const fs = require("fs");
@@ -2977,8 +2988,11 @@ for rel, who in LIVE.items():
     assert t.count("do not spend a human's time on them.") == 1, (
         f"{rel} ({who}): search duty appears {t.count('do not spend a human' + chr(39) + 's time on them.')} times, not once"
     )
-    assert t.count("Source ticket:") == 1, (
-        f"{rel} ({who}): write-back duty appears {t.count('Source ticket:')} times, not once"
+    # Paragraphs, not tokens: the 1.7.21 text names `Source ticket:` twice inside
+    # one paragraph. Counting the token made this assertion read 2 on a correct
+    # file, which is why it is the OPENER that is counted.
+    assert t.count("came from an outside ticket") == 1, (
+        f"{rel} ({who}): write-back duty appears {t.count('came from an outside ticket')} times, not once"
     )
 BOTH
 
@@ -3024,7 +3038,7 @@ for rel in ("implement.md", "implement-prompt.md", "implement/prompt.md",
             "implement-pr/prompt.md", "implement-prd/prompt.md"):
     t = (root / rel).read_text()
     assert t.count("do not spend a human's time on them.") == 1, rel
-    assert t.count("Source ticket:") == 1, rel
+    assert t.count("came from an outside ticket") == 1, rel
 IDEM
 
 echo "1.7.19 smoke checks passed"
@@ -3223,3 +3237,153 @@ grep -q "do not spend a human's time on them." "$NANCHOR/prompt.md" \
   || { echo "the search duty was removed by a run that could not place it" >&2; exit 1; }
 
 echo "1.7.20 item-placement checks passed"
+
+# 1.7.21: the handoff names something that exists, and the host keeps its side.
+#
+# The paragraph 1.7.18 introduced asked the agent for "the branch, the pull
+# request, and which acceptance criteria this change satisfies" — and the pull
+# request does not exist when the commit is made. The host opens it afterwards.
+# Its second hole: the commit body was the only carrier, and `implement-pr`
+# accepts a run with replies and zero commits.
+P1721="$TMP/upgrade-1720-handoff-$LANGUAGE"
+rm -rf "$P1721"
+mkdir -p "$P1721/.sandcastle/implement-pr" "$P1721/.sandcastle/implement-prd" \
+         "$P1721/.sandcastle/implement" "$P1721/.github/workflows" "$P1721/docs/agents"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$P1721/"
+cp "$S/scaffold/.sandcastle/consensus-contract.json" "$P1721/.sandcastle/"
+printf 'FROM node:24\n' > "$P1721/.sandcastle/Dockerfile"
+cp "$S/scaffold/.sandcastle/repo-map.mjs" "$S/scaffold/.sandcastle/repo-map.check.mjs" "$P1721/.sandcastle/"
+cp "$S/references/ticket-contract.1.7.18.md" "$P1721/docs/agents/ticket-contract.md"
+# The 1.7.20-state workflow, from the REFERENCE the step's own restage compares
+# against — not from HEAD. Measured in CI: `git show HEAD:` reads the MERGE commit
+# of this PR, which already carries the change, so a fixture built that way has
+# nothing to strip and the assertions pass on a tree that was never in the state
+# they claim to test. That is the "a reference that tracks HEAD anchors nothing"
+# failure in this repository's own record of the 1.7.12 migration.
+cp "$S/references/agent-implement.1.7.20.yml" "$P1721/.github/workflows/agent-implement.yml"
+python3 - "$P1721" "$S" "$LANGUAGE" <<'PRE1721' || { echo "could not build the 1.7.20-state fixture" >&2; exit 1; }
+import pathlib, sys, yaml
+dst, S, lang = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2]), sys.argv[3]
+
+# The prompts as 1.7.20 shipped them: the OLD handoff paragraph. Taken from the
+# reference the old text is preserved in, not assembled by hand.
+OLD = (
+    "If {sub} came from an outside ticket — a requirements platform, a chat\n"
+    "thread, a support queue — that ticket is where someone is waiting. When the work\n"
+    "is done, write back to it: the branch, the pull request, and which acceptance\n"
+    "criteria this change satisfies. You cannot post to a system this sandbox does not\n"
+    "reach; record the text in the commit body under `Source ticket:` and the host\n"
+    "runner or the human who owns that ticket posts it. A result that stays in this\n"
+    "repository is one the next person to open that ticket has to rediscover."
+)
+NEW_MARK = "Record its identifier and the acceptance criteria"
+
+SOURCES = {
+    "implement.md": S / f"templates/implement.{lang}.md",
+    "implement-prompt.md": S / "scaffold/.sandcastle/implement-prompt.md",
+    "implement/prompt.md": S / "scaffold/.sandcastle/implement/prompt.md",
+    "implement-pr/prompt.md": S / "scaffold/.sandcastle/implement-pr/prompt.md",
+    "implement-prd/prompt.md": S / f"templates/prompt.{lang}.md",
+}
+SUBJECTS = {
+    "implement.md": "this work",
+    "implement-prompt.md": "this work",
+    "implement/prompt.md": "this work",
+    "implement-pr/prompt.md": "this change",
+    "implement-prd/prompt.md": "this sub-issue",
+}
+for rel, src in SOURCES.items():
+    p = dst / ".sandcastle" / rel
+    p.parent.mkdir(parents=True, exist_ok=True)
+    t = src.read_text()
+    assert NEW_MARK in t, f"{rel}: the scaffold no longer carries the corrected handoff"
+    # Replace the NEW paragraph with the OLD one, by lines, so the fixture is the
+    # pre-1.7.21 text exactly.
+    new = t[t.index("If " + SUBJECTS[rel] + " came from an outside ticket"):
+            t.index("has to rediscover.", t.index("came from an outside ticket"))
+            + len("has to rediscover.")]
+    assert NEW_MARK in new, f"{rel}: the new paragraph was not found"
+    t = t.replace(new, OLD.format(sub=SUBJECTS[rel]), 1)
+    assert "the branch, the pull request" in t, f"{rel}: the old text was not restored"
+    p.write_text(t)
+
+# The reference IS the pre-1.7.21 state. Assert that rather than assuming it: a
+# reference that has drifted to the post-change shape would make every assertion
+# below vacuous, and that is exactly the failure mode this file's own history
+# warns about.
+wf = dst / ".github/workflows/agent-implement.yml"
+text = wf.read_text()
+assert "ticket-writeback.sh" not in text, "the reference already calls the write-back — stale"
+assert 'echo "pr_url=' not in text, "the reference already exports pr_url — stale"
+steps = [str(s.get("name", ""))
+         for s in list(yaml.safe_load(text)["jobs"].values())[0]["steps"]]
+assert "Write the delivery link back to the issue" not in steps, "the reference already has the step"
+PRE1721
+node -e '
+  const fs = require("fs");
+  const p = process.argv[1];
+  const m = JSON.parse(fs.readFileSync(p, "utf8"));
+  m.afk_template_version = "1.7.20";
+  m.templateVersion = 1;
+  fs.writeFileSync(p, JSON.stringify(m, null, 2) + "\n");
+' "$P1721/.afk-bootstrap.json"
+
+"$S/upgrade-afk.sh" "$P1721" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project at 1.7.20" >&2; exit 1; }
+
+python3 - "$P1721" <<'HANDOFF1721' || { echo "1.7.21 did not fix the handoff" >&2; exit 1; }
+import pathlib, sys
+root = pathlib.Path(sys.argv[1])
+for rel in ("implement.md", "implement-prompt.md", "implement/prompt.md",
+            "implement-pr/prompt.md", "implement-prd/prompt.md"):
+    t = (root / ".sandcastle" / rel).read_text()
+    # The thing the agent cannot know is gone.
+    assert "the branch, the pull request, and which acceptance" not in t, (
+        f"{rel}: still asks for the pull request the agent cannot know"
+    )
+    # And the replacement is there, once.
+    assert t.count("Record its identifier and the acceptance criteria") == 1, rel
+    # The reply-only path has a carrier.
+    assert "top-level PR comment" in t, f"{rel}: no carrier for a reply-only run"
+handoff = (root / "docs/agents/ticket-contract.md").read_text()
+assert "Do not try to name the pull request" in handoff, "the convention doc was not restaged"
+HANDOFF1721
+
+# The host's half is present, and the workflow calls it AFTER the PR exists.
+python3 - "$P1721" <<'WIRED1721' || { echo "1.7.21 did not wire the host's half" >&2; exit 1; }
+import pathlib, sys, yaml
+root = pathlib.Path(sys.argv[1])
+script = root / ".sandcastle/ticket-writeback.sh"
+assert script.is_file(), "the write-back script was not added"
+assert script.stat().st_mode & 0o100, "the write-back script is not executable by its owner"
+steps = list(yaml.safe_load((root / ".github/workflows/agent-implement.yml").read_text())["jobs"].values())[0]["steps"]
+names = [str(s.get("name", "")) for s in steps]
+wb = "Write the delivery link back to the issue"
+assert wb in names, "the write-back step was not added"
+openpr = next(i for i, s in enumerate(steps) if s.get("id") == "open_pr")
+assert openpr < names.index(wb), "the write-back runs before the pull request exists"
+step = steps[names.index(wb)]
+assert "PR_URL" in (step.get("env") or {}), "the step does not receive the PR URL"
+WIRED1721
+
+# Negative control: strip the write-back step and the same predicate must stop
+# holding, or the block proves only that the file parses.
+NEGWB="$TMP/handoff-negative-$LANGUAGE.yml"
+cp "$P1721/.github/workflows/agent-implement.yml" "$NEGWB"
+python3 - "$NEGWB" <<'STRIPWB'
+import pathlib, sys, yaml
+p = pathlib.Path(sys.argv[1])
+doc = yaml.safe_load(p.read_text())
+job = list(doc["jobs"].values())[0]
+job["steps"] = [s for s in job["steps"] if s.get("name") != "Write the delivery link back to the issue"]
+p.write_text(yaml.safe_dump(doc, allow_unicode=True, sort_keys=False))
+STRIPWB
+if python3 - "$NEGWB" <<'NEGWB' >/dev/null 2>&1; then
+import sys, yaml
+names = [str(s.get("name", "")) for s in list(yaml.safe_load(open(sys.argv[1]))["jobs"].values())[0]["steps"]]
+sys.exit(0 if "Write the delivery link back to the issue" in names else 1)
+NEGWB
+  echo "negative control: the write-back step survived being stripped" >&2; exit 1
+fi
+
+echo "1.7.21 handoff checks passed"

@@ -382,6 +382,7 @@ jobs:
           set -euo pipefail
           if [ -n "$EXISTING_PR" ]; then
             echo "pr_number=$EXISTING_PR" >> "$GITHUB_OUTPUT"
+            echo "pr_url=https://github.com/${GH_REPO}/pull/${EXISTING_PR}" >> "$GITHUB_OUTPUT"
             echo "created=false" >> "$GITHUB_OUTPUT"
           else
             if [ -z "$AGENT_PAT" ]; then
@@ -401,6 +402,7 @@ jobs:
             fi
             pr_number=$(basename "$pr_url")
             echo "pr_number=$pr_number" >> "$GITHUB_OUTPUT"
+            echo "pr_url=$pr_url" >> "$GITHUB_OUTPUT"
             echo "created=true" >> "$GITHUB_OUTPUT"
           fi
 
@@ -408,9 +410,14 @@ jobs:
         if: steps.shape.outputs.mode == 'run' && success()
         env:
           SUB_ISSUE_NUMBER: ${{ steps.shape.outputs.next_open_number }}
+          PR_URL: ${{ steps.open_pr.outputs.pr_url }}
         run: |
           commit_sha=$(git rev-parse HEAD)
-          gh issue close "$SUB_ISSUE_NUMBER" --comment "Implemented in ${commit_sha}. Part of #${PRD_NUMBER}."
+          # The pull request is what a reader of this sub-issue wants; the commit
+          # sha alone does not say where the change is being reviewed. The PR is
+          # created before this step, so unlike the agent's own commit body, a URL
+          # here is known rather than guessed.
+          gh issue close "$SUB_ISSUE_NUMBER" --comment "Implemented in ${commit_sha}, opened as ${PR_URL}. Part of #${PRD_NUMBER}."
 
       - name: Re-check remaining open sub-issues
         if: steps.shape.outputs.mode == 'run' && success()

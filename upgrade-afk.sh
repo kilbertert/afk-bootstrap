@@ -3564,6 +3564,60 @@ if [ "$to_minor" -ge 7 ] &&
 DUTIES
 fi
 
+
+# ---- step: 1.7.19 -> 1.7.20 — the search duty goes after the item, not inside it
+# One defect, measured, in the step immediately above.
+#
+# 1.7.19's insertion point was `anchor + 1`, unconditionally. Where the anchor is
+# a numbered list item whose text CONTINUES on indented lines, that lands the
+# paragraph between the item and its own continuation. In
+# `.sandcastle/implement-pr/prompt.md` the anchor is step 3 and step 3 continues
+# for four lines, so the file came out as
+#
+#     3. Make the code changes you decided on. …
+#
+#     Before you settle on an approach, search…
+#     yourself — do not spend a human's time on them.
+#        If the repo has a project verification skill …
+#        cannot run it, say so … in the commit body; do not report it as done.
+#     4. If you made no changes that's fine …
+#
+# — the verification instruction orphaned from the step it belongs to. Measured
+# on health-flow after the rollout, and reported by Devin Review on that PR.
+#
+# The tool now computes the end of the item and RELOCATES an existing copy that
+# sits in the wrong place, so this step is just the same call again on the five
+# prompts. It is a separate version rather than a patch to 1.7.19 because
+# projects in the field already ran that step and carry the misplaced paragraph;
+# a fix folded into the step that caused it would never reach them.
+if [ "$to_minor" -ge 7 ] &&
+   { [ "$from_minor" -lt 7 ] ||
+     { [ "$from_minor" -eq 7 ] && [ "$from_patch" -lt 20 ]; }; }; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: the search duty goes after the list item =="
+
+  for REL in \
+    .sandcastle/implement.md \
+    .sandcastle/implement-prompt.md \
+    .sandcastle/implement/prompt.md \
+    .sandcastle/implement-pr/prompt.md \
+    .sandcastle/implement-prd/prompt.md ; do
+    if [ ! -e "$WORK/$REL" ]; then
+      note "$REL absent; skipped"
+      continue
+    fi
+    OUT="$(node "$S/tools/add-search-duty.mjs" "$WORK/$REL" "node .sandcastle/policy-check.mjs commit" 2>&1)" || rc=$?
+    case ${rc:-0} in
+      0) NEW_FILES="$NEW_FILES $REL"; note "$REL: $OUT" ;;
+      4) note "$REL: the search duty is already where it belongs" ;;
+      3) say "$REL has no anchor this step recognises; add the search duty by hand." ;;
+      *) echo "$REL: could not place the duty — refusing to guess" >&2; exit 1 ;;
+    esac
+    rc=0
+    unset OUT
+  done
+fi
+
 # The staged metadata is rewritten here, before the change report, so a dry run
 # lists .afk-bootstrap.json like every other file it would touch.
 node -e '

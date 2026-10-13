@@ -2874,7 +2874,14 @@ SOURCE = {
     "implement-prompt.md": SCAFFOLD / "implement-prompt.md",
     "implement/prompt.md": SCAFFOLD / "implement/prompt.md",
     "implement-pr/prompt.md": SCAFFOLD / "implement-pr/prompt.md",
-    "implement-prd/prompt.md": SCAFFOLD / "implement-prd/prompt.md",
+    # Rendered from the template, like implement.md above: `bootstrap-afk.sh:130`
+    # copies `templates/prompt.<lang>.md` here. The scaffold's own copy of this
+    # path is NOT what a project carries — it has no `policy-check.mjs commit`
+    # line at all, so a fixture built from it exercises the "no anchor" path
+    # while the real repository has the anchor and gets the paragraph. Measured:
+    # this is the difference that made the smoke fail on all four real repos'
+    # shape while passing on the wrong one.
+    "implement-prd/prompt.md": S / f"templates/prompt.{lang}.md",
 }
 
 
@@ -3068,3 +3075,151 @@ assert "Before you settle on an approach, search what this repository has alread
 KEPT
 
 echo "1.7.19 markdown-tool checks passed"
+
+# 1.7.20: the search duty goes after the list item, not inside it.
+#
+# 1.7.19 inserted at `anchor + 1`. In `.sandcastle/implement-pr/prompt.md` the
+# anchor is step 3 of a numbered list and step 3 continues for four indented
+# lines, so the paragraph landed BETWEEN the item and its own continuation —
+# the verification instruction orphaned from the step it belongs to. Measured on
+# health-flow after the rollout; Devin Review reported it on that PR.
+#
+# The fixture is the shape the four consumer repositories actually carry: one
+# copy, in the wrong place.
+PIN="$TMP/upgrade-1719-pr-item-$LANGUAGE"
+rm -rf "$PIN"
+mkdir -p "$PIN/.sandcastle/implement-pr"
+cp -R "$S/test/fixtures/legacy-1.1.x/." "$PIN/"
+cp "$S/scaffold/.sandcastle/consensus-contract.json" "$PIN/.sandcastle/"
+printf 'FROM node:24\n' > "$PIN/.sandcastle/Dockerfile"
+cp "$S/scaffold/.sandcastle/repo-map.mjs" "$S/scaffold/.sandcastle/repo-map.check.mjs" "$PIN/.sandcastle/"
+# The 1.7.19 state of this prompt, reproduced by inserting the paragraph after
+# the anchor line — which is exactly the defect, and reproduces BOTH of its
+# halves: the paragraph lands between step 3 and step 3's continuation, and it
+# lands with no blank line before whatever follows.
+python3 - "$S" "$PIN" <<'MISPLACED' || { echo "could not build the 1.7.19-state fixture" >&2; exit 1; }
+import pathlib, sys
+S, dst = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+BLOCK = [
+    "Before you settle on an approach, search what this repository has already",
+    'decided: `rg -i "<机制名或关键词>" docs/adr/`, and read the two or three records',
+    "whose titles touch the area. Facts the code or those records can answer, answer",
+    "yourself — do not spend a human's time on them.",
+]
+t = (S / "scaffold/.sandcastle/implement-pr/prompt.md").read_text()
+assert t.count(BLOCK[0]) == 1, "the scaffold prompt no longer carries the duty once"
+assert "   If the repo has a project verification skill" in t, (
+    "the scaffold prompt no longer has step 3's continuation — this test is stale"
+)
+# Strip the paragraph and the blank line the scaffold now puts in front of it,
+# then re-insert it the way 1.7.19 did: straight after the anchor line, no blank
+# on either side.
+i = t.index(BLOCK[0])
+j = t.index(BLOCK[-1], i) + len(BLOCK[-1])
+stripped = t[:i].rstrip("\n") + "\n" + t[j:].lstrip("\n")
+at = stripped.index("3. Make the code changes")
+end = stripped.index("\n", at) + 1
+out = stripped[:end] + "\n".join(BLOCK) + "\n" + stripped[end:]
+assert out.index("3. Make the code changes") < out.index(BLOCK[0]), "fixture is not misplaced"
+assert out.index(BLOCK[0]) < out.index("   If the repo has"), "continuation must follow the paragraph"
+# The continuation directly follows the paragraph with no blank — that IS the
+# tail-blank case. Without the fix, step 3's own continuation is swallowed into
+# the paragraph and stops being part of step 3.
+assert BLOCK[-1] + "\n   If the repo has" in out, (
+    "fixture must put the continuation directly after the paragraph"
+)
+(dst / ".sandcastle/implement-pr/prompt.md").write_text(out)
+MISPLACED
+node -e '
+  const fs = require("fs");
+  const p = process.argv[1];
+  const m = JSON.parse(fs.readFileSync(p, "utf8"));
+  m.afk_template_version = "1.7.19";
+  m.templateVersion = 1;
+  fs.writeFileSync(p, JSON.stringify(m, null, 2) + "\n");
+' "$PIN/.afk-bootstrap.json"
+
+"$S/upgrade-afk.sh" "$PIN" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project at 1.7.19" >&2; exit 1; }
+
+python3 - "$PIN" <<'ITEMEND' || { echo "1.7.20 left the duty inside step 3" >&2; exit 1; }
+import pathlib, sys
+t = (pathlib.Path(sys.argv[1]) / ".sandcastle/implement-pr/prompt.md").read_text()
+assert t.count("do not spend a human's time on them.") == 1, "the duty is not there exactly once"
+item = t.index("3. Make the code changes")
+cont = t.index("   If the repo has a project verification skill")
+duty = t.index("Before you settle on an approach")
+nxt = t.index("4. If you made no changes")
+assert item < cont < duty < nxt, (
+    f"order is item@{item} continuation@{cont} duty@{duty} next@{nxt} — "
+    "the continuation must stay with the item, before the paragraph"
+)
+# The paragraph must be followed by a BLANK line, or step 4 is swallowed into it
+# and stops being a list item. Text order alone does not catch that: the first
+# version of this assertion passed while `4.` rendered as body text.
+lines = t.split("\n")
+end = next(i for i, l in enumerate(lines) if l.startswith("yourself — do not spend"))
+assert lines[end + 1] == "", (
+    f"line after the paragraph is {lines[end + 1]!r} — step 4 needs a blank line"
+)
+ITEMEND
+
+# Re-run: repairing a misplaced paragraph must be idempotent. The negative
+# control above mutates a string in memory, which says nothing about a second
+# upgrade pass over the same tree.
+cp "$PIN/.sandcastle/implement-pr/prompt.md" "$PIN/before-rerun.md"
+node -e '
+  const fs = require("fs");
+  const p = process.argv[1];
+  const m = JSON.parse(fs.readFileSync(p, "utf8"));
+  m.afk_template_version = "1.7.19";
+  fs.writeFileSync(p, JSON.stringify(m, null, 2) + "\n");
+' "$PIN/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$PIN" --cron-hour 13 >/dev/null \
+  || { echo "the re-run refused a project it had just migrated" >&2; exit 1; }
+cmp -s "$PIN/before-rerun.md" "$PIN/.sandcastle/implement-pr/prompt.md" \
+  || { echo "a second upgrade changed a correctly-placed paragraph" >&2; exit 1; }
+
+# Negative control: put the duty back inside the item and the predicate above
+# must stop holding. Written as a reusable predicate so the control and the
+# assertion cannot disagree about what "correct" means.
+python3 - "$PIN/.sandcastle/implement-pr/prompt.md" <<'REBREAK'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); t = p.read_text()
+d = t.index("Before you settle on an approach")
+e = t.index("do not spend a human's time on them.", d) + len("do not spend a human's time on them.")
+block = t[d:e]
+t = t[: d - 1] + t[e:]
+at = t.index("3. Make the code changes")
+end = t.index("\n", at) + 1
+t = t[:end] + "\n" + block + "\n" + t[end:]
+# The same order test the assertion uses. It MUST be False now.
+ok = (t.index("3. Make the code changes") < t.index("   If the repo has a project verification skill")
+      < t.index("Before you settle on an approach") < t.index("4. If you made no changes"))
+sys.exit(1 if ok else 0)
+REBREAK
+
+# A missing anchor must leave the paragraph ALONE. The tool used to delete the
+# copies and exit 3, on the reasoning that the upgrade only warns — but the
+# upgrade then publishes, so an instruction disappeared from a project-owned
+# prompt and the version was stamped anyway. Measured: rc=3, paragraph 1 -> 0.
+NANCHOR="$TMP/search-duty-no-anchor-$LANGUAGE"
+rm -rf "$NANCHOR"; mkdir -p "$NANCHOR"
+cp "$S/scaffold/.sandcastle/implement-pr/prompt.md" "$NANCHOR/prompt.md"
+# The project renamed the policy-check command, so the anchor is gone while the
+# search paragraph it already has is untouched.
+python3 - "$NANCHOR/prompt.md" <<'RENAME' || { echo "could not reword the anchor" >&2; exit 1; }
+import pathlib, sys
+p = pathlib.Path(sys.argv[1])
+t = p.read_text()
+assert t.count("node .sandcastle/policy-check.mjs commit") == 1
+p.write_text(t.replace("node .sandcastle/policy-check.mjs commit", "node .sandcastle/policy-check.mjs verify-then-commit"))
+RENAME
+cp "$NANCHOR/prompt.md" "$NANCHOR/before.md"
+node "$S/tools/add-search-duty.mjs" "$NANCHOR/prompt.md" "node .sandcastle/policy-check.mjs commit" >/dev/null 2>&1 || true
+cmp -s "$NANCHOR/before.md" "$NANCHOR/prompt.md" \
+  || { echo "a missing anchor let the tool edit the file anyway" >&2; exit 1; }
+grep -q "do not spend a human's time on them." "$NANCHOR/prompt.md" \
+  || { echo "the search duty was removed by a run that could not place it" >&2; exit 1; }
+
+echo "1.7.20 item-placement checks passed"

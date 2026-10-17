@@ -1,0 +1,13 @@
+{
+  "dashboard": {
+    "title": "afk-bootstrap"
+  },
+  "lint": {
+    "governedRoots": [
+      "scaffold",
+      "templates",
+      "tools",
+      "test"
+    ]
+  }
+}

@@ -1,0 +1,237 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "afk-bootstrap：装配器的四条路径",
+    "locale": "zh-CN",
+    "quality_profile": "showcase",
+    "legend": {
+      "mode": "hidden"
+    },
+    "repository": {
+      "url": "https://github.com/kilbertert/afk-bootstrap",
+      "revision": "1ed4be83d9c5e234a76839c6d5e3353fb0558a08"
+    },
+    "note": "左右两列是两条独立的交付路径：bootstrap 装配新项目，upgrade 迁移已装配的项目。中间一列是它们共同写出的两类制品——scaffold 原样复制、templates 按语言渲染。关键的一条关系是 templates → scaffold 之间的那条虚线：同一段纪律往往在两处各有一份来源，而新项目的落点通常是 templates，所以只改 scaffold 会让新装配的项目缺纪律。tools 与 tests 是装配器自己的维护面：接线工具把纪律接进已存在的文件，smoke 断言装配结果的形状。图中不画的：具体把哪些文件写进哪个目录（那是 scaffold/ 与 templates/ 的 related 清单，共 79 个文件），以及 upgrade 内部逐版本步骤的顺序。"
+  },
+  "components": [
+    {
+      "id": "bootstrap",
+      "type": "frontend",
+      "label": "bootstrap",
+      "sublabel": "首次装配 · 只写缺失",
+      "sources": [
+        {
+          "path": ".spec/afk-bootstrap/bootstrap/spec.md",
+          "label": "spec"
+        },
+        {
+          "path": "bootstrap-afk.sh",
+          "label": "code"
+        }
+      ],
+      "pos": [
+        60,
+        120
+      ],
+      "size": [
+        220,
+        68
+      ]
+    },
+    {
+      "id": "upgrade",
+      "type": "frontend",
+      "label": "upgrade",
+      "sublabel": "版本化迁移 · bump 覆盖全部",
+      "sources": [
+        {
+          "path": ".spec/afk-bootstrap/upgrade/spec.md",
+          "label": "spec"
+        },
+        {
+          "path": "upgrade-afk.sh",
+          "label": "code"
+        }
+      ],
+      "pos": [
+        60,
+        380
+      ],
+      "size": [
+        220,
+        68
+      ]
+    },
+    {
+      "id": "templates",
+      "type": "backend",
+      "label": "templates",
+      "sublabel": "渲染源 · 新项目的落点",
+      "sources": [
+        {
+          "path": ".spec/afk-bootstrap/templates/spec.md",
+          "label": "spec"
+        }
+      ],
+      "pos": [
+        380,
+        120
+      ],
+      "size": [
+        220,
+        68
+      ]
+    },
+    {
+      "id": "scaffold",
+      "type": "backend",
+      "label": "scaffold",
+      "sublabel": "原样复制 · 就是闸门本身",
+      "sources": [
+        {
+          "path": ".spec/afk-bootstrap/scaffold/spec.md",
+          "label": "spec"
+        }
+      ],
+      "pos": [
+        380,
+        300
+      ],
+      "size": [
+        220,
+        68
+      ]
+    },
+    {
+      "id": "docs-and-records",
+      "type": "cloud",
+      "label": "docs-and-records",
+      "sublabel": "文档路由 · 决策记录",
+      "sources": [
+        {
+          "path": ".spec/afk-bootstrap/docs-and-records/spec.md",
+          "label": "spec"
+        }
+      ],
+      "pos": [
+        380,
+        450
+      ],
+      "size": [
+        220,
+        68
+      ]
+    },
+    {
+      "id": "tools",
+      "type": "security",
+      "label": "tools",
+      "sublabel": "接线工具",
+      "sources": [
+        {
+          "path": ".spec/afk-bootstrap/tools/spec.md",
+          "label": "spec"
+        }
+      ],
+      "pos": [
+        700,
+        200
+      ],
+      "size": [
+        200,
+        68
+      ]
+    },
+    {
+      "id": "tests",
+      "type": "security",
+      "label": "tests",
+      "sublabel": "自检 · 缺陷会复制到每个项目",
+      "sources": [
+        {
+          "path": ".spec/afk-bootstrap/tests/spec.md",
+          "label": "spec"
+        }
+      ],
+      "pos": [
+        700,
+        380
+      ],
+      "size": [
+        200,
+        68
+      ]
+    }
+  ],
+  "connections": [
+    {
+      "from": "bootstrap",
+      "to": "templates",
+      "label": "渲染",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "from": "bootstrap",
+      "to": "scaffold",
+      "label": "复制",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "from": "upgrade",
+      "to": "scaffold",
+      "label": "发布",
+      "fromSide": "right",
+      "toSide": "left"
+    },
+    {
+      "from": "templates",
+      "to": "scaffold",
+      "label": "同一纪律两处来源",
+      "variant": "emphasis",
+      "fromSide": "bottom",
+      "toSide": "top",
+      "labelAt": [
+        490,
+        235
+      ]
+    },
+    {
+      "from": "tools",
+      "to": "scaffold",
+      "label": "接进已存在的文件",
+      "fromSide": "left",
+      "toSide": "right"
+    },
+    {
+      "from": "tests",
+      "to": "scaffold",
+      "label": "断言装配形状",
+      "variant": "dashed",
+      "fromSide": "left",
+      "toSide": "right"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "amber",
+      "title": "templates 与 scaffold 是同一件事的两个来源",
+      "items": [
+        "新项目落点通常是 templates",
+        "只改 scaffold → 新项目缺纪律",
+        "改纪律要两边都改、各自测"
+      ]
+    },
+    {
+      "dot": "cyan",
+      "title": "装配器缺陷会被复制",
+      "items": [
+        "每个被装配仓库都继承它",
+        "所以自检比多数项目更吃重",
+        "夹具必须与真实形状一致"
+      ]
+    }
+  ]
+}

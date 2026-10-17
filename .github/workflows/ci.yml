@@ -24,7 +24,26 @@ jobs:
         run: bash -n bootstrap-afk.sh upgrade-afk.sh test/smoke.sh test/trusted-pr-delivery.sh
       - name: Workflow structure check
         run: |
-          python3 -m pip install --disable-pip-version-check --quiet --user PyYAML==6.0.2
+          # The runner's `python3` resolves through PATH, and this repository's
+          # runner unit sets a PATH with no conda on it — so it is the system
+          # interpreter (`/usr/bin/python3`, Debian/Ubuntu), not a user Python.
+          # That interpreter is PEP 668 "externally managed": `pip install
+          # --user` refuses with `externally-managed-environment`, and the step
+          # fails before `test/workflows.py` ever runs.
+          #
+          # Measured: this went red on 2026-10-17 with no repository change. The
+          # trigger was an unattended security upgrade on 2026-10-15 04:01 that
+          # bumped `python3.12` 3.12.3-1ubuntu0.3 -> 3.12.3-1ubuntu0.17, which
+          # re-applied the externally-managed patch. The last green run was
+          # 2026-10-13 18:03, before it.
+          #
+          # `--break-system-packages` is the narrow fix and it is not put here
+          # to relax a gate: the system Python already ships a PyYAML (6.0.1),
+          # so the risk of the flag is theoretical, and `--user` keeps the
+          # install out of the system tree. The alternative — dropping the
+          # install and reading whatever the host happens to have — would make
+          # the pinned version a fiction.
+          python3 -m pip install --break-system-packages --disable-pip-version-check --quiet --user PyYAML==6.0.2
           python3 test/workflows.py
       - name: Self-contained scaffold smoke tests
         run: |

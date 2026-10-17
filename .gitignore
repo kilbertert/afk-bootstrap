@@ -1,0 +1,15 @@
+# Install residue and generated lockfiles.
+#
+# `templates/package.json` is a TEMPLATE, not a manifest this repository
+# installs from: `bootstrap-afk.sh` copies it into a target and then runs
+# `npm install --package-lock-only` THERE to generate that target's own
+# lockfile. Nothing in this repository reads a lockfile under `templates/`,
+# and `templates/package-lock.json` was never tracked.
+#
+# The entries are path-specific on purpose. A bare `package-lock.json` or
+# `node_modules/` would cover the same files here, but it would also ignore
+# those paths everywhere else in the tree — including anywhere they might one
+# day be a real artifact of this repository. Ignoring a path is a claim about
+# what that path is; make the claim where it is true.
+templates/node_modules/
+templates/package-lock.json

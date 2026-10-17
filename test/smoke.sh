@@ -3599,6 +3599,24 @@ echo "1.7.22 project-edit guard checks passed"
 #   2. the project's own gate command is byte-unchanged — the step must not
 #      rewrite what a repository chose to verify with;
 #   3. the project's hand-written paragraph is still there.
+# A reference that tracks HEAD anchors nothing. This repository has shipped that
+# bug once already (the 1.7.12 note: "a reference that tracks HEAD anchors
+# nothing"), and it fails in the direction that is hardest to see — the fixture
+# takes a file that is ALREADY migrated, "restores" the old shape from it, gets
+# nothing, and then every assertion below holds on a tree that was never in the
+# pre-migration state. Green locally, and green in CI for the wrong reason.
+# So the snapshots are asserted to carry the old shape before anything uses them,
+# and the drift turns red here rather than silently disarming the section.
+python3 - "$S" <<'REFS' || { echo "a 1.7.22 reference no longer carries the pre-migration shape" >&2; exit 1; }
+import pathlib, sys
+refs = pathlib.Path(sys.argv[1]) / "references"
+for name in ("implement-prompt.1.7.22.md", "implement-prompt-actions.1.7.22.md",
+             "implement-prd-prompt.1.7.22.md"):
+    t = (refs / name).read_text()
+    assert "RED: write one failing test" in t, f"{name}: the ritual is gone — this reference tracks HEAD"
+    assert "Do not manufacture a test to satisfy a quota." not in t, f"{name}: carries the NEW text"
+REFS
+
 P1723="$TMP/verify-doctrine-$LANGUAGE"
 rm -rf "$P1723"
 mkdir -p "$P1723/.sandcastle/implement" "$P1723/.sandcastle/implement-prd" \

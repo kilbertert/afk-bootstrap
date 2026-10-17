@@ -63,10 +63,8 @@
   that affect observability or interoperability.
 - Update the tests that cover behavior you changed, and keep them passing. A
   regression test is the durable record that old behavior still holds, and it is
-  worth writing for exactly that reason. Test scope is risk-based: cover the
-  behavior you touched plus the regressions that would otherwise be silent, and
-  do not manufacture coverage for its own sake. The full suite is a gate you run
-  once before delivery, not a loop you spin after every edit.
+  worth writing for exactly that reason. The full suite is a gate you run once
+  before delivery, not a loop you spin after every edit.
 
 ## This project's specifics
 

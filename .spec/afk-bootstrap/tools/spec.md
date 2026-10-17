@@ -2,8 +2,9 @@
 title: tools
 desc: 接线工具——只解析定位、拼接文本、再解析断言
 hue: 140
+code:
+  - tools/policy-wire.py#steps_of
 related:
-  - tools/policy-wire.py
   - tools/ticket-wire.py
   - tools/ticket-writeback-wire.py
   - tools/add-search-duty.mjs
@@ -15,6 +16,9 @@ related:
 把一段纪律**接进**已存在的文件里：workflow 的某一步、prompt 的某一段。
 
 ## raw source
+
+树的锚（唯一一处）：`steps_of` 决定「哪个 job 的哪一步」——它错了，后面所有
+定位都落在错的步骤上。其余工具按 related 归入本节点（覆盖网），不逐文件锚。
 
 **这一类改动一轮一轮地漏，是本文档记录得最细的一处。** 给 `afk-policy.yml` 的 checkout
 补两行，六轮全在同一个地方，每一轮的判据都比上一轮精细，每一轮都被下一个兄弟绕过：

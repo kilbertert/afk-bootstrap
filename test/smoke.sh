@@ -3579,3 +3579,198 @@ grep -q 'needs its' "$PCLEAN/docs/agents/architecture-decisions.md" \
   || { echo "an unedited convention document was not restaged" >&2; exit 1; }
 
 echo "1.7.22 project-edit guard checks passed"
+
+# ---- 1.7.23: verification is risk-shaped, and the full gate runs once --------
+#
+# The fixture is built to carry the divergences the REAL consumer repositories
+# carry, because that is the only fixture that tests the decision this step makes.
+# A fixture whose prompts still matched the scaffold byte-for-byte would pass
+# while every live repository silently no-opped — the failure mode ADR 0003
+# records, and the reason this step edits anchors instead of restaging whole
+# files. Two divergences are injected below:
+#
+#   * the language substitution that bootstrap applies to a python project, which
+#     no upgrade step re-applies (`upgrade-afk.sh` has no substitution logic);
+#   * a hand-written verification paragraph of the kind all three live python
+#     repositories carry, naming a credential red line. It must survive untouched.
+#
+# The three properties asserted, in the order they matter:
+#   1. the red-green LOOP is gone — it is the loop, not the tests, that costs;
+#   2. the project's own gate command is byte-unchanged — the step must not
+#      rewrite what a repository chose to verify with;
+#   3. the project's hand-written paragraph is still there.
+P1723="$TMP/verify-doctrine-$LANGUAGE"
+rm -rf "$P1723"
+mkdir -p "$P1723/.sandcastle/implement" "$P1723/.sandcastle/implement-prd" \
+         "$P1723/.github/workflows"
+git -C "$P1723" init -q -b work
+for REL in implement-prompt.md implement/prompt.md implement-prd/prompt.md; do
+  cp "$S/references/$(case $REL in
+       implement-prompt.md) echo implement-prompt.1.7.22.md ;;
+       implement/prompt.md) echo implement-prompt-actions.1.7.22.md ;;
+       *) echo implement-prd-prompt.1.7.22.md ;;
+     esac)" "$P1723/.sandcastle/$REL"
+done
+cp "$S/references/CODING_STANDARDS.md.1.7.22" "$P1723/.sandcastle/CODING_STANDARDS.md"
+printf 'FROM node:24\n' > "$P1723/.sandcastle/Dockerfile"
+cp "$S/scaffold/.sandcastle/repo-map.mjs" "$S/scaffold/.sandcastle/repo-map.check.mjs" \
+   "$S/scaffold/.sandcastle/consensus-contract.json" "$P1723/.sandcastle/"
+
+# Inject the divergence the real repositories have. The python substitution is
+# applied to every markdown file, exactly as `bootstrap-afk.sh` applies it.
+if [ "$LANGUAGE" = "python" ]; then
+  node -e '
+    const fs = require("fs"), path = require("path");
+    const check = "uv sync --extra dev && uv run pytest && uv run ruff check";
+    (function walk(d) {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (e.name.endsWith(".md")) {
+          const s = fs.readFileSync(p, "utf8");
+          if (s.includes("npm run check")) fs.writeFileSync(p, s.replace(/npm run check/g, check));
+        }
+      }
+    })(process.argv[1]);
+  ' "$P1723/.sandcastle"
+fi
+# A project-authored verification paragraph, of the shape AI-Ops and health-flow
+# both wrote for themselves.
+cat >> "$P1723/.sandcastle/implement-prompt.md" <<'VERIFY'
+
+This repo HAS a project verification skill, `.claude/skills/verify-smoke`.
+Never record a device token in evidence or a commit.
+VERIFY
+
+printf '{"afk_template_version":"1.7.22","templateVersion":1,"language":"%s","repository":"kilbertert/smoke","cron_hour":13}\n' \
+  "$LANGUAGE" > "$P1723/.afk-bootstrap.json"
+
+"$S/upgrade-afk.sh" "$P1723" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project whose prompts have diverged" >&2; exit 1; }
+
+python3 - "$P1723" <<'RIGHTSIZE' || { echo "1.7.23 did not right-size the prompts" >&2; exit 1; }
+import pathlib, sys
+root = pathlib.Path(sys.argv[1]) / ".sandcastle"
+# The three promptFiles that carry the loop, and who loads each.
+LOOPED = {
+    "implement-prompt.md": "planner.ts — `pnpm ralph`",
+    "implement/prompt.md": "implement.ts — the labelled issue (Actions)",
+    "implement-prd/prompt.md": "implement-prd.ts — PRD loop (Actions)",
+}
+GUIDANCE = "Do not manufacture a test to satisfy a quota."
+CADENCE = "run it once, when the change is complete"
+for rel, who in LOOPED.items():
+    t = (root / rel).read_text()
+    # The loop is gone. This is the assertion the old text cannot survive.
+    assert "RED: write one failing test" not in t, f"{rel} ({who}): the red-green loop survives"
+    assert "Use red-green-refactor" not in t, f"{rel} ({who}): the ritual heading survives"
+    # Present exactly once. `exactly once` and not `at least once`: the defect
+    # class this repo has already shipped twice is a per-upgrade duplicate, and
+    # an `at least` assertion passes on every damaged tree.
+    assert t.count(GUIDANCE) == 1, f"{rel} ({who}): guidance appears {t.count(GUIDANCE)} times, not once"
+    assert t.count(CADENCE) == 1, f"{rel} ({who}): cadence appears {t.count(CADENCE)} times, not once"
+RIGHTSIZE
+
+# The project's own gate command must be byte-unchanged. This is the guard that
+# keeps the step from rewriting what a repository chose to verify with: a python
+# project still runs uv, and no `npm run check` may have leaked into it.
+if [ "$LANGUAGE" = "python" ]; then
+  grep -q 'uv run pytest' "$P1723/.sandcastle/implement-prompt.md" \
+    || { echo "the step destroyed a python project's gate command" >&2; exit 1; }
+  if grep -R -q --include='*.md' 'npm run check' "$P1723/.sandcastle"; then
+    echo "the step leaked a node gate into a python project" >&2; exit 1
+  fi
+else
+  grep -q 'npm run check' "$P1723/.sandcastle/implement-prompt.md" \
+    || { echo "the step destroyed a node project's gate command" >&2; exit 1; }
+fi
+
+# The project's hand-written verification paragraph survives untouched.
+grep -q 'verify-smoke' "$P1723/.sandcastle/implement-prompt.md" \
+  || { echo "the step destroyed a project's own verification paragraph" >&2; exit 1; }
+grep -q 'Never record a device token' "$P1723/.sandcastle/implement-prompt.md" \
+  || { echo "the step destroyed a project's credential red line" >&2; exit 1; }
+
+# CODING_STANDARDS.md is byte-clean in every consumer, so it is restaged from the
+# template rather than edited in place.
+grep -q 'not a loop you spin after every edit' "$P1723/.sandcastle/CODING_STANDARDS.md" \
+  || { echo "the coding standards were not restaged" >&2; exit 1; }
+
+# Negative control: the step is reachable, and the tool's own exit-3 path is the
+# only reason it could be skipped. Proven by defeating the TOOL rather than the
+# version gate: the gate is `from_patch -lt 23`, and a fixture parked below that
+# is legitimately in scope, so moving the version cannot make this control fail.
+# What can make it fail is the tool declining to recognise the block — so the
+# anchor is destroyed here, and the ritual must then survive with a warning.
+P1723OFF="$TMP/verify-doctrine-off-$LANGUAGE"
+rm -rf "$P1723OFF"
+cp -R "$P1723" "$P1723OFF"
+for REL in implement-prompt.md implement/prompt.md implement-prd/prompt.md; do
+  cp "$S/references/$(case $REL in
+       implement-prompt.md) echo implement-prompt.1.7.22.md ;;
+       implement/prompt.md) echo implement-prompt-actions.1.7.22.md ;;
+       *) echo implement-prd-prompt.1.7.22.md ;;
+     esac)" "$P1723OFF/.sandcastle/$REL"
+  # Reword the block's heading so every anchor this tool matches is gone.
+  sed -i 's/^Use red-green-refactor where applicable[:.]\?$/Take a failing test first, where that helps./' \
+    "$P1723OFF/.sandcastle/$REL"
+done
+node -e '
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  m.afk_template_version = "1.7.22";
+  fs.writeFileSync(process.argv[1], JSON.stringify(m, null, 2) + "\n");
+' "$P1723OFF/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$P1723OFF" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project whose block was reworded" >&2; exit 1; }
+grep -q 'Take a failing test first' "$P1723OFF/.sandcastle/implement-prompt.md" \
+  || { echo "a reworded block was overwritten — the tool guessed" >&2; exit 1; }
+if grep -q 'Do not manufacture a test to satisfy a quota' "$P1723OFF/.sandcastle/implement-prompt.md"; then
+  echo "a reworded block got the template's guidance inserted beside it" >&2; exit 1
+fi
+
+# Idempotency: a re-run must not add a second copy. This is the defect class that
+# bit 1.7.13 (a presence test that could never match its own insert) and 1.7.19
+# (four stacked copies). A re-run that stacks is invisible to a single run.
+cp -R "$P1723" "$P1723-again"
+node -e '
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  m.afk_template_version = "1.7.22";
+  fs.writeFileSync(process.argv[1], JSON.stringify(m, null, 2) + "\n");
+' "$P1723-again/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$P1723-again" --cron-hour 13 >/dev/null \
+  || { echo "the re-run refused a project it had just migrated" >&2; exit 1; }
+python3 - "$P1723-again" <<'IDEM' || { echo "a second run stacked a duplicate" >&2; exit 1; }
+import pathlib, sys
+root = pathlib.Path(sys.argv[1]) / ".sandcastle"
+for rel in ("implement-prompt.md", "implement/prompt.md", "implement-prd/prompt.md"):
+    t = (root / rel).read_text()
+    assert t.count("Do not manufacture a test to satisfy a quota.") == 1, rel
+    assert t.count("run it once, when the change is complete") == 1, rel
+    assert "Use red-green-refactor" not in t, rel
+IDEM
+
+# The tool's own duplication behaviour, exercised directly. The re-run above
+# cannot fail this way — once the tool has rewritten the block its anchor is gone,
+# so a second run exits 3 before it could write anything, and the "no stacking"
+# property holds for a reason that has nothing to do with the tool's marker check.
+# Measured: disabling that check (`if (lines.some((l) => l.includes(MARK)))
+# process.exit(4)`) leaves the smoke test fully green. So the marker is defence in
+# depth, not the thing under test, and the assertion that actually catches a
+# stacked copy is the `== 1` count. Proven against a hand-injected duplicate,
+# because a guard nobody has watched fail is a guard nobody knows works.
+python3 - "$S/scaffold/.sandcastle/implement-prompt.md" <<'DUP' || { echo "the duplicate guard does not bite" >&2; exit 1; }
+import pathlib, sys
+t = pathlib.Path(sys.argv[1]).read_text()
+g = "Do not manufacture a test to satisfy a quota."
+assert t.count(g) == 1, "scaffold no longer carries exactly one copy"
+stacked = t.replace(g, g + "\n" + g, 1)
+try:
+    assert stacked.count(g) == 1, f"guidance appears {stacked.count(g)} times, not once"
+except AssertionError:
+    sys.exit(0)
+sys.exit(1)
+DUP
+
+echo "1.7.23 risk-based verification checks passed"

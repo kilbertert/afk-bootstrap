@@ -4091,7 +4091,17 @@ if [ "$to_minor" -ge 7 ] &&
       .sandcastle/review/prompt.md)    ref="$S/references/review-prompt-fixer.1.7.26.md" ;;
       .sandcastle/review/axis-prompt.md) ref="$S/references/review-axis-prompt.1.7.26.md" ;;
     esac
-    if [ ! -e "$TARGET/$rel" ]; then
+    # ⚠️ Compare the STAGED copy, not `$TARGET`. An earlier step (1.7.24) adds the
+    # adversary section to `review-prompt.md` **in `$WORK`**, so a consumer coming
+    # from before 1.7.24 has a `$TARGET` copy that cannot match the 1.7.26
+    # reference: the guard would refuse, the criterion would be skipped, and the
+    # file would still be published and stamped 1.7.27 — the criterion silently
+    # absent from a file whose version says it is there. Caught by review.
+    #
+    # `$WORK` is also the right thing to protect: it holds the project's own text
+    # after every earlier step has run, so a hand-edited prompt still fails the
+    # comparison and is reported rather than overwritten.
+    if [ ! -e "$WORK/$rel" ]; then
       note "$rel absent; skipped"
       continue
     fi
@@ -4116,7 +4126,7 @@ if [ "$to_minor" -ge 7 ] &&
       node_check="npm run check"
       sed -E "s#${q}${python_check}${q}#${q}${node_check}${q}#g" "$1"
     }
-    if [ "$(norm "$TARGET/$rel")" = "$(norm "$ref")" ]; then
+    if [ "$(norm "$WORK/$rel")" = "$(norm "$ref")" ]; then
       RESTAGE="$RESTAGE $rel"
     else
       # Report rather than guess. A project that hand-edited one of these keeps

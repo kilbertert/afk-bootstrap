@@ -4315,3 +4315,30 @@ grep -q 'differs from what this template shipped' <<<"$EDIT_OUT" \
   || { echo "a hand-edited review prompt was restaged silently" >&2; exit 1; }
 
 echo "1.7.27 test-double-criterion checks passed"
+
+# REGRESSION (review): a consumer coming from BEFORE 1.7.24 must still receive the
+# criterion. The 1.7.24 step adds the adversary section to `review-prompt.md` in
+# `$WORK`, so a guard that compared `$TARGET` would refuse — and the file would
+# still be published and stamped 1.7.27 with the criterion silently absent.
+P1727OLD="$TMP/fake-$LANGUAGE-1727-pre1724"
+mkdir -p "$P1727OLD"
+git -C "$P1727OLD" init -q -b main
+git -C "$P1727OLD" remote add origin "https://github.com/$REPO.git"
+"$S/bootstrap-afk.sh" "$P1727OLD" --language "$LANGUAGE" --repo "$REPO" --no-build >/dev/null
+# Strip the adversary section to make it a pre-1.7.24 shape.
+cp "$S/references/review-prompt.1.7.23.md" "$P1727OLD/.sandcastle/review-prompt.md"
+cp "$S/references/review-prompt-fixer.1.7.26.md" "$P1727OLD/.sandcastle/review/prompt.md"
+cp "$S/references/review-axis-prompt.1.7.26.md" "$P1727OLD/.sandcastle/review/axis-prompt.md"
+if [ "$LANGUAGE" = "python" ]; then
+  node "$S/tools/adapt-check-command.mjs" --root "$P1727OLD" --scaffold "$S" >/dev/null
+fi
+printf '{"afk_template_version":"1.7.22","templateVersion":1,"language":"%s","repository":"kilbertert/smoke","cron_hour":13}\n' \
+  "$LANGUAGE" > "$P1727OLD/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$P1727OLD" --cron-hour 13 >/dev/null 2>&1 \
+  || { echo "upgrade refused a pre-1.7.24 consumer" >&2; exit 1; }
+# BOTH sections must reach the published file: the 1.7.24 adversary duty AND the
+# 1.7.27 criterion. Getting one without the other is the defect this checks.
+grep -q 'You are the adversary, not the author' "$P1727OLD/.sandcastle/review-prompt.md" \
+  || { echo "a pre-1.7.24 consumer lost the adversary duty" >&2; exit 1; }
+grep -q 'check the double' "$P1727OLD/.sandcastle/review-prompt.md" \
+  || { echo "a pre-1.7.24 consumer never got the double criterion" >&2; exit 1; }

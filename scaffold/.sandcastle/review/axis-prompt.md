@@ -41,7 +41,10 @@ production. **The suite is not wrong about the code; it is wrong about the world
 
 This is a finding you can produce rather than describe:
 
-1. Pick a new or changed double, and the real system it stands for.
+1. Pick a double that backs the new or changed code, and the real system it stands
+   for. The double itself need not have changed: a fake that was left untouched
+   while the client it stands in for was rewritten is exactly the case that hides
+   a defect.
 2. Name one thing the real system does that the double does not — something it
    **rejects**, ignores, requires, or answers differently. Reading the real
    client's source, an API doc, or a captured response all count as evidence;

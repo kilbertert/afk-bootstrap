@@ -4050,6 +4050,119 @@ if [ "$STEP_RAN" = "0" ]; then
 fi
 
 
+# ---- step: 1.7.26 -> 1.7.27 — the reviewers learn where green tests lie ------
+# 1.7.24 and 1.7.25 gave both review paths the adversary duty and the sentence
+# "a green suite is not evidence". This step adds the half that sentence implies
+# but never said: WHY, and what to do about it.
+#
+# The why is now measured rather than asserted. AI-Ops shipped three defects that
+# were unavailable in the whole test suite because the fake upstream accepted more
+# than the real one (ADR 0030 there): an endpoint filtered on a header the caller
+# never sent, a parameter the real side reads only from the query string, and a
+# response field whose real name was `invitation_results` where the double said
+# `results`. Each passed 54 green tests. The suite was not wrong about the code;
+# it was wrong about the world. Relaxing a double RAISES coverage and LOWERS
+# fidelity, which is why "write more tests" is not the fix and this is a
+# review-time criterion instead of a coverage target.
+#
+# WHY A `cmp`-GUARDED RESTAGE, after 1.7.23 argued for anchored edits. Measured
+# 2026-10-18 across the three Python consumers: of these three files,
+# `review/axis-prompt.md` is byte-identical to the scaffold (0 diff lines) and the
+# other two differ by exactly 2 and 4 lines — and every one of those lines is the
+# per-language `npm run check` -> `uv sync ...` substitution, nothing else. Proved
+# by normalising that substitution in each consumer and re-diffing: 0 lines remain
+# in all three. So a bare `cmp` refuses in every consumer (useless), while a `cmp`
+# against the NORMALISED copy accepts all three (safe) — a consumer that also
+# hand-edited these files falls out of the guard and keeps its version, reported.
+# The earlier steps chose anchored edits because their files diverged 9-25 lines
+# with hand-written project paragraphs; these three carry none. Same rule as
+# 1.7.25's note: `cmp` is right for a file nobody edited, wrong for one everybody
+# edited — and "everybody edited" has to be measured per file, not assumed.
+if [ "$to_minor" -ge 7 ] &&
+   { [ "$from_minor" -lt 7 ] ||
+     { [ "$from_minor" -eq 7 ] && [ "$from_patch" -lt 27 ]; }; }; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: the reviewers get the test-double criterion =="
+
+  RESTAGE=""
+  for rel in .sandcastle/review-prompt.md .sandcastle/review/prompt.md .sandcastle/review/axis-prompt.md; do
+    case "$rel" in
+      .sandcastle/review-prompt.md)    ref="$S/references/review-prompt.1.7.26.md" ;;
+      .sandcastle/review/prompt.md)    ref="$S/references/review-prompt-fixer.1.7.26.md" ;;
+      .sandcastle/review/axis-prompt.md) ref="$S/references/review-axis-prompt.1.7.26.md" ;;
+    esac
+    # ⚠️ Compare the STAGED copy, not `$TARGET`. An earlier step (1.7.24) adds the
+    # adversary section to `review-prompt.md` **in `$WORK`**, so a consumer coming
+    # from before 1.7.24 has a `$TARGET` copy that cannot match the 1.7.26
+    # reference: the guard would refuse, the criterion would be skipped, and the
+    # file would still be published and stamped 1.7.27 — the criterion silently
+    # absent from a file whose version says it is there. Caught by review.
+    #
+    # `$WORK` is also the right thing to protect: it holds the project's own text
+    # after every earlier step has run, so a hand-edited prompt still fails the
+    # comparison and is reported rather than overwritten.
+    if [ ! -e "$WORK/$rel" ]; then
+      note "$rel absent; skipped"
+      continue
+    fi
+    # Normalise the language substitution before comparing, so a Python consumer
+    # that is otherwise unedited still matches. Both spellings are collapsed; the
+    # substitution is re-applied after the restage by the 1.7.26 tool.
+    # The pattern is built with printf rather than written as a single-quoted sed
+    # script: the linter reads backticks inside a single-quoted pattern as command
+    # substitution (SC2016) and fails the syntax job. Measured on the 1.7.26 smoke
+    # section, which had the same shape.
+    #
+    # Do NOT start a comment line with the linter's own directive keyword here —
+    # a `#` line whose next word is that keyword is parsed as a directive, and
+    # "reads backticks inside..." then fails as an unparsable one (SC1072/1073).
+    # Build both strings from a delimiter, so no backtick appears in the source at
+    # all: the linter flags backticks inside single quotes as command substitution
+    # (SC2016) however they are assembled, and a `# shellcheck disable=...` line is
+    # worse — it would silence the class rather than this instance.
+    norm() {
+      local q='`' python_check node_check
+      python_check="uv sync --extra dev && uv run pytest && uv run ruff check"
+      node_check="npm run check"
+      sed -E "s#${q}${python_check}${q}#${q}${node_check}${q}#g" "$1"
+    }
+    if [ "$(norm "$WORK/$rel")" = "$(norm "$ref")" ]; then
+      RESTAGE="$RESTAGE $rel"
+    else
+      # Report rather than guess. A project that hand-edited one of these keeps
+      # its version and is told what to carry over; silently overwriting would
+      # discard a review criterion someone wrote for their own repository.
+      note "$rel differs from what this template shipped; left as the project wrote it"
+      PROSE="$PROSE
+$rel"
+    fi
+  done
+
+  for rel in $RESTAGE; do
+    mkdir -p "$WORK/$(dirname "$rel")"
+    cp "$S/${rel#.sandcastle/}" "$WORK/$rel" 2>/dev/null || cp "$S/scaffold/$rel" "$WORK/$rel"
+    note "restaged: $rel"
+    NEW_FILES="$NEW_FILES $rel"
+  done
+
+  if [ -n "$RESTAGE" ]; then
+    # Re-apply the consumer's own check command. The restage above wrote the
+    # scaffold's `npm run check` back into files the 1.7.26 step had already
+    # translated, so without this a Python consumer would be left with a command
+    # that cannot run — the exact defect 1.7.26 fixed, reintroduced one step later.
+    ADAPT_STATUS=0
+    node "$S/tools/adapt-check-command.mjs" --root "$WORK" --scaffold "$S" \
+      --file .sandcastle/review-prompt.md --file .sandcastle/review/prompt.md \
+      --file .sandcastle/review/axis-prompt.md || ADAPT_STATUS=$?
+    case "$ADAPT_STATUS" in
+      0|3) : ;;
+      4) say "cannot determine this project's check command — refusing to guess" >&2; exit 1 ;;
+      *) echo "check-command adaptation failed (status $ADAPT_STATUS)" >&2; exit 1 ;;
+    esac
+  fi
+fi
+
+
 # ---- step: 1.7.25 -> 1.7.26 — the two prompts with NO per-language render ----
 # 1.7.23 through 1.7.25 fixed the "a rule reached one prompt and not the others"
 # defect four separate times, and every one of those fixes went through the

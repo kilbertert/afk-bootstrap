@@ -4250,3 +4250,68 @@ grep -q 'npm run check' "$P1726REF/.sandcastle/merge-prompt.md" \
   || { echo "an unknown language was given a guessed check command" >&2; exit 1; }
 
 echo "1.7.26 language-agnostic-prompt checks passed"
+
+# ---- 1.7.27: the reviewers learn where green tests lie ----------------------
+echo "1.7.27 test-double-criterion checks..."
+
+P1727="$TMP/fake-$LANGUAGE-1727"
+mkdir -p "$P1727"
+git -C "$P1727" init -q -b main
+git -C "$P1727" remote add origin "https://github.com/$REPO.git"
+"$S/bootstrap-afk.sh" "$P1727" --language "$LANGUAGE" --repo "$REPO" --no-build >/dev/null
+cp "$S/references/review-prompt.1.7.26.md"        "$P1727/.sandcastle/review-prompt.md"
+cp "$S/references/review-prompt-fixer.1.7.26.md"  "$P1727/.sandcastle/review/prompt.md"
+cp "$S/references/review-axis-prompt.1.7.26.md"   "$P1727/.sandcastle/review/axis-prompt.md"
+# A PYTHON fixture must carry the language substitution, or the cmp guard is tested
+# against a shape no Python consumer has. That normalisation IS the mechanism.
+if [ "$LANGUAGE" = "python" ]; then
+  node "$S/tools/adapt-check-command.mjs" --root "$P1727" --scaffold "$S" >/dev/null
+fi
+printf '{"afk_template_version":"1.7.26","templateVersion":1,"language":"%s","repository":"kilbertert/smoke","cron_hour":13}\n' \
+  "$LANGUAGE" > "$P1727/.afk-bootstrap.json"
+
+grep -q 'more forgiving than the real thing' "$P1727/.sandcastle/review/axis-prompt.md" \
+  && { echo "the 1.7.27 fixture already carries the criterion" >&2; exit 1; }
+
+OUT1727="$("$S/upgrade-afk.sh" "$P1727" --cron-hour 13 2>&1)" \
+  || { echo "upgrade refused a 1.7.26 consumer" >&2; exit 1; }
+
+# (a) The criterion reaches ALL THREE review files.
+grep -q 'more forgiving than the real thing' "$P1727/.sandcastle/review/axis-prompt.md" \
+  || { echo "the axis reviewer did not get the double criterion" >&2; exit 1; }
+grep -q 'check the double' "$P1727/.sandcastle/review-prompt.md" \
+  || { echo "the planner reviewer did not get the double criterion" >&2; exit 1; }
+grep -q 'keep the' "$P1727/.sandcastle/review/prompt.md" \
+  || { echo "the fixer did not get the double criterion" >&2; exit 1; }
+# (b) Published, not merely staged.
+for f in .sandcastle/review-prompt.md .sandcastle/review/prompt.md .sandcastle/review/axis-prompt.md; do
+  grep -q "changed: $f" <<<"$OUT1727" \
+    || { echo "the step restaged $f but never published it" >&2; exit 1; }
+done
+# (c) A python consumer must NOT be left with the node command.
+if [ "$LANGUAGE" = "python" ]; then
+  if grep -q 'npm run check' "$P1727/.sandcastle/review-prompt.md" "$P1727/.sandcastle/review/prompt.md"; then
+    echo "1.7.27 reverted a python consumer's check command to npm" >&2; exit 1
+  fi
+  grep -q 'uv sync --extra dev' "$P1727/.sandcastle/review-prompt.md" \
+    || { echo "review-prompt.md lost the project's own check command" >&2; exit 1; }
+fi
+
+# NEGATIVE CONTROL: a project that hand-edited one of these files keeps its text.
+P1727EDIT="$TMP/fake-$LANGUAGE-1727-edited"
+mkdir -p "$P1727EDIT"
+git -C "$P1727EDIT" init -q -b main
+git -C "$P1727EDIT" remote add origin "https://github.com/$REPO.git"
+"$S/bootstrap-afk.sh" "$P1727EDIT" --language "$LANGUAGE" --repo "$REPO" --no-build >/dev/null
+cp "$S/references/review-axis-prompt.1.7.26.md" "$P1727EDIT/.sandcastle/review/axis-prompt.md"
+printf '\n# PROJECT RULE\nOur axis reviewer also checks the audit log shape.\n' \
+  >> "$P1727EDIT/.sandcastle/review/axis-prompt.md"
+printf '{"afk_template_version":"1.7.26","templateVersion":1,"language":"%s","repository":"kilbertert/smoke","cron_hour":13}\n' \
+  "$LANGUAGE" > "$P1727EDIT/.afk-bootstrap.json"
+EDIT_OUT="$("$S/upgrade-afk.sh" "$P1727EDIT" --cron-hour 13 2>&1)" || true
+grep -q 'PROJECT RULE' "$P1727EDIT/.sandcastle/review/axis-prompt.md" \
+  || { echo "the upgrade destroyed a project's own text in axis-prompt.md" >&2; exit 1; }
+grep -q 'differs from what this template shipped' <<<"$EDIT_OUT" \
+  || { echo "a hand-edited review prompt was restaged silently" >&2; exit 1; }
+
+echo "1.7.27 test-double-criterion checks passed"

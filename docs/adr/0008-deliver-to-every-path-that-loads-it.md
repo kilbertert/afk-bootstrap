@@ -46,6 +46,27 @@
 **17 行**（手工套用的 `uv run pytest` 替换 + 项目自己的门禁措辞），`cmp` 守卫会在每个仓拒绝，
 这一步就在所有仓静默 no-op —— 与 1.7.23 面对的是同一个原因。
 
+## 第三次：写这份记录时又漏了一个
+
+上面的「只处理 `review-prompt.md`」那段判断**本身是对的**——`review/prompt.md` 确实是
+两轴之后的修复者，职责不同。但同一目录下**还有 `review/axis-prompt.md`，它才是首轮审查者**
+（`review.ts:178`，由 Actions 的 `agent:review` 触发，`You are the **{{REVIEW_AXIS}}** reviewer`）。
+它和 `review-prompt.md` 是两个文件、两条链路，而我只核对了被点名的那一个。
+
+Devin Review 在 health-flow 的 PR 上问出了这一点（"The `agent:review` workflow uses
+`runAxis` … not this prompt. Only the `ralph` planner receives the new instructions"），
+核实属实。**同一形状的第三次**：规则发到*我想到的路径*，而不是加载它的每条路径；
+这次连「否掉一个替代方案」的判断本身都成了遮挡——它让我以为那个目录已经检查过了。
+
+**它需要改写而不是照抄**：`axis-prompt.md` 是**只读**的（`Do not edit files`，不接受 commit），
+输出是 JSON `findings` 数组。所以「一条 finding 是你**跑出来**的失败输出」在它身上要落成
+「一条 finding 要点名**能弄坏它的具体输入**」——它跑不了、也修不了。
+记为 1.7.25，不在 1.7.24 里顺手扩范围。
+
+**本记录**（而非任何机械检查）是这件事的唯一防线。所以这一节留在这里：
+下次有人按这份记录复核时，「否掉了 X」应当读成「复核过 X」，而不是「检查过那个目录」。
+
+
 ## 被否掉的替代形态
 
 - **并进已开的三个 1.7.23 PR。** 那三个 PR 当时门禁已全绿、review threads 已清空；

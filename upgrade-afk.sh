@@ -4050,6 +4050,90 @@ if [ "$STEP_RAN" = "0" ]; then
 fi
 
 
+# ---- step: 1.7.25 -> 1.7.26 — the two prompts with NO per-language render ----
+# 1.7.23 through 1.7.25 fixed the "a rule reached one prompt and not the others"
+# defect four separate times, and every one of those fixes went through the
+# per-language machinery: bootstrap renders `templates/implement.<lang>.md`, and
+# the steps edit the prompts that have such a render.
+#
+# `merge-prompt.md` and `update-branch/prompt.md` have NONE. Nothing in either is
+# about Node, so neither ever needed a per-language variant — which is exactly why
+# they were never on any list. Both still said `npm run check`, in the two prompts
+# whose entire job is "resolve the conflict, then verify": a Python project's merge
+# agent was told to run a command that does not exist, and then to fix what it
+# reported. Measured 2026-10-18 on all three Python consumers: 2 hits each, in
+# exactly these two files, while all five per-language prompts were correct.
+#
+# The rule is now ONE tool with TWO callers (`tools/adapt-check-command.mjs`,
+# also called by `bootstrap-afk.sh`), rather than a hardcoded copy in bootstrap
+# and nothing at all here. Two implementations of one rule is what ADR 0003 keeps
+# finding missing in this repository; this step is that ADR applied to the fix
+# for it.
+#
+# ⚠️ The two files are staged by name because `$WORK` does not carry them.
+# `bootstrap-afk.sh` copies the whole scaffold, so a NEW project has both; the
+# upgrade path nudges only what it names, so it must name them. A tool that
+# walked `$TARGET` directly would edit the live tree, defeating the staged-publish
+# model every other step uses.
+if [ "$to_minor" -ge 7 ] &&
+   { [ "$from_minor" -lt 7 ] ||
+     { [ "$from_minor" -eq 7 ] && [ "$from_patch" -lt 26 ]; }; }; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: the two language-agnostic prompts get the project's check =="
+
+  STAGED_ANY=0
+  for rel in .sandcastle/merge-prompt.md .sandcastle/update-branch/prompt.md; do
+    [ -e "$TARGET/$rel" ] || { note "$rel absent; skipped"; continue; }
+    mkdir -p "$WORK/$(dirname "$rel")"
+    cp "$TARGET/$rel" "$WORK/$rel"
+    STAGED_ANY=1
+  done
+
+  if [ "$STAGED_ANY" = "1" ]; then
+    # Reads `language` from the STAGED provenance, which earlier steps have kept
+    # current. `--root "$WORK"` keeps every write inside the stage.
+    #
+    # ⚠️ `|| ADAPT_STATUS=$?` is load-bearing, not style. This script runs under
+    # `set -e`, so a bare call would ABORT on the tool's exit 3 — which is the
+    # ordinary "nothing to do" outcome for a node project. Measured: a node
+    # consumer died with "upgrade refused a 1.7.25 consumer" and the `case` below
+    # never ran. The first version used a `\` line continuation and put `case $?`
+    # after it, which reads `$?` from the continuation itself — the same class of
+    # mistake the 1.7.24 review caught with a substring anchor.
+    ADAPT_STATUS=0
+    node "$S/tools/adapt-check-command.mjs" --root "$WORK" --scaffold "$S" \
+      --file .sandcastle/merge-prompt.md --file .sandcastle/update-branch/prompt.md \
+      || ADAPT_STATUS=$?
+    case "$ADAPT_STATUS" in
+      0)
+        say "the project's own check command replaced \`npm run check\` in both prompts" ;;
+      3)
+        # Nothing written. ⚠️ `NEW_FILES` must NOT be set in this branch: the
+        # publish tail restages from `$WORK`, and for a node project `$WORK` still
+        # holds the SCAFFOLD's copy — which is not the same file as the project's.
+        # Measured: a node consumer's two prompts were silently reverted to the
+        # scaffold text while the run reported success. That would clobber any
+        # project edit to either prompt, which is worse than the defect this step
+        # fixes.
+        note "no \`npm run check\` in either prompt; already adapted, or a node project" ;;
+      4) # A refusal must not be reported as success. Leaving the old text is the
+         # honest outcome: it still looks wrong to a reader, which is recoverable.
+         note "could not determine this project's check command — prompts left unchanged" ;;
+      *) echo "check-command adaptation failed (status $ADAPT_STATUS)" >&2; exit 1 ;;
+    esac
+    # ⚠️ Staging is not publishing. The publish tail names its files explicitly
+    # (a fixed list, plus `NEW_FILES`), so a file this step staged and did NOT
+    # register is discarded at exit while the metadata still stamps 1.7.26 —
+    # the silent-skip failure mode this step exists to fix, reproduced by the
+    # step itself. Measured: without this, the tool printed both `adapted …`
+    # lines, the file kept `npm run check`, and the publish tail never named it.
+    if [ "$ADAPT_STATUS" = "0" ]; then
+      NEW_FILES="$NEW_FILES .sandcastle/merge-prompt.md .sandcastle/update-branch/prompt.md"
+    fi
+  fi
+fi
+
+
 # ---- report and publish ----------------------------------------------------
 # What changed is derived by comparing staged against original, so it cannot
 # drift from what the steps actually did.

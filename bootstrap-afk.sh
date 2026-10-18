@@ -179,28 +179,6 @@ if [ -e "$TARGET/AGENTS.md" ] && [ -e "$TARGET/AGENTS.override.md" ]; then
 fi
 append_managed_block "$TARGET/CLAUDE.md"
 
-# ---- python: swap `npm run check` in the copied planner/action prompts -----
-# The bundled prompts are node (`npm run check`); a python project's in-container
-# agents must verify with uv instead.
-if [ "$LANGUAGE" = "python" ]; then
-  node -e '
-    const fs = require("fs"), path = require("path");
-    const check = "uv sync --extra dev && uv run pytest && uv run ruff check";
-    (function walk(dir) {
-      for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-        const p = path.join(dir, e.name);
-        if (e.isDirectory()) walk(p);
-        else if (e.name.endsWith(".md")) {
-          const s = fs.readFileSync(p, "utf8");
-          if (s.includes("npm run check")) {
-            fs.writeFileSync(p, s.replace(/npm run check/g, check));
-          }
-        }
-      }
-    })(process.argv[1]);
-  ' "$TARGET/.sandcastle"
-fi
-
 # ---- record scaffold provenance -------------------------------------------
 node -e '
   const fs = require("fs");
@@ -224,6 +202,38 @@ node -e '
   }, null, 2) + "\n");
 ' "$TARGET/.afk-bootstrap.json" "$TEMPLATE_VERSION" "$LANGUAGE" "$REPO" \
   "$TARGET/.sandcastle/consensus-contract.json" "${RESOLVED_HOUR}"
+
+# ---- swap `npm run check` in the copied planner/action prompts --------------
+# The bundled prompts are node (`npm run check`); a python project's in-container
+# agents must verify with uv instead.
+#
+# ⚠️ **This must run AFTER the provenance write above.** The tool reads the
+# project's `language` from `.afk-bootstrap.json`, so calling it earlier finds no
+# file, exits 4, and substitutes nothing — measured, and it left all 8 hits in
+# place while printing no error the caller could see.
+#
+# One rule, two callers: `tools/adapt-check-command.mjs` does this substitution
+# for the upgrade path as well, and derives the command from the recorded
+# language rather than carrying its own copy. This used to be a second,
+# hardcoded implementation here — which is how the two files that have NO
+# per-language render (`merge-prompt.md`, `update-branch/prompt.md`) ended up
+# missed by the upgrade path while bootstrap looked correct (ADR 0009).
+#
+# Gated on `$LANGUAGE` because a node project has nothing to substitute; the tool
+# reports exit 3 for that, which is not an error.
+#
+# `|| STATUS=$?` rather than a `|| [ $? -eq 3 ]` chain: under `set -e` the chain
+# reads `$?` from the test, not from node, so a node project's benign exit 3 was
+# treated as a failure. Caught by the 1.7.26 smoke run, which refuses to let a
+# node project upgrade.
+if [ "$LANGUAGE" = "python" ]; then
+  ADAPT_STATUS=0
+  node "$S/tools/adapt-check-command.mjs" --root "$TARGET" --scaffold "$S" || ADAPT_STATUS=$?
+  case "$ADAPT_STATUS" in
+    0|3) : ;;
+    *) echo "check-command adaptation failed (status $ADAPT_STATUS)" >&2; exit 1 ;;
+  esac
+fi
 
 # ---- node_modules: the scaffold adds Node deps; keep them out of git ------
 if [ -f "$TARGET/.gitignore" ] && ! grep -qx 'node_modules' "$TARGET/.gitignore"; then

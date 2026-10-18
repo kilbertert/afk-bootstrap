@@ -92,6 +92,25 @@ scaffold 里每个提示词都写着 `npm run check`。其中五个有「一语�
   实测它们在真仓上是幂等的，所以目前只是重复输出、不是重复写入。
   与本记录无关，但同属「清单会过期」这一类。
 
+## 审查抓出的三处（都在第一版里）
+
+**1. 与 1.4.0 术语表步骤打架 —— 会产生悬挂指针。**
+这一步第一版无条件 `cp` 目标文件进 `$WORK`。但 1.4.0 的术语表步骤**已经**把
+`update-branch/prompt.md` stage 过（`CONTEXT.md` → `GLOSSARY.md`）并登记发布；
+我的 `cp` 把那份额外覆盖回原样，而同一次运行又把文档改名成 `GLOSSARY.md`。
+结果提示词指向一个不存在的文件。实测：1.3 的 fixture 升级后，文档变成
+`GLOSSARY.md`，提示词里仍写着 `CONTEXT.md`。改为 `[ -e "$WORK/$rel" ] || cp …`。
+
+**2. `exit 4` 的处理是错的。** 第一版写了个「note 一下、继续」的分支。
+但 `--dry-run` 在发布尾之前就 exit 了，所以那个分支在 dry-run 下是死代码、
+在实跑下是**静默不写**——而版本号照样盖成 1.7.26，下一次运行走「already at 1.7.26」
+提前退出、永不重试。按仓库自己的约定，被拒绝的迁移必须让项目保持原样。
+改为**致命错误**：实跑会停下且不盖版本，修好 `language` 后能重跑。
+
+**3. `bootstrap-afk.sh` 里一句注释描述了一条不存在的路径。** 它说工具
+"is not an error either way"，暗示那里有 dry-run——bootstrap 根本没有 dry-run。
+那句被删掉了，因为一句听起来合理的注释比没有注释更坏。
+
 ## 验证
 
 - `bash test/smoke.sh python` 与 `bash test/smoke.sh node` 全绿。
@@ -102,3 +121,12 @@ scaffold 里每个提示词都写着 `npm run check`。其中五个有「一语�
 - 第 3 条是本记录最重的一处：**修缺陷的步骤差点劫持项目的文件。**
   无条件登记时，node 项目这两个提示词会被 scaffold 的副本覆盖回去 ——
   而它们恰恰是最可能被人改过的文件。这条对照是写完第一版之后**靠跑才发现**的。
+- 另两条对照（针对上面「审查抓出的三处」）：
+  4. 把「不覆盖已 staged」改回无条件 `cp` → smoke 报
+     「a pre-1.4 upgrade left the prompt naming CONTEXT.md after renaming the doc」，退出 1；
+  5. 恢复无条件 `NEW_FILES` 登记 → node 的 smoke 报
+     「the upgrade reverted a project's own edit to merge-prompt.md」，退出 1。
+- **五条对照里，第 4、5 两条是审查提出、我实测复现后才补的** ——
+  它们覆盖的是第一版**没有**任何断言的两件事：与更早步骤的暂存冲突、
+  以及项目自有改动的保全。前三条覆盖的是「这一步有没有照它承诺的做」，
+  后两条覆盖的是「这一步有没有破坏别人的东西」。

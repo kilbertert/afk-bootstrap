@@ -4084,8 +4084,14 @@ if [ "$to_minor" -ge 7 ] &&
   STAGED_ANY=0
   for rel in .sandcastle/merge-prompt.md .sandcastle/update-branch/prompt.md; do
     [ -e "$TARGET/$rel" ] || { note "$rel absent; skipped"; continue; }
-    mkdir -p "$WORK/$(dirname "$rel")"
-    cp "$TARGET/$rel" "$WORK/$rel"
+    # ⚠️ Do NOT clobber a copy an earlier step already staged. The 1.4.0 glossary
+    # step rewrites `update-branch/prompt.md` in `$WORK` (CONTEXT.md ->
+    # GLOSSARY.md) and registers it for publication; copying the raw target over
+    # that restores the old filename, while the same run renames the document —
+    # so the prompt points at a file that no longer exists. Measured on a 1.3
+    # fixture: `CONTEXT.md` survived in the prompt while the doc became
+    # `GLOSSARY.md`. Caught by review, not by the smoke run.
+    [ -e "$WORK/$rel" ] || cp "$TARGET/$rel" "$WORK/$rel"
     STAGED_ANY=1
   done
 
@@ -4116,9 +4122,19 @@ if [ "$to_minor" -ge 7 ] &&
         # project edit to either prompt, which is worse than the defect this step
         # fixes.
         note "no \`npm run check\` in either prompt; already adapted, or a node project" ;;
-      4) # A refusal must not be reported as success. Leaving the old text is the
-         # honest outcome: it still looks wrong to a reader, which is recoverable.
-         note "could not determine this project's check command — prompts left unchanged" ;;
+      # ⚠️ exit 4 is UNREACHABLE from this path, and the first version's
+      # handling of it was wrong in a way worth recording: that branch tried to
+      # "note the refusal" — but this script exits at the `--dry-run` check
+      # BEFORE the publish tail, so a refusal could only ever be a no-op write
+      # into `$WORK` on a LIVE run. The version file would still be stamped, and
+      # the next run takes the "already at 1.7.26" early exit and never retries.
+      # Per docs/agents, a refused migration must leave the project unchanged.
+      # Treating it as a fatal error is the honest form: a live run stops and
+      # stamps nothing, so a corrected `language` can still be retried.
+      # This is how the tool's refusal is exercised from the upgrade path.
+      4) say "cannot determine this project's check command — refusing to guess" >&2
+         say "  (fix \`language\` in .afk-bootstrap.json, or add templates/implement.<lang>.md)" >&2
+         exit 1 ;;
       *) echo "check-command adaptation failed (status $ADAPT_STATUS)" >&2; exit 1 ;;
     esac
     # ⚠️ Staging is not publishing. The publish tail names its files explicitly

@@ -4192,6 +4192,44 @@ if [ "$LANGUAGE" = "node" ]; then
     || { echo "a node project lost its own check command" >&2; exit 1; }
 fi
 
+# NEGATIVE CONTROL: a project's OWN edit to one of these prompts must survive.
+# The first version registered both files in NEW_FILES unconditionally, so a node
+# project's prompts were silently reverted to the scaffold copy — and these two
+# files are the ones a project most often edits, because nothing in them is
+# language-specific. The fixture above cannot catch that: it holds unmodified
+# scaffold text, so reverting it changes nothing. This one carries an edit.
+P1726EDIT="$TMP/fake-$LANGUAGE-1726-edited"
+mkdir -p "$P1726EDIT"
+git -C "$P1726EDIT" init -q -b main
+git -C "$P1726EDIT" remote add origin "https://github.com/$REPO.git"
+"$S/bootstrap-afk.sh" "$P1726EDIT" --language "$LANGUAGE" --repo "$REPO" --no-build >/dev/null
+cp "$S/scaffold/.sandcastle/merge-prompt.md"         "$P1726EDIT/.sandcastle/merge-prompt.md"
+cp "$S/scaffold/.sandcastle/update-branch/prompt.md" "$P1726EDIT/.sandcastle/update-branch/prompt.md"
+printf '\n# PROJECT RULE\nOur merge agent must also update CHANGELOG.md.\n' \
+  >> "$P1726EDIT/.sandcastle/merge-prompt.md"
+printf '{"afk_template_version":"1.7.25","templateVersion":1,"language":"%s","repository":"kilbertert/smoke","cron_hour":13}\n' \
+  "$LANGUAGE" > "$P1726EDIT/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$P1726EDIT" --cron-hour 13 >/dev/null 2>&1 || true
+grep -q 'PROJECT RULE' "$P1726EDIT/.sandcastle/merge-prompt.md" \
+  || { echo "the upgrade reverted a project's own edit to merge-prompt.md" >&2; exit 1; }
+# And the doc it names must not have been left dangling: a pre-1.4 project's
+# `update-branch/prompt.md` names CONTEXT.md, which this same run renames.
+P1726GLOSS="$TMP/fake-$LANGUAGE-1726-glossary"
+mkdir -p "$P1726GLOSS"
+git -C "$P1726GLOSS" init -q -b main
+git -C "$P1726GLOSS" remote add origin "https://github.com/$REPO.git"
+"$S/bootstrap-afk.sh" "$P1726GLOSS" --language "$LANGUAGE" --repo "$REPO" --no-build >/dev/null
+rm -f "$P1726GLOSS/GLOSSARY.md"
+printf '# project glossary\n' > "$P1726GLOSS/CONTEXT.md"
+sed -i 's/GLOSSARY\.md/CONTEXT.md/g' "$P1726GLOSS/.sandcastle/update-branch/prompt.md"
+printf '{"afk_template_version":"1.3.0","templateVersion":1,"language":"%s","repository":"kilbertert/smoke","cron_hour":13}\n' \
+  "$LANGUAGE" > "$P1726GLOSS/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$P1726GLOSS" --cron-hour 13 >/dev/null 2>&1 || true
+if grep -q 'CONTEXT\.md' "$P1726GLOSS/.sandcastle/update-branch/prompt.md" \
+   && [ -e "$P1726GLOSS/GLOSSARY.md" ]; then
+  echo "a pre-1.4 upgrade left the prompt naming CONTEXT.md after renaming the doc" >&2; exit 1
+fi
+
 
 # NEGATIVE CONTROL: an unreadable language must leave the prompts ALONE and say
 # so. A step that guessed here would write a wrong command into two prompts with

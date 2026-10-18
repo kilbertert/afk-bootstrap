@@ -220,7 +220,13 @@ node -e '
 # missed by the upgrade path while bootstrap looked correct (ADR 0009).
 #
 # Gated on `$LANGUAGE` because a node project has nothing to substitute; the tool
-# reports exit 3 for that, which is not an error.
+# reports exit 3 for that.
+#
+# ⚠️ This call WRITES into $TARGET. bootstrap has no --dry-run (it is a create
+# path that refuses an existing target), so that is not a problem here — but an
+# earlier comment claimed the tool "is not an error either way", which described
+# an `upgrade-afk --dry-run` path this file does not have. Corrected rather than
+# left as a plausible-sounding sentence.
 #
 # `|| STATUS=$?` rather than a `|| [ $? -eq 3 ]` chain: under `set -e` the chain
 # reads `$?` from the test, not from node, so a node project's benign exit 3 was

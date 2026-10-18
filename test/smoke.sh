@@ -3966,3 +3966,107 @@ assert rc == 0 and out.count("## 0. You are the adversary, not the author") == 1
 ANCHORS
 
 echo "1.7.24 review-duty checks passed"
+
+# ---- 1.7.25: the OTHER reviewer gets the adversary duty --------------------
+#
+# 1.7.24 delivered the duty to `.sandcastle/review-prompt.md` and wrote an ADR
+# that considered and correctly rejected `.sandcastle/review/prompt.md` (the fixer
+# after the two axes). What that reasoning missed is that the SAME DIRECTORY holds
+# `review/axis-prompt.md` — the first-pass reviewer on the other path
+# (`review/review.ts:178`, the `agent:review` label). Third occurrence of the ADR
+# 0003 defect; found by Devin Review on a consumer PR.
+#
+# Delivered by `cmp`-guarded restage rather than an anchored edit, because the two
+# files differ in exactly this respect: `review-prompt.md` diverges from the
+# scaffold by 17 lines in every consumer, while `review/axis-prompt.md` was
+# measured BYTE-IDENTICAL in all three. The fixture builds from the 1.7.24
+# reference, which is that byte-clean pre-migration shape.
+P1725="$TMP/axis-review-duty-$LANGUAGE"
+rm -rf "$P1725"
+mkdir -p "$P1725/.sandcastle/review" "$P1725/.github/workflows"
+git -C "$P1725" init -q -b work
+cp "$S/references/review-axis-prompt.1.7.24.md" "$P1725/.sandcastle/review/axis-prompt.md"
+printf 'FROM node:24\n' > "$P1725/.sandcastle/Dockerfile"
+cp "$S/scaffold/.sandcastle/repo-map.mjs" "$S/scaffold/.sandcastle/repo-map.check.mjs" \
+   "$S/scaffold/.sandcastle/consensus-contract.json" "$P1725/.sandcastle/"
+printf '{"afk_template_version":"1.7.24","templateVersion":1,"language":"%s","repository":"kilbertert/smoke","cron_hour":13}\n' \
+  "$LANGUAGE" > "$P1725/.afk-bootstrap.json"
+
+# The fixture must NOT start with the duty, or this section proves nothing.
+grep -q 'YOUR JOB' "$P1725/.sandcastle/review/axis-prompt.md" \
+  && { echo "the 1.7.25 fixture already carries the duty — it is not a pre-1.7.25 shape" >&2; exit 1; }
+
+"$S/upgrade-afk.sh" "$P1725" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a 1.7.24 consumer" >&2; exit 1; }
+
+python3 - "$P1725" "$S" <<'AXISDUTY' || { echo "1.7.25 did not deliver the axis reviewer's duty" >&2; exit 1; }
+import pathlib, sys
+dst, src = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+rel = ".sandcastle/review/axis-prompt.md"
+t = (dst / rel).read_text()
+
+# Present exactly once — this repository's recorded defect class is a per-upgrade
+# duplicate (1.7.13 stacked four copies of its paragraph).
+n = t.count("# YOUR JOB")
+assert n == 1, f"{rel}: the adversary duty appears {n} times, not once"
+
+# Byte-equality with the scaffold: a freshly bootstrapped project and an upgraded
+# one must carry the same text for the same rule.
+assert t == (src / "scaffold" / rel).read_text(), f"{rel}: differs from the scaffold"
+
+# The read-only reviewer must NOT be told to run anything. Copying the writable
+# reviewer's paragraph here would demand something this prompt forbids.
+assert "described rather than demonstrated" in t, (
+    f"{rel}: missing the read-only framing; a copy of the other reviewer's text "
+    "would tell this prompt to run something it is forbidden to run"
+)
+assert "a failing output you ran" not in t, (
+    f"{rel}: carries the WRITABLE reviewer's criterion — this prompt cannot run code"
+)
+# The checkable criterion that replaces it.
+assert "names no input, so nobody can check it" in t, (
+    f"{rel}: missing the criterion that keeps a described finding checkable"
+)
+# And the read-only constraint itself is untouched.
+assert "Do not edit files" in t, f"{rel}: the read-only constraint was lost"
+AXISDUTY
+
+# Negative control: a project-edited axis prompt keeps its own text and does NOT
+# get the template's copy written over it. This is what the `cmp` guard buys, and
+# without this control the section proves only that the file changed.
+P1725EDIT="$TMP/axis-review-edited-$LANGUAGE"
+rm -rf "$P1725EDIT"
+mkdir -p "$P1725EDIT/.sandcastle/review" "$P1725EDIT/.github/workflows"
+cp "$S/references/review-axis-prompt.1.7.24.md" "$P1725EDIT/.sandcastle/review/axis-prompt.md"
+printf '\nProject own note: our review adds a security checklist.\n' \
+  >> "$P1725EDIT/.sandcastle/review/axis-prompt.md"
+printf 'FROM node:24\n' > "$P1725EDIT/.sandcastle/Dockerfile"
+cp "$S/scaffold/.sandcastle/repo-map.mjs" "$S/scaffold/.sandcastle/repo-map.check.mjs" \
+   "$S/scaffold/.sandcastle/consensus-contract.json" "$P1725EDIT/.sandcastle/"
+printf '{"afk_template_version":"1.7.24","templateVersion":1,"language":"%s","repository":"kilbertert/smoke","cron_hour":13}\n' \
+  "$LANGUAGE" > "$P1725EDIT/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$P1725EDIT" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project whose axis prompt was edited" >&2; exit 1; }
+grep -q 'Project own note' "$P1725EDIT/.sandcastle/review/axis-prompt.md" \
+  || { echo "an upgrade destroyed a project's own edit to its axis prompt" >&2; exit 1; }
+if grep -q '# YOUR JOB' "$P1725EDIT/.sandcastle/review/axis-prompt.md"; then
+  echo "the template overwrote a project-edited axis prompt instead of reporting it" >&2; exit 1
+fi
+
+# Idempotency: a re-run must not add a second copy.
+cp -R "$P1725" "$P1725-again"
+node -e '
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  m.afk_template_version = "1.7.24";
+  fs.writeFileSync(process.argv[1], JSON.stringify(m, null, 2) + "\n");
+' "$P1725-again/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$P1725-again" --cron-hour 13 >/dev/null \
+  || { echo "the re-run refused a project it had just migrated" >&2; exit 1; }
+python3 - "$P1725-again" <<'IDEM' || { echo "a second run stacked a duplicate axis duty" >&2; exit 1; }
+import pathlib, sys
+t = (pathlib.Path(sys.argv[1]) / ".sandcastle/review/axis-prompt.md").read_text()
+assert t.count("# YOUR JOB") == 1, t.count("# YOUR JOB")
+IDEM
+
+echo "1.7.25 axis-reviewer checks passed"

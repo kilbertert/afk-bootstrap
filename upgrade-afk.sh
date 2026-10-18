@@ -3965,6 +3965,62 @@ if [ "$to_minor" -ge 7 ] &&
   fi
 fi
 
+# ---- step: 1.7.24 -> 1.7.25 — the OTHER reviewer gets the adversary duty ----
+# 1.7.24 delivered the adversary duty to `.sandcastle/review-prompt.md` and wrote
+# an ADR that considered, and correctly rejected, `.sandcastle/review/prompt.md`
+# (the fixer that runs after the two axes — a different job). What that reasoning
+# did NOT catch is that the SAME DIRECTORY holds `review/axis-prompt.md`, which is
+# the first-pass reviewer on the other review path: `review/review.ts:178` loads
+# it for the two-axis review triggered by the `agent:review` label, and its own
+# text says `You are the **{{REVIEW_AXIS}}** reviewer`.
+#
+# So the duty reached one reviewer and not the other. That is the third time this
+# repository has shipped the ADR 0003 defect — a rule delivered to the path the
+# author had in mind rather than to every path that loads it (1.7.18 lost two of
+# five implement prompts; 1.7.23 reached scaffold-only, 0 of 3 consumers). The new
+# wrinkle: "we considered and rejected X" made the whole directory look checked.
+# Found by Devin Review on a consumer PR, which asked why the `agent:review` path
+# got nothing.
+#
+# NOT a copy of the other reviewer's paragraph, and that is the point. This prompt
+# is READ-ONLY (`Do not edit files, commit, push`) and its output is a JSON
+# `findings` array, so it cannot demonstrate a failure the way the writable
+# reviewer can. The text says the counterexample is DESCRIBED rather than
+# demonstrated, and gives the criterion that keeps that checkable: a finding names
+# a concrete input; "this looks fragile" names none. Pasting the writable
+# reviewer's "a finding is a failing output you ran" here would demand something
+# this prompt is forbidden to do.
+#
+# Delivered by `cmp`-guarded restage, unlike 1.7.24's anchored edit, because the
+# two files differ in exactly this respect: `review-prompt.md` diverges from the
+# scaffold by 17 lines in every consumer (hand-applied `uv run pytest` plus the
+# project's own gate wording), while `review/axis-prompt.md` was measured
+# BYTE-IDENTICAL to the scaffold in all three. A `cmp` guard is right for a file
+# nobody has edited and wrong for one everybody has.
+if [ "$to_minor" -ge 7 ] &&
+   { [ "$from_minor" -lt 7 ] ||
+     { [ "$from_minor" -eq 7 ] && [ "$from_patch" -lt 25 ]; }; }; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: the two-axis reviewer gets the adversary duty =="
+
+  REL=.sandcastle/review/axis-prompt.md
+  if [ ! -e "$WORK/$REL" ]; then
+    note "$REL absent; skipped"
+  elif grep -qF "# YOUR JOB" "$WORK/$REL"; then
+    note "$REL: already carries the adversary duty"
+  elif cmp -s "$WORK/$REL" "$S/references/review-axis-prompt.1.7.24.md"; then
+    cp "$S/scaffold/$REL" "$WORK/$REL"
+    NEW_FILES="$NEW_FILES $REL"
+    note "$REL: restaged (the read-only reviewer is told to describe, not demonstrate)"
+  else
+    say "$REL differs from what this template shipped; left as the project's own."
+    say "  Worth carrying over by hand: this reviewer did not write the change and"
+    say "  its job is to make it fail; since it cannot run or edit, its"
+    say "  counterexample must NAME the concrete input that would break the diff"
+    say "  (not merely look fragile); a green suite is not evidence."
+  fi
+fi
+
 # The staged metadata is rewritten here, before the change report, so a dry run
 # lists .afk-bootstrap.json like every other file it would touch.
 node -e '

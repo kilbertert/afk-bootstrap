@@ -152,3 +152,17 @@ edits instead of overwriting it.
   before running the migration; a fixture taken from the scaffold would start
   with the section present and the assertions would pass while the step did
   nothing for the repositories 1.7.24 exists to fix.
+
+## 1.7.25 — the two-axis reviewer as 1.7.24 shipped it
+
+- `review-axis-prompt.1.7.24.md` — `.sandcastle/review/axis-prompt.md` as 1.7.24
+  shipped it: no `# YOUR JOB` section. Taken from `scaffold/` at that commit,
+  which is the right source here **because this file was measured byte-identical
+  to the scaffold in all three consumer repositories** — unlike
+  `review-prompt.md`, which every consumer had edited (17 lines). That is what
+  makes the `cmp` guard correct for this file and wrong for that one.
+
+  The smoke fixture builds from this snapshot and asserts `# YOUR JOB` is ABSENT
+  before running the migration. A fixture taken from the current scaffold would
+  start with the section present, and the assertions would pass while the step did
+  nothing for the repositories 1.7.25 exists to fix.

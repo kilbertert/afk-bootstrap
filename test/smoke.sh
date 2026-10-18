@@ -3919,4 +3919,50 @@ t = (pathlib.Path(sys.argv[1]) / ".sandcastle/review-prompt.md").read_text()
 assert t.count("You are the adversary, not the author") == 1, t.count("You are the adversary, not the author")
 IDEM
 
+# The tool's anchor discipline, exercised directly. Both of these misfired in the
+# first version of the review mode, which used a SUBSTRING match where the loop
+# mode next door correctly matches whole lines. They are asserted here rather
+# than left to the migration-level checks because the migration fixture uses an
+# unmodified heading, so neither case can be reached through it.
+#
+#   A. a heading at a different level still CONTAINS the expected text, so the
+#      section was inserted above a level-three heading and the run reported
+#      success — instead of reporting that the anchor it knows is gone;
+#   B. a prose MENTION of the duty's name satisfied the presence check, so the
+#      step reported "already delivered" and stamped the version while adding
+#      nothing — the silent-skip failure this whole step exists to fix.
+python3 - "$S" <<'ANCHORS' || { echo "the review mode's anchor discipline is broken" >&2; exit 1; }
+import pathlib, re, subprocess, sys, tempfile
+src = pathlib.Path(sys.argv[1])
+tool = src / "tools" / "right-size-tests.mjs"
+base = (src / "references" / "review-prompt.1.7.23.md").read_text()
+tree = pathlib.Path(tempfile.mkdtemp())
+
+def run(text):
+    p = tree / "p.md"
+    p.write_text(text)
+    rc = subprocess.run(["node", str(tool), str(p), "review"],
+                        capture_output=True).returncode
+    return rc, p.read_text()
+
+# A. demoted heading: report, do not edit.
+demoted = base.replace("## 1. Read the diff and look for anything dodgy",
+                       "### 1. Read the diff and look for anything dodgy")
+rc, out = run(demoted)
+assert rc == 3, f"a level-three heading was accepted as the anchor (rc={rc})"
+assert "You are the adversary" not in out, "the duty was inserted at a guessed location"
+
+# B. a prose mention is not the section.
+mentioned = base.replace(
+    "# REVIEW PROCESS",
+    "# REVIEW PROCESS\n\nThe phrase You are the adversary, not the author describes our goal.")
+rc, out = run(mentioned)
+assert rc == 0, f"a prose mention was taken as the delivered section (rc={rc})"
+assert out.count("## 0. You are the adversary, not the author") == 1, "the section was not added"
+
+# C. and the real shape still works, exactly once.
+rc, out = run(base)
+assert rc == 0 and out.count("## 0. You are the adversary, not the author") == 1
+ANCHORS
+
 echo "1.7.24 review-duty checks passed"

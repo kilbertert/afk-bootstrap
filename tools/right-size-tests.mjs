@@ -109,10 +109,26 @@ const MARK = "Do not manufacture a test to satisfy a quota.";
 // repositories' copies.
 //
 // It has its own anchor because there is no red-green list here to replace —
-// this is an insertion above a section heading. The heading was measured to
-// occur exactly once in each consumer repository.
-const REVIEW_ANCHOR = "## 1. Read the diff and look for anything dodgy";
-const REVIEW_MARK = "You are the adversary, not the author";
+// this is an insertion above a section heading.
+//
+// Anchored on the WHOLE LINE, exactly as `HEAD` and `TAIL` above are, and not on
+// a substring. `includes` was the first version and it was wrong in both
+// directions, measured against a project that keeps its own notes:
+//
+//   * a heading at a different level (`### 1. Read the diff …`, a project nesting
+//     its review process) still contains the substring, so the paragraph was
+//     inserted above a level-three heading and the run reported success — when
+//     the thing to report is that the anchor it knows is gone;
+//   * a prose mention of the duty's name — `The phrase You are the adversary …
+//     describes our review goal` — satisfied the presence check, so the step
+//     reported "already delivered" and stamped the new version without adding
+//     anything. That is the silent-skip failure this whole step exists to fix.
+//
+// So both the anchor and the marker are anchored lines. A project that reworded
+// or renested its heading gets exit 3 (report, do not guess) rather than a
+// confident edit in the wrong place.
+const REVIEW_ANCHOR = /^## 1\. Read the diff and look for anything dodgy\s*$/;
+const REVIEW_MARK = /^## 0\. You are the adversary, not the author\s*$/;
 const REVIEW_BLOCK = [
   "## 0. You are the adversary, not the author",
   "",
@@ -138,8 +154,8 @@ if (!path) {
 const lines = readFileSync(path, "utf8").split("\n");
 
 if (mode === "review") {
-  if (lines.some((l) => l.includes(REVIEW_MARK))) process.exit(4);
-  const at = lines.findIndex((l) => l.includes(REVIEW_ANCHOR));
+  if (lines.some((l) => REVIEW_MARK.test(l))) process.exit(4);
+  const at = lines.findIndex((l) => REVIEW_ANCHOR.test(l));
   if (at < 0) process.exit(3);
   lines.splice(at, 0, ...REVIEW_BLOCK);
   writeFileSync(path, lines.join("\n"));

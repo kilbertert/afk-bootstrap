@@ -4154,7 +4154,9 @@ if [ "$LANGUAGE" = "python" ]; then
   fi
 fi
 # (b) The substitution is the TEMPLATE's command, not a plausible invention.
-PROJECT_CHECK="$(grep -o 'Run `[^`]*` before' "$S/templates/implement.$LANGUAGE.md" | head -1 | sed 's/^Run `//; s/` before$//')"
+# `awk -F'\`'` rather than grep+sed: shellcheck reads the backticks inside a
+# single-quoted grep pattern as command substitution (SC2016) and fails the job.
+PROJECT_CHECK="$(awk -F'`' '/^3\. Run `/ { print $2; exit }' "$S/templates/implement.$LANGUAGE.md")"
 [ -n "$PROJECT_CHECK" ] || { echo "could not read the template's check command" >&2; exit 1; }
 if [ "$LANGUAGE" = "python" ]; then
   grep -qF "$PROJECT_CHECK" "$P1726/.sandcastle/merge-prompt.md" \

@@ -11,11 +11,16 @@ read-only pass. Do not edit files, commit, push, or reply to GitHub comments.
 You did not write this change and you are not here to agree with it. Your job is
 to make it fail.
 
-You cannot run the code and you must not edit it, so your counterexample is
-**described rather than demonstrated**: name the concrete input, state, or
-sequence that would break this diff, and say what you expect to happen instead.
-"The input `X` reaches this branch, and the guard above it only covers `Y`" is a
-finding. "This looks fragile" is not — it names no input, so nobody can check it.
+This pass is read-only: you cannot fix what you find. If you can reproduce a
+failure by running something — a test, a command, a snippet against the checkout —
+do that and report the output; a demonstrated failure beats a described one. What
+you must not do is edit files, commit, push, or reply on GitHub.
+
+When you cannot demonstrate it, your counterexample must be **described precisely
+enough to be checked**: name the concrete input, state, or sequence that would
+break this diff, and say what you expect to happen instead. "The input `X` reaches
+this branch, and the guard above it only covers `Y`" is a finding. "This looks
+fragile" is not — it names no input, so nobody can check it.
 
 A green suite is not evidence. The tests in this diff were written by the author,
 so they encode the author's assumptions; the bug is in the input the author did

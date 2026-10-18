@@ -26,33 +26,52 @@
 
 **1.7.25 把对抗授权补到 `.sandcastle/review/axis-prompt.md`，但文本是重写的，不是照抄。**
 
-两个审查者**能力不同**，而这决定了判据必须不同：
+这个 prompt **只读**——它的正文写着 `Do not edit files, commit, push, or reply to GitHub
+comments`，输出是 JSON `findings` 数组。**但「只读」不等于「不能执行」**：`review.ts` 用的是
+与其它链路相同的 `claudeProfile`，`onSandboxReady` 里跑 `bash .sandcastle/sandbox-prepare.sh`，
+所以它**有 sandbox、能跑东西**，只是不许改、不许提交。
 
-| | `review-prompt.md`（1.7.24） | `review/axis-prompt.md`（本步） |
-| --- | --- | --- |
-| 能否执行 | 能（可编辑、可提交、可跑门禁） | **不能**：`Do not edit files, commit, push` |
-| 输出 | 散文 + commit | **JSON `findings` 数组** |
-| 判据 | 「一条 finding 是你**跑出来**的失败输出」 | 「一条 finding 要**点名具体输入**」 |
+于是新文本的判据是**分两层**的：
 
-所以新文本说反例是 **described rather than demonstrated**，并给出让"描述型反例"仍然
-**可检验**的那条判据：`"The input X reaches this branch, and the guard above it only
-covers Y" is a finding. "This looks fragile" is not — it names no input, so nobody can
-check it.`
+- **能示范就示范**：`If you can reproduce a failure by running something — a test, a
+  command, a snippet against the checkout — do that and report the output; a
+  demonstrated failure beats a described one.`
+- **不能示范时，描述必须精确到可被检查**：`"The input X reaches this branch, and the
+  guard above it only covers Y" is a finding. "This looks fragile" is not — it names
+  no input, so nobody can check it.`
 
-**照抄会给这个 prompt 压上它被禁止做的事**（它不能跑代码）。smoke 有一条断言专门钉住这点：
-文件里不得出现可写审查者那句 `a failing output you ran`。
+**本 PR 的第一版把这条写错了**：它说 `You cannot run the code ... described rather than
+demonstrated`。那是对 sandbox 的**未经验证的断言**，而且方向有害——它会劝阻审查者去
+复现一个它**本来能复现**的失败。Devin Review 指出后核实属实，已改。
+
+**照抄可写审查者那段仍然不对**（那句 `a failing output you ran` 假定它一定会跑），
+但理由变了：不是"它不能跑"，而是"**它可能没法用跑的方式证明，那时判据必须退到
+'点名具体输入'**"。两段都保留各自的形式。
 
 **交付方式用 `cmp` 守卫的整文件覆盖**，与 1.7.24 的锚点编辑相反——因为两个文件恰好在这点上
 不同：`review-prompt.md` 在每个消费仓都与 scaffold 差 17 行（手工语言替换 + 项目自己的门禁措辞），
 而 `review/axis-prompt.md` 实测在三个仓**与 scaffold 逐字节相同**。
 **`cmp` 守卫对没人改过的文件是对的，对所有人都改过的文件是错的。**
 
+**幂等判据匹配的是正文里的一句话，不是标题。** 第一版判据是 `grep -qF "# YOUR JOB"`，
+于是**只是在散文里提到这个标题**的项目（`Our checklist quotes # YOUR JOB from the planner
+prompt`）就满足了它——升级报「already carries the adversary duty」、把旧审查文本留在原地、
+**照样盖上 1.7.25**。实测复现。这正是**本步自己的失败模式（静默跳过）在它自己的守卫里重演**，
+也是 1.7.24 的 review 模式犯过的同一个「子串 vs 结构」错误。改为匹配正文里的一句
+（`so they encode the author's assumptions`），并且**项目真正的自有文本被保留**、只报告不覆盖。
+
 ## 被否掉的替代形态
 
-- **照抄 `review-prompt.md` 的那一段。** 最省事，也最错：那句判据要求"跑出失败输出"，
-  而这个 prompt 明确禁止编辑且只回 JSON。它会把一个**做不到的标准**压在审查者身上，
-  结果是它要么无视判据、要么为了满足字面而假装跑过。改写后的文本保留同一意图
-  （对抗、反例、绿灯不是证据），换成它做得到的形式。
+- **照抄 `review-prompt.md` 的那一段。** 那句判据要求"finding 是你**跑出来**的失败输出"，
+  而这个 prompt 的输出是 JSON `findings`、且它常需要在**不能实际复现**的情形下下判断
+  （例如缺失的上游、生产数据）。照抄会把「跑出来」当成唯一合格形式，于是要么逼它
+  为了满足字面而假装跑过，要么让真正有价值的、描述型的反例被自我否决。
+  改写后的文本保留同一意图（对抗、反例、绿灯不是证据），但把判据写成两层。
+
+- **断言这个审查者"不能执行"。** 本 PR 的第一版这么写了（`You cannot run the code`），
+  核实后是错的：它与其它链路共用 `claudeProfile`，有 sandbox，`sandbox-prepare.sh` 会跑。
+  禁止的只是编辑/提交/推送。这条假设若留着，会**劝阻审查者去复现一个它本来能复现的失败**
+  ——比不写还坏，因为它披着"我只读所以只描述"的合理性外衣。
 
 - **只补 scaffold，等下次有人升级自然拿到。** 那正是 1.7.23 的错（消费仓 0 of 3），
   也正是本步要修的。已存在的仓恰是**正在跑** AFK 的那些。
@@ -65,6 +84,22 @@ check it.`
   可写的审查者与只读的审查者要求不同的措辞，一个按字符串匹配的检查会把"改写得正确"判成失败。
   暂不做；如果第四次漏发之后还有第五次，应当重新评估这条，并把判据落在
   **角色**（这个 prompt 是不是审查者）而不是**文本**上。
+
+## 验证过程中我自己犯的两个错，都记在这里
+
+**一、断言了一个我没核实的能力。** 新文本第一版写 `You cannot run the code`——那是我对
+sandbox 的**推断**，不是实测。核实后：`review.ts` 与其它链路共用 `claudeProfile`，
+`onSandboxReady` 会跑 `sandbox.sh`，所以分析者**有 sandbox**，禁止的只是编辑/提交/推送。
+这条若留下，会劝阻审查者去复现一个它**本来能复现**的失败——比不写更坏，因为它披着
+「我只读所以只描述」的合理性外衣。
+
+**二、我的负向对照第一版是空转的。** 那个对照要断言「只是提到标题时，这一步会**报告**而不是
+静默跳过」。第一版在**第一次运行**上 `>/dev/null`，然后在**同一棵树上**再跑一次去 grep 报告
+——而第一次已经盖上了 1.7.25，第二次走的是 "already at 1.7.25" 提前退出，**根本没进这一步**。
+断言因此永远为真，看着像在测守卫，实际什么都没测。（修法：在同一次运行的输出上断言。）
+
+**这两个错与它修的 bug 是同一个形状**：一个未经验证的假设（"它不能跑"）与一个空转的判据
+（"测了个不会到达的路径"）。写在这里而不是删掉，因为它们比结论更容易被下一个人重复。
 
 ## 后果
 

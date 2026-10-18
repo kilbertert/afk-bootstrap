@@ -4006,18 +4006,30 @@ if [ "$to_minor" -ge 7 ] &&
   REL=.sandcastle/review/axis-prompt.md
   if [ ! -e "$WORK/$REL" ]; then
     note "$REL absent; skipped"
-  elif grep -qF "# YOUR JOB" "$WORK/$REL"; then
+  # The "already done" test matches the DELIVERED SECTION, not the heading text.
+  #
+  # The first version tested `grep -qF "# YOUR JOB"`, and a project that merely
+  # mentions the heading in prose — `Our checklist quotes # YOUR JOB from the
+  # planner prompt` — satisfied it. Measured: the upgrade reported "already
+  # carries the adversary duty", left the old reviewer text in place, and stamped
+  # 1.7.25. That is this step's own failure mode (a silent skip) reproduced inside
+  # its guard, and it is the same substring-vs-structure mistake the 1.7.24 review
+  # mode made with its anchor. Both are now matched on a whole line, and the
+  # marker here is a distinctive sentence from the delivered body rather than the
+  # heading, because a project can legitimately reuse a heading.
+  elif grep -qF "so they encode the author's assumptions" "$WORK/$REL"; then
     note "$REL: already carries the adversary duty"
   elif cmp -s "$WORK/$REL" "$S/references/review-axis-prompt.1.7.24.md"; then
     cp "$S/scaffold/$REL" "$WORK/$REL"
     NEW_FILES="$NEW_FILES $REL"
-    note "$REL: restaged (the read-only reviewer is told to describe, not demonstrate)"
+    note "$REL: restaged (read-only reviewer: demonstrate if you can, else describe precisely)"
   else
     say "$REL differs from what this template shipped; left as the project's own."
     say "  Worth carrying over by hand: this reviewer did not write the change and"
-    say "  its job is to make it fail; since it cannot run or edit, its"
-    say "  counterexample must NAME the concrete input that would break the diff"
-    say "  (not merely look fragile); a green suite is not evidence."
+    say "  its job is to make it fail. It may RUN things to reproduce a failure but"
+    say "  must not edit/commit/push; where it cannot demonstrate one, the"
+    say "  counterexample must name the concrete input that would break the diff"
+    say "  (not merely look fragile). A green suite is not evidence."
   fi
 fi
 

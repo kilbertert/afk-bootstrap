@@ -4014,21 +4014,24 @@ assert n == 1, f"{rel}: the adversary duty appears {n} times, not once"
 # one must carry the same text for the same rule.
 assert t == (src / "scaffold" / rel).read_text(), f"{rel}: differs from the scaffold"
 
-# The read-only reviewer must NOT be told to run anything. Copying the writable
-# reviewer's paragraph here would demand something this prompt forbids.
-assert "described rather than demonstrated" in t, (
-    f"{rel}: missing the read-only framing; a copy of the other reviewer's text "
-    "would tell this prompt to run something it is forbidden to run"
+# The read-only reviewer MAY run things — it gets a sandbox, and the ban covers
+# editing/committing/pushing, not executing. The first draft of this section said
+# "You cannot run the code", which was an UNVERIFIED claim about the sandbox and
+# would have told the reviewer not to reproduce a failure it is able to reproduce.
+# Devin Review caught it. So the assertion is the opposite direction now.
+assert "described rather than demonstrated" not in t, (
+    f"{rel}: tells the reviewer its counterexample cannot be demonstrated — but this "
+    "pass gets a sandbox and may run things; only editing/committing/pushing is banned"
 )
-assert "a failing output you ran" not in t, (
-    f"{rel}: carries the WRITABLE reviewer's criterion — this prompt cannot run code"
+assert "a demonstrated failure beats a described one" in t, (
+    f"{rel}: does not invite the reviewer to demonstrate a failure it can reproduce"
 )
-# The checkable criterion that replaces it.
+# The ban is exactly the three things the read-only line names, and stays.
+assert "Do not edit files, commit, push" in t, f"{rel}: the read-only constraint was lost"
+# And where it cannot demonstrate, the finding must still be checkable.
 assert "names no input, so nobody can check it" in t, (
     f"{rel}: missing the criterion that keeps a described finding checkable"
 )
-# And the read-only constraint itself is untouched.
-assert "Do not edit files" in t, f"{rel}: the read-only constraint was lost"
 AXISDUTY
 
 # Negative control: a project-edited axis prompt keeps its own text and does NOT
@@ -4068,5 +4071,41 @@ import pathlib, sys
 t = (pathlib.Path(sys.argv[1]) / ".sandcastle/review/axis-prompt.md").read_text()
 assert t.count("# YOUR JOB") == 1, t.count("# YOUR JOB")
 IDEM
+
+# The step's own guard must not skip on a MENTION of the heading. The first
+# version tested `grep -qF "# YOUR JOB"`, so a project whose prompt merely quoted
+# it in prose satisfied the test: the upgrade reported "already carries the
+# adversary duty", left the old reviewer text in place, and stamped 1.7.25 —
+# this step's own failure mode (a silent skip) reproduced inside its guard, and
+# the same substring-vs-structure mistake the 1.7.24 review mode made.
+#
+# Asserted at the migration level because that is where the guard lives.
+P1725MENTION="$TMP/axis-review-mention-$LANGUAGE"
+rm -rf "$P1725MENTION"
+mkdir -p "$P1725MENTION/.sandcastle/review" "$P1725MENTION/.github/workflows"
+cp "$S/references/review-axis-prompt.1.7.24.md" "$P1725MENTION/.sandcastle/review/axis-prompt.md"
+printf '\nOur checklist quotes # YOUR JOB from the planner prompt.\n' \
+  >> "$P1725MENTION/.sandcastle/review/axis-prompt.md"
+printf 'FROM node:24\n' > "$P1725MENTION/.sandcastle/Dockerfile"
+cp "$S/scaffold/.sandcastle/repo-map.mjs" "$S/scaffold/.sandcastle/repo-map.check.mjs" \
+   "$S/scaffold/.sandcastle/consensus-contract.json" "$P1725MENTION/.sandcastle/"
+printf '{"afk_template_version":"1.7.24","templateVersion":1,"language":"%s","repository":"kilbertert/smoke","cron_hour":13}\n' \
+  "$LANGUAGE" > "$P1725MENTION/.afk-bootstrap.json"
+# The report is asserted on THIS run. A second invocation on the same tree cannot
+# serve: the first one already stamped 1.7.25, so the second takes the "already at
+# 1.7.25" early exit and never reaches this step — measured, and it made the first
+# version of this control vacuous while looking like it exercised the guard.
+MENTION_OUT="$("$S/upgrade-afk.sh" "$P1725MENTION" --cron-hour 13 2>&1)" \
+  || { echo "upgrade refused a project that merely mentions the heading" >&2; exit 1; }
+if grep -q "a demonstrated failure beats a described one" "$P1725MENTION/.sandcastle/review/axis-prompt.md"; then
+  echo "a mere mention of the heading made the step write over a project's own text" >&2; exit 1
+fi
+grep -q 'Our checklist quotes' "$P1725MENTION/.sandcastle/review/axis-prompt.md" \
+  || { echo "the project's own text was destroyed" >&2; exit 1; }
+# And it must SAY so rather than pass silently — this is the half that catches the
+# substring guard. Without it the control above passes for a step that skipped the
+# file for the wrong reason.
+grep -q 'differs from what this template shipped' <<<"$MENTION_OUT" \
+  || { echo "a mention of the heading was reported as already-migrated" >&2; exit 1; }
 
 echo "1.7.25 axis-reviewer checks passed"

@@ -137,3 +137,18 @@ edits instead of overwriting it.
   templates themselves are edited in place (the bootstrap copies them verbatim and
   no step reads `$S/templates/`), so these are what a project bootstrapped before
   1.7.23 received.
+
+## 1.7.24 — the review prompt as a 1.7.23 CONSUMER had it
+
+- `review-prompt.1.7.23.md` — `.sandcastle/review-prompt.md` as a repository that
+  had been upgraded to 1.7.23 actually held it: the 1.7.23 gate-cadence and
+  language work present, the `## 0. You are the adversary` section **absent**.
+
+  Note what this is NOT. It is not `git show <1.7.23>:scaffold/...`, because the
+  1.7.23 scaffold DOES carry the section — 1.7.23 wrote it there and stopped, so
+  it reached only projects created after it. Taken instead from a real consumer
+  (AI-Ops) after the rollout, which is the shape the 1.7.24 step has to repair.
+  The smoke fixture builds from this file and asserts the section is absent
+  before running the migration; a fixture taken from the scaffold would start
+  with the section present and the assertions would pass while the step did
+  nothing for the repositories 1.7.24 exists to fix.

@@ -98,13 +98,75 @@ const BLOCK = [
 // marker losing its grip, so this is a full sentence rather than a phrase.
 const MARK = "Do not manufacture a test to satisfy a quota.";
 
-const [path] = process.argv.slice(2);
+// ---- the review prompt's block -------------------------------------------
+//
+// A second, structurally different edit, delivered by 1.7.24 after 1.7.23
+// shipped the review prompt's change to NEW projects only. That was the exact
+// shape ADR 0003 records: a rule was written to the path the author had in mind
+// (the scaffold, which bootstrap copies) rather than to every path that loads
+// it. Measured after the 1.7.23 rollout: the adversary section was present in
+// `scaffold/.sandcastle/review-prompt.md` and in NONE of the three consumer
+// repositories' copies.
+//
+// It has its own anchor because there is no red-green list here to replace —
+// this is an insertion above a section heading.
+//
+// Anchored on the WHOLE LINE, exactly as `HEAD` and `TAIL` above are, and not on
+// a substring. `includes` was the first version and it was wrong in both
+// directions, measured against a project that keeps its own notes:
+//
+//   * a heading at a different level (`### 1. Read the diff …`, a project nesting
+//     its review process) still contains the substring, so the paragraph was
+//     inserted above a level-three heading and the run reported success — when
+//     the thing to report is that the anchor it knows is gone;
+//   * a prose mention of the duty's name — `The phrase You are the adversary …
+//     describes our review goal` — satisfied the presence check, so the step
+//     reported "already delivered" and stamped the new version without adding
+//     anything. That is the silent-skip failure this whole step exists to fix.
+//
+// So both the anchor and the marker are anchored lines. A project that reworded
+// or renested its heading gets exit 3 (report, do not guess) rather than a
+// confident edit in the wrong place.
+const REVIEW_ANCHOR = /^## 1\. Read the diff and look for anything dodgy\s*$/;
+const REVIEW_MARK = /^## 0\. You are the adversary, not the author\s*$/;
+const REVIEW_BLOCK = [
+  "## 0. You are the adversary, not the author",
+  "",
+  "You did not write this change and you are not here to agree with it. Your job is",
+  "to make it fail. Produce the concrete counterexample: the input, the state, or",
+  "the sequence that breaks it. A finding is a failing output you ran, not a concern",
+  "you hold. If you cannot break it after a real attempt, say what you tried and",
+  "what held — that attempt is the evidence, and it is worth reporting.",
+  "",
+  "A green suite is not evidence. The tests in this diff were written by the author,",
+  "so they encode the author's assumptions; the bug is in the input the author did",
+  "not consider. Look for that input first, and treat the suite passing as",
+  "information about the author's assumptions rather than about the change.",
+  "",
+];
+
+const [path, mode = "loop"] = process.argv.slice(2);
 if (!path) {
-  console.error("usage: right-size-tests.mjs <path>");
+  console.error("usage: right-size-tests.mjs <path> [loop|review]");
   process.exit(1);
 }
 
 const lines = readFileSync(path, "utf8").split("\n");
+
+if (mode === "review") {
+  if (lines.some((l) => REVIEW_MARK.test(l))) process.exit(4);
+  const at = lines.findIndex((l) => REVIEW_ANCHOR.test(l));
+  if (at < 0) process.exit(3);
+  lines.splice(at, 0, ...REVIEW_BLOCK);
+  writeFileSync(path, lines.join("\n"));
+  console.log("added the adversary duty above the review process");
+  process.exit(0);
+}
+
+if (mode !== "loop") {
+  console.error(`unknown mode: ${mode}`);
+  process.exit(1);
+}
 
 // Idempotency. A file already carrying the guidance is done; so is a file with
 // no block. Checked before the region lookup because the region no longer exists

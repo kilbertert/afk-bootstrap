@@ -3792,3 +3792,177 @@ sys.exit(1)
 DUP
 
 echo "1.7.23 risk-based verification checks passed"
+
+# ---- 1.7.24: the review prompt's duty reaches existing repositories ---------
+#
+# 1.7.23 wrote the adversary section into `scaffold/.sandcastle/review-prompt.md`
+# and stopped there, so it reached every project created AFTER it and none
+# created before. Measured on the three live consumers right after that rollout:
+# present in the scaffold, 0 of 3 in their own copies. This is the ADR 0003
+# defect a second time (1.7.18 did it to the write-back duty), and nothing failed
+# because no check compares a scaffold file against the consumer copies of it.
+#
+# The fixture therefore has to look like a CONSUMER, not like the scaffold: a
+# review prompt WITHOUT the section. Building it from the current scaffold would
+# make it a file that already carries the section, and the assertions would pass
+# while the step did nothing for the repositories this exists to fix.
+P1724="$TMP/review-duty-$LANGUAGE"
+rm -rf "$P1724"
+mkdir -p "$P1724/.sandcastle/implement" "$P1724/.github/workflows"
+git -C "$P1724" init -q -b work
+cp "$S/references/review-prompt.1.7.23.md" "$P1724/.sandcastle/review-prompt.md"
+# The prompt already carries the 1.7.23 work (the language's gate command), so
+# the fixture is a 1.7.23 consumer rather than a pre-1.7.23 one.
+if [ "$LANGUAGE" = "python" ]; then
+  node -e '
+    const fs = require("fs"), path = require("path");
+    const check = "uv sync --extra dev && uv run pytest && uv run ruff check";
+    (function walk(d) {
+      for (const e of fs.readdirSync(d, { withFileTypes: true })) {
+        const p = path.join(d, e.name);
+        if (e.isDirectory()) walk(p);
+        else if (e.name.endsWith(".md")) {
+          const s = fs.readFileSync(p, "utf8");
+          if (s.includes("npm run check")) fs.writeFileSync(p, s.replace(/npm run check/g, check));
+        }
+      }
+    })(process.argv[1]);
+  ' "$P1724/.sandcastle"
+fi
+printf 'FROM node:24\n' > "$P1724/.sandcastle/Dockerfile"
+cp "$S/scaffold/.sandcastle/repo-map.mjs" "$S/scaffold/.sandcastle/repo-map.check.mjs" \
+   "$S/scaffold/.sandcastle/consensus-contract.json" "$P1724/.sandcastle/"
+printf '{"afk_template_version":"1.7.23","templateVersion":1,"language":"%s","repository":"kilbertert/smoke","cron_hour":13}\n' \
+  "$LANGUAGE" > "$P1724/.afk-bootstrap.json"
+
+# The fixture must NOT start with the duty, or the section below proves nothing.
+grep -q 'adversary, not the author' "$P1724/.sandcastle/review-prompt.md" \
+  && { echo "the 1.7.24 fixture already carries the duty — it is not a pre-1.7.24 consumer" >&2; exit 1; }
+
+"$S/upgrade-afk.sh" "$P1724" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a 1.7.23 consumer" >&2; exit 1; }
+
+python3 - "$P1724" "$S" <<'REVIEWDUTY' || { echo "1.7.24 did not deliver the review duty" >&2; exit 1; }
+import pathlib, sys
+dst, src = pathlib.Path(sys.argv[1]), pathlib.Path(sys.argv[2])
+rel = ".sandcastle/review-prompt.md"
+t = (dst / rel).read_text()
+
+# Present exactly once. `exactly once`, not `at least once`: this repository's
+# recorded defect class is a per-upgrade duplicate (1.7.13 stacked four copies).
+assert t.count("You are the adversary, not the author") == 1, (
+    f"{rel}: the adversary duty appears {t.count('You are the adversary, not the author')} times, not once"
+)
+# The section is placed where a reviewer reads it, before the numbered process.
+assert t.index("## 0. You are the adversary") < t.index("## 1. Read the diff"), (
+    f"{rel}: the adversary duty is not the first step of the review process"
+)
+# The project's own gate command survives: this step must not rewrite what a
+# repository verifies with.
+assert "run " in t and ("uv run pytest" in t or "npm run check" in t), (
+    f"{rel}: the step destroyed the project's gate command"
+)
+
+# Byte-equality with the scaffold. A freshly bootstrapped project and an upgraded
+# one must carry the SAME text for the same rule, or the two disagree about it.
+def section(p):
+    s = p.read_text()
+    a = s.index("## 0. You are the adversary")
+    b = s.index("## 1. Read the diff")
+    return s[a:b]
+
+want = section(src / "scaffold" / rel)
+got = section(dst / rel)
+assert got == want, f"{rel}: the migrated section differs from the scaffold's bytes"
+REVIEWDUTY
+
+# Negative control: a project that reworded the review heading keeps its wording
+# and does NOT get the template's paragraph inserted beside it. Guards against a
+# tool that falls back to "insert near any known anchor" once the match fails.
+P1724OFF="$TMP/review-duty-off-$LANGUAGE"
+rm -rf "$P1724OFF"
+mkdir -p "$P1724OFF/.sandcastle" "$P1724OFF/.github/workflows"
+cp "$S/references/review-prompt.1.7.23.md" "$P1724OFF/.sandcastle/review-prompt.md"
+python3 - "$P1724OFF/.sandcastle/review-prompt.md" <<'REWORD'
+import pathlib, sys
+p = pathlib.Path(sys.argv[1]); t = p.read_text()
+assert t.count("## 1. Read the diff and look for anything dodgy") == 1
+p.write_text(t.replace("## 1. Read the diff and look for anything dodgy",
+                       "## 1. Work through the diff carefully"))
+REWORD
+printf 'FROM node:24\n' > "$P1724OFF/.sandcastle/Dockerfile"
+cp "$S/scaffold/.sandcastle/repo-map.mjs" "$S/scaffold/.sandcastle/repo-map.check.mjs" \
+   "$S/scaffold/.sandcastle/consensus-contract.json" "$P1724OFF/.sandcastle/"
+printf '{"afk_template_version":"1.7.23","templateVersion":1,"language":"%s","repository":"kilbertert/smoke","cron_hour":13}\n' \
+  "$LANGUAGE" > "$P1724OFF/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$P1724OFF" --cron-hour 13 >/dev/null \
+  || { echo "upgrade refused a project whose review heading was reworded" >&2; exit 1; }
+grep -q 'Work through the diff carefully' "$P1724OFF/.sandcastle/review-prompt.md" \
+  || { echo "a reworded review heading was overwritten — the tool guessed" >&2; exit 1; }
+if grep -q 'You are the adversary, not the author' "$P1724OFF/.sandcastle/review-prompt.md"; then
+  echo "a reworded review prompt got the template's duty inserted beside its own wording" >&2; exit 1
+fi
+
+# Idempotency: a re-run must not add a second copy.
+cp -R "$P1724" "$P1724-again"
+node -e '
+  const fs = require("fs");
+  const m = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+  m.afk_template_version = "1.7.23";
+  fs.writeFileSync(process.argv[1], JSON.stringify(m, null, 2) + "\n");
+' "$P1724-again/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$P1724-again" --cron-hour 13 >/dev/null \
+  || { echo "the re-run refused a project it had just migrated" >&2; exit 1; }
+python3 - "$P1724-again" <<'IDEM' || { echo "a second run stacked a duplicate review duty" >&2; exit 1; }
+import pathlib, sys
+t = (pathlib.Path(sys.argv[1]) / ".sandcastle/review-prompt.md").read_text()
+assert t.count("You are the adversary, not the author") == 1, t.count("You are the adversary, not the author")
+IDEM
+
+# The tool's anchor discipline, exercised directly. Both of these misfired in the
+# first version of the review mode, which used a SUBSTRING match where the loop
+# mode next door correctly matches whole lines. They are asserted here rather
+# than left to the migration-level checks because the migration fixture uses an
+# unmodified heading, so neither case can be reached through it.
+#
+#   A. a heading at a different level still CONTAINS the expected text, so the
+#      section was inserted above a level-three heading and the run reported
+#      success — instead of reporting that the anchor it knows is gone;
+#   B. a prose MENTION of the duty's name satisfied the presence check, so the
+#      step reported "already delivered" and stamped the version while adding
+#      nothing — the silent-skip failure this whole step exists to fix.
+python3 - "$S" <<'ANCHORS' || { echo "the review mode's anchor discipline is broken" >&2; exit 1; }
+import pathlib, re, subprocess, sys, tempfile
+src = pathlib.Path(sys.argv[1])
+tool = src / "tools" / "right-size-tests.mjs"
+base = (src / "references" / "review-prompt.1.7.23.md").read_text()
+tree = pathlib.Path(tempfile.mkdtemp())
+
+def run(text):
+    p = tree / "p.md"
+    p.write_text(text)
+    rc = subprocess.run(["node", str(tool), str(p), "review"],
+                        capture_output=True).returncode
+    return rc, p.read_text()
+
+# A. demoted heading: report, do not edit.
+demoted = base.replace("## 1. Read the diff and look for anything dodgy",
+                       "### 1. Read the diff and look for anything dodgy")
+rc, out = run(demoted)
+assert rc == 3, f"a level-three heading was accepted as the anchor (rc={rc})"
+assert "You are the adversary" not in out, "the duty was inserted at a guessed location"
+
+# B. a prose mention is not the section.
+mentioned = base.replace(
+    "# REVIEW PROCESS",
+    "# REVIEW PROCESS\n\nThe phrase You are the adversary, not the author describes our goal.")
+rc, out = run(mentioned)
+assert rc == 0, f"a prose mention was taken as the delivered section (rc={rc})"
+assert out.count("## 0. You are the adversary, not the author") == 1, "the section was not added"
+
+# C. and the real shape still works, exactly once.
+rc, out = run(base)
+assert rc == 0 and out.count("## 0. You are the adversary, not the author") == 1
+ANCHORS
+
+echo "1.7.24 review-duty checks passed"

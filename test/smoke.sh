@@ -4109,3 +4109,144 @@ grep -q 'differs from what this template shipped' <<<"$MENTION_OUT" \
   || { echo "a mention of the heading was reported as already-migrated" >&2; exit 1; }
 
 echo "1.7.25 axis-reviewer checks passed"
+
+# ---- 1.7.26: the two prompts with NO per-language render -------------------
+# The scaffold ships every prompt saying `npm run check`. Five of them have a
+# per-language render, so bootstrap and every upgrade step so far translated
+# those. `merge-prompt.md` and `update-branch/prompt.md` have NONE — nothing in
+# either is about Node — and so were on no list, in the two prompts whose whole
+# job is "resolve the conflict, then verify".
+echo "1.7.26 language-agnostic-prompt checks..."
+
+P1726="$TMP/fake-$LANGUAGE-1726"
+# Built by bootstrapping a throwaway target, then REGRESSING the two files to the
+# pre-1.7.26 shape. A hand-built fixture missing `.sandcastle/Dockerfile` (or any
+# other file every real project has) makes the upgrade refuse before it reaches
+# this step — measured: "missing .sandcastle/Dockerfile", which reads as a broken
+# step rather than a thin fixture.
+mkdir -p "$P1726"
+git -C "$P1726" init -q -b main
+git -C "$P1726" remote add origin "https://github.com/$REPO.git"
+"$S/bootstrap-afk.sh" "$P1726" --language "$LANGUAGE" --repo "$REPO" --no-build >/dev/null
+# Restore the NODE text in exactly the two language-agnostic prompts, which is
+# what a project created before this step actually holds.
+cp "$S/scaffold/.sandcastle/merge-prompt.md"         "$P1726/.sandcastle/merge-prompt.md"
+cp "$S/scaffold/.sandcastle/update-branch/prompt.md" "$P1726/.sandcastle/update-branch/prompt.md"
+printf '{"afk_template_version":"1.7.25","templateVersion":1,"language":"%s","repository":"kilbertert/smoke","cron_hour":13}\n' \
+  "$LANGUAGE" > "$P1726/.afk-bootstrap.json"
+
+# The fixture must still carry the NODE command, or this section proves nothing:
+# if the scaffold ever ships these pre-translated, the assertions below pass for
+# a reason unrelated to this step.
+grep -q 'npm run check' "$P1726/.sandcastle/merge-prompt.md" \
+  || { echo "the 1.7.26 fixture starts without \`npm run check\` — it is not a pre-1.7.26 shape" >&2; exit 1; }
+
+OUT1726="$("$S/upgrade-afk.sh" "$P1726" --cron-hour 13 2>&1)" \
+  || { echo "upgrade refused a 1.7.25 consumer" >&2; exit 1; }
+
+# (a) For a PYTHON project the node command is GONE from both files. Not asserted
+#     for node: there the command is already `npm run check`, so its survival is
+#     the correct outcome, and asserting its absence would demand the step change
+#     a file it has no reason to touch.
+if [ "$LANGUAGE" = "python" ]; then
+  if grep -q 'npm run check' "$P1726/.sandcastle/merge-prompt.md" "$P1726/.sandcastle/update-branch/prompt.md"; then
+    echo "1.7.26 left \`npm run check\` in a language-agnostic prompt" >&2; exit 1
+  fi
+fi
+# (b) The substitution is the TEMPLATE's command, not a plausible invention.
+# `awk -F'\`'` rather than grep+sed: shellcheck reads the backticks inside a
+# single-quoted grep pattern as command substitution (SC2016) and fails the job.
+PROJECT_CHECK="$(awk -F'`' '/^3\. Run `/ { print $2; exit }' "$S/templates/implement.$LANGUAGE.md")"
+[ -n "$PROJECT_CHECK" ] || { echo "could not read the template's check command" >&2; exit 1; }
+if [ "$LANGUAGE" = "python" ]; then
+  grep -qF "$PROJECT_CHECK" "$P1726/.sandcastle/merge-prompt.md" \
+    || { echo "merge-prompt.md did not receive \`$PROJECT_CHECK\`" >&2; exit 1; }
+  grep -qF "$PROJECT_CHECK" "$P1726/.sandcastle/update-branch/prompt.md" \
+    || { echo "update-branch/prompt.md did not receive \`$PROJECT_CHECK\`" >&2; exit 1; }
+fi
+# (c) And it is PUBLISHED, not merely staged. Measured with the registration
+#     removed: the tool printed both `adapted` lines, the file kept
+#     `npm run check`, and the publish tail never named it.
+if [ "$LANGUAGE" = "python" ]; then
+  grep -q 'changed: .sandcastle/merge-prompt.md' <<<"$OUT1726" \
+    || { echo "the step adapted merge-prompt.md but never published it" >&2; exit 1; }
+  grep -q 'changed: .sandcastle/update-branch/prompt.md' <<<"$OUT1726" \
+    || { echo "the step adapted update-branch/prompt.md but never published it" >&2; exit 1; }
+else
+  # ⚠️ The other direction, and the one that bit hardest: for a node project the
+  # step writes nothing, so it must PUBLISH nothing either. Registering the file
+  # in NEW_FILES restages the scaffold's copy over the project's own — measured:
+  # a node consumer's two prompts were silently reverted while the run reported
+  # success. A project that had edited either prompt would lose the edit.
+  grep -q 'changed: .sandcastle/merge-prompt.md' <<<"$OUT1726" \
+    && { echo "a node project's merge-prompt.md was overwritten by the scaffold copy" >&2; exit 1; }
+  grep -q 'changed: .sandcastle/update-branch/prompt.md' <<<"$OUT1726" \
+    && { echo "a node project's update-branch/prompt.md was overwritten by the scaffold copy" >&2; exit 1; }
+  :
+fi
+# (d) A node project is a no-op, and SAYS so rather than reporting a rewrite.
+if [ "$LANGUAGE" = "node" ]; then
+  grep -qi 'nothing to adapt\|nothing to do' <<<"$OUT1726" \
+    || { echo "a node project was reported as adapted" >&2; exit 1; }
+  grep -q 'npm run check' "$P1726/.sandcastle/merge-prompt.md" \
+    || { echo "a node project lost its own check command" >&2; exit 1; }
+fi
+
+# NEGATIVE CONTROL: a project's OWN edit to one of these prompts must survive.
+# The first version registered both files in NEW_FILES unconditionally, so a node
+# project's prompts were silently reverted to the scaffold copy — and these two
+# files are the ones a project most often edits, because nothing in them is
+# language-specific. The fixture above cannot catch that: it holds unmodified
+# scaffold text, so reverting it changes nothing. This one carries an edit.
+P1726EDIT="$TMP/fake-$LANGUAGE-1726-edited"
+mkdir -p "$P1726EDIT"
+git -C "$P1726EDIT" init -q -b main
+git -C "$P1726EDIT" remote add origin "https://github.com/$REPO.git"
+"$S/bootstrap-afk.sh" "$P1726EDIT" --language "$LANGUAGE" --repo "$REPO" --no-build >/dev/null
+cp "$S/scaffold/.sandcastle/merge-prompt.md"         "$P1726EDIT/.sandcastle/merge-prompt.md"
+cp "$S/scaffold/.sandcastle/update-branch/prompt.md" "$P1726EDIT/.sandcastle/update-branch/prompt.md"
+printf '\n# PROJECT RULE\nOur merge agent must also update CHANGELOG.md.\n' \
+  >> "$P1726EDIT/.sandcastle/merge-prompt.md"
+printf '{"afk_template_version":"1.7.25","templateVersion":1,"language":"%s","repository":"kilbertert/smoke","cron_hour":13}\n' \
+  "$LANGUAGE" > "$P1726EDIT/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$P1726EDIT" --cron-hour 13 >/dev/null 2>&1 || true
+grep -q 'PROJECT RULE' "$P1726EDIT/.sandcastle/merge-prompt.md" \
+  || { echo "the upgrade reverted a project's own edit to merge-prompt.md" >&2; exit 1; }
+# And the doc it names must not have been left dangling: a pre-1.4 project's
+# `update-branch/prompt.md` names CONTEXT.md, which this same run renames.
+P1726GLOSS="$TMP/fake-$LANGUAGE-1726-glossary"
+mkdir -p "$P1726GLOSS"
+git -C "$P1726GLOSS" init -q -b main
+git -C "$P1726GLOSS" remote add origin "https://github.com/$REPO.git"
+"$S/bootstrap-afk.sh" "$P1726GLOSS" --language "$LANGUAGE" --repo "$REPO" --no-build >/dev/null
+rm -f "$P1726GLOSS/GLOSSARY.md"
+printf '# project glossary\n' > "$P1726GLOSS/CONTEXT.md"
+sed -i 's/GLOSSARY\.md/CONTEXT.md/g' "$P1726GLOSS/.sandcastle/update-branch/prompt.md"
+printf '{"afk_template_version":"1.3.0","templateVersion":1,"language":"%s","repository":"kilbertert/smoke","cron_hour":13}\n' \
+  "$LANGUAGE" > "$P1726GLOSS/.afk-bootstrap.json"
+"$S/upgrade-afk.sh" "$P1726GLOSS" --cron-hour 13 >/dev/null 2>&1 || true
+if grep -q 'CONTEXT\.md' "$P1726GLOSS/.sandcastle/update-branch/prompt.md" \
+   && [ -e "$P1726GLOSS/GLOSSARY.md" ]; then
+  echo "a pre-1.4 upgrade left the prompt naming CONTEXT.md after renaming the doc" >&2; exit 1
+fi
+
+
+# NEGATIVE CONTROL: an unreadable language must leave the prompts ALONE and say
+# so. A step that guessed here would write a wrong command into two prompts with
+# a straight face, and the agent reading them cannot tell it was a guess.
+P1726REF="$TMP/fake-$LANGUAGE-1726-refused"
+mkdir -p "$P1726REF"
+git -C "$P1726REF" init -q -b main
+git -C "$P1726REF" remote add origin "https://github.com/$REPO.git"
+"$S/bootstrap-afk.sh" "$P1726REF" --language "$LANGUAGE" --repo "$REPO" --no-build >/dev/null
+cp "$S/scaffold/.sandcastle/merge-prompt.md"         "$P1726REF/.sandcastle/merge-prompt.md"
+cp "$S/scaffold/.sandcastle/update-branch/prompt.md" "$P1726REF/.sandcastle/update-branch/prompt.md"
+printf '{"afk_template_version":"1.7.25","templateVersion":1,"language":"cobol","repository":"kilbertert/smoke","cron_hour":13}\n' \
+  > "$P1726REF/.afk-bootstrap.json"
+# The run may fail for any reason and that is fine — what is asserted is that the
+# prompts were not rewritten to a guessed command.
+"$S/upgrade-afk.sh" "$P1726REF" --cron-hour 13 >/dev/null 2>&1 || true
+grep -q 'npm run check' "$P1726REF/.sandcastle/merge-prompt.md" \
+  || { echo "an unknown language was given a guessed check command" >&2; exit 1; }
+
+echo "1.7.26 language-agnostic-prompt checks passed"

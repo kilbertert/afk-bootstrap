@@ -3821,6 +3821,102 @@ if [ "$to_minor" -ge 7 ] &&
   fi
 fi
 
+# ---- step: 1.7.22 -> 1.7.23 — verification is risk-shaped, and the full gate
+#                             runs once instead of once per lap --------------
+# The measured defect is a LOOP, not a quantity of tests.
+#
+# `Use red-green-refactor where applicable: 1. RED / 2. GREEN / 3. REPEAT until
+# the issue is done / 4. REFACTOR` sits directly above `Before committing, run
+# <gate>`, and that gate is the whole thing — typecheck plus the FULL suite plus
+# the build. So the instruction the agent actually reads is "run everything, then
+# go round again". Measured on this host:
+#
+#   AI-Ops    full `uv run pytest` over 1805 test files   299.62 s
+#             one test file, same tree                     2.91 s     (103x)
+#   health-flow   one test file                            1.69 s
+#   Auto-Test     `vitest related <changed file>`          1.73 s
+#
+# and the older run logs (`Auto-Test/.sandcastle/logs/issue-92..99.log`) show the
+# gate invoked four or more times per issue. An issue therefore spends roughly
+# twenty minutes re-running a suite it has already run, which is where the
+# reported "80% of the time is tests" comes from — the test-writing is not the
+# cost, the repetition is.
+#
+# Nothing in the server policy asks for this. `Acceptance And System-Test
+# Evidence` says "Test scope is risk-based", and no repository in the fleet
+# enforces a coverage threshold at all: no `fail_under`, no `thresholds`, and
+# `policy-check.mjs` never reads coverage. The ritual was carried by the prompts,
+# so the prompts are where it is corrected. The fix keeps red-green for the cases
+# where a test IS the cheapest oracle and demotes the full run from "every lap" to
+# "once, at the end". The gate's own bytes are never rewritten — each repository's
+# command, including a hand-applied `uv` substitution, stays exactly as it is.
+#
+# WHY AN ANCHORED EDIT RATHER THAN A `cmp` RESTAGE, which every earlier prompt
+# step used: after four rollouts, none of the consumers' live prompts are
+# byte-identical to the scaffold any more. Measured divergence 9-25 lines each,
+# from two independent causes — the hand-applied language substitution, and
+# hand-written project-specific verification paragraphs (AI-Ops' names its
+# verification skill, its throwaway data root, and a credential red line). A
+# `cmp`-guarded `cp` refuses in EVERY consumer repository, so the step would
+# silently no-op everywhere: precisely the defect ADR 0003 records, one layer out.
+# The red-green block itself, by contrast, was measured byte-identical across all
+# four repositories in all three files that carry it — which is what makes the
+# anchored edit safe where the whole-file copy is not.
+#
+# Scope is deliberately narrow. Only `implement-prompt.md` (planner.ts),
+# `implement/prompt.md` (the labelled-issue path, implement.ts) and
+# `implement-prd/prompt.md` (implement-prd.ts) carry the loop. `implement.md` and
+# `implement-pr/prompt.md` run their gate once already, and the two review prompts
+# run it twice around a single edit; none of them carries a lap to remove.
+if [ "$to_minor" -ge 7 ] &&
+   { [ "$from_minor" -lt 7 ] ||
+     { [ "$from_minor" -eq 7 ] && [ "$from_patch" -lt 23 ]; }; }; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: verification is risk-shaped, and the full gate runs once =="
+
+  for REL in \
+    .sandcastle/implement-prompt.md \
+    .sandcastle/implement/prompt.md \
+    .sandcastle/implement-prd/prompt.md ; do
+    if [ ! -e "$WORK/$REL" ]; then
+      note "$REL absent; skipped"
+      continue
+    fi
+    OUT="$(node "$S/tools/right-size-tests.mjs" "$WORK/$REL" 2>&1)" || rc=$?
+    case ${rc:-0} in
+      0) NEW_FILES="$NEW_FILES $REL"; note "$REL: $OUT" ;;
+      4) note "$REL: already right-sized" ;;
+      3) say "$REL has no red-green block this step recognises; by hand, replace"
+         say "  the loop with risk-based guidance, and say that the full gate runs"
+         say "  once at the end rather than after every edit." ;;
+      *) echo "$REL: could not right-size the prompt — refusing to guess" >&2; exit 1 ;;
+    esac
+    rc=0
+    unset OUT
+  done
+
+  # `CODING_STANDARDS.md` is copied verbatim by the bootstrap from `templates/`
+  # and has never been touched by an upgrade step, so this is the first. It is
+  # measured byte-clean in all four consumer repositories, which is what makes the
+  # `cmp` guard the right mechanism here even though it is the wrong one for the
+  # prompts above.
+  REL=.sandcastle/CODING_STANDARDS.md
+  if [ ! -e "$WORK/$REL" ]; then
+    note "$REL absent; skipped"
+  elif grep -qF "not a loop you spin after every edit" "$WORK/$REL"; then
+    note "$REL: already right-sized"
+  elif cmp -s "$WORK/$REL" "$S/references/CODING_STANDARDS.md.1.7.22"; then
+    cp "$S/templates/CODING_STANDARDS.md" "$WORK/$REL"
+    NEW_FILES="$NEW_FILES $REL"
+    note "$REL: restaged (test scope is risk-based; the suite is a gate, not a loop)"
+  else
+    say "$REL differs from what this template shipped; left as the project's own."
+    say "  Worth carrying over by hand: a regression test is the durable record that"
+    say "  old behavior holds, test scope is risk-based, and the full suite is a gate"
+    say "  you run once before delivery rather than a loop you spin per edit."
+  fi
+fi
+
 # The staged metadata is rewritten here, before the change report, so a dry run
 # lists .afk-bootstrap.json like every other file it would touch.
 node -e '

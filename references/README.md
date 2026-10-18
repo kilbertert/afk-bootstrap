@@ -107,3 +107,33 @@ edits instead of overwriting it.
   prompts are project-owned after bootstrap (a project may reword them), which is
   why the step anchors on the closing line and inserts a fixed paragraph rather
   than copying a template over the result.
+
+## 1.7.23 — the prompts that carry the loop, and the standards file
+
+- `implement-prompt.1.7.22.md`, `implement-prompt-actions.1.7.22.md`,
+  `implement-prd-prompt.1.7.22.md` — the three live prompts as 1.7.22 shipped
+  them, taken from the 1.7.22 commit and not from HEAD. Each still carries the
+  `Use red-green-refactor … 1. RED / 2. GREEN / 3. REPEAT / 4. REFACTOR` list,
+  which is what the 1.7.23 step replaces. They exist as the before-picture and as
+  the fixture source: the smoke test builds the pre-migration state from these
+  files rather than by stripping text out of the current scaffold, because a
+  fixture derived from the wrong side tests an insert that never happens (the
+  mistake ADR 0003 records).
+
+  The step does NOT `cmp` against these. After four rollouts no consumer's live
+  prompts are byte-identical to any snapshot — measured 9-25 differing lines each,
+  from the hand-applied language substitution and from hand-written
+  project-specific verification paragraphs — so a `cmp` guard would refuse in
+  every repository and the step would silently no-op everywhere. The snapshots are
+  the fixture and the historical record; the migration edits anchors.
+
+- `CODING_STANDARDS.md.1.7.22` — the coding standards as 1.7.22 shipped them,
+  from `templates/`. This file HAS been measured byte-clean in all four consumer
+  repositories, so it is the one artefact the step restages with a `cmp` guard
+  rather than editing in place.
+
+- `prompt.node.1.7.22.md`, `prompt.python.1.7.22.md` — the two PRD prompt
+  templates as 1.7.22 shipped them. Kept for the same before-picture reason: the
+  templates themselves are edited in place (the bootstrap copies them verbatim and
+  no step reads `$S/templates/`), so these are what a project bootstrapped before
+  1.7.23 received.

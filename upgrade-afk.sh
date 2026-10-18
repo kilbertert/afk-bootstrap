@@ -3917,6 +3917,54 @@ if [ "$to_minor" -ge 7 ] &&
   fi
 fi
 
+# ---- step: 1.7.23 -> 1.7.24 — the review prompt's new duty reaches the
+#                             repositories that already exist ----------------
+# 1.7.23 wrote the adversary section into `scaffold/.sandcastle/review-prompt.md`
+# and stopped there. That file is the BOOTSTRAP's source — `bootstrap-afk.sh`
+# copies the scaffold into a new project — so the section reached every project
+# created after 1.7.23 and no project created before it. Measured across the
+# three live consumer repositories right after the rollout: the section was
+# present in the scaffold and in **0 of 3** of their own copies.
+#
+# That is precisely the defect ADR 0003 exists to record — a rule delivered to
+# the path the author had in mind rather than to every path that loads it — and
+# it is the second time this repository has shipped it (1.7.18 did the same to
+# the write-back duty, reaching 2 of 5 live prompts). Nothing failed, because no
+# check compares a scaffold file against the consumer copies of it.
+#
+# The review prompt is loaded by `planner.ts` (`.sandcastle/review-prompt.md`) and
+# by `review/review.ts` (`.sandcastle/review/prompt.md` — the fixer that runs
+# after the two axes). Only the first carries the section in the scaffold: the
+# second is a different prompt with a different job.
+#
+# Delivered by anchor rather than by `cmp`-guarded copy, for the reason 1.7.23
+# measured: the consumer copies differ from the scaffold by 17 lines each (the
+# hand-applied `uv run pytest` substitution and the project's own gate wording),
+# so a `cmp` guard refuses everywhere and the step would silently no-op.
+if [ "$to_minor" -ge 7 ] &&
+   { [ "$from_minor" -lt 7 ] ||
+     { [ "$from_minor" -eq 7 ] && [ "$from_patch" -lt 24 ]; }; }; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: the review prompt gains the adversary duty =="
+
+  REL=.sandcastle/review-prompt.md
+  if [ ! -e "$WORK/$REL" ]; then
+    note "$REL absent; skipped"
+  else
+    OUT="$(node "$S/tools/right-size-tests.mjs" "$WORK/$REL" review 2>&1)" || rc=$?
+    case ${rc:-0} in
+      0) NEW_FILES="$NEW_FILES $REL"; note "$REL: $OUT" ;;
+      4) note "$REL: already carries the adversary duty" ;;
+      3) say "$REL has no review-process heading this step recognises; by hand,"
+         say "  add a section telling the reviewer it did not write the change, its"
+         say "  job is to make it fail, and a finding is a failing output it ran" ;;
+      *) echo "$REL: could not add the adversary duty — refusing to guess" >&2; exit 1 ;;
+    esac
+    rc=0
+    unset OUT
+  fi
+fi
+
 # The staged metadata is rewritten here, before the change report, so a dry run
 # lists .afk-bootstrap.json like every other file it would touch.
 node -e '

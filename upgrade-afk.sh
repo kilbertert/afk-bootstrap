@@ -4049,6 +4049,60 @@ if [ "$STEP_RAN" = "0" ]; then
   exit 1
 fi
 
+# ---- step: 1.7.27 -> 1.7.28 — the per-lap check runs in parallel ------------
+# 1.7.28 changed `templates/implement.python.md`, which only affects projects
+# bootstrapped AFTER it. Existing projects keep the serial command in
+# `.sandcastle/implement.md` — that file is rendered once and nothing re-renders it.
+# Shipping the version bump without this step is the ADR 0003 defect for the fifth
+# time in this repository: a rule delivered to the path the author had in mind (new
+# projects) rather than to every path that loads it (existing projects too).
+# Measured on the first attempt at this rollout: all three consumers reported
+# `1.7.27 -> 1.7.28` and every one of them still ran `uv run pytest` serially.
+#
+# Scope is every prompt that carries the command, not just implement.md: the
+# reviewer runs it twice per edit and the PRD path runs it too. Parallel in one
+# file and serial in another is the inconsistency that teaches an agent one of
+# them is optional.
+#
+# Delivered by substitution on the command itself, guarded by "does the file
+# already say -n auto". Not by `cmp` against a reference: these are the
+# per-language renders and every consumer diverges from the scaffold (measured in
+# 1.7.23: 9-25 lines each, from the language substitution plus project-written
+# verification paragraphs). Anchoring on the command is what survives that, and
+# it leaves a project's own appended flags intact.
+if [ "$to_minor" -ge 7 ] &&
+   { [ "$from_minor" -lt 7 ] ||
+     { [ "$from_minor" -eq 7 ] && [ "$from_patch" -lt 28 ]; }; }; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: the per-lap check runs in parallel =="
+
+  for rel in \
+    .sandcastle/implement.md \
+    .sandcastle/implement-prompt.md \
+    .sandcastle/implement/prompt.md \
+    .sandcastle/implement-pr/prompt.md \
+    .sandcastle/implement-prd/prompt.md \
+    .sandcastle/review-prompt.md \
+    .sandcastle/review/prompt.md ; do
+    [ -e "$WORK/$rel" ] || continue
+    if grep -q 'uv run pytest -n auto' "$WORK/$rel"; then
+      note "$rel: already runs the suite in parallel"
+      continue
+    fi
+    if ! grep -q 'uv run pytest' "$WORK/$rel"; then
+      note "$rel: no uv-run-pytest command; left as the project wrote it"
+      continue
+    fi
+    perl -pi -e 's/uv run pytest(?![\w-])(?! -n auto)/uv run pytest -n auto/g' "$WORK/$rel"
+    if grep -q 'uv run pytest -n auto' "$WORK/$rel"; then
+      note "restaged: $rel"
+      NEW_FILES="$NEW_FILES $rel"
+    else
+      note "$rel: substitution did not take; left as it was"
+    fi
+  done
+fi
+
 
 # ---- step: 1.7.26 -> 1.7.27 — the reviewers learn where green tests lie ------
 # 1.7.24 and 1.7.25 gave both review paths the adversary duty and the sentence

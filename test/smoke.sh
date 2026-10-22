@@ -4316,6 +4316,73 @@ grep -q 'differs from what this template shipped' <<<"$EDIT_OUT" \
 
 echo "1.7.27 test-double-criterion checks passed"
 
+# ---- 1.7.28: the check command runs the suite in parallel --------------------
+# Measured on a real consumer (AI-Ops, 2026-10-22): 249.7 s serially vs 46.4 s
+# with `-n auto`, identical tests. The agent runs this command on EVERY iteration,
+# so the difference compounds per issue.
+echo "1.7.28 parallel-check-command checks..."
+
+P1728="$TMP/fake-$LANGUAGE-1728"
+mkdir -p "$P1728"
+git -C "$P1728" init -q -b main
+git -C "$P1728" remote add origin "https://github.com/$REPO.git"
+"$S/bootstrap-afk.sh" "$P1728" --language "$LANGUAGE" --repo "$REPO" --no-build >/dev/null
+
+# (a) A NEW project gets `-n auto` from the template, and the command is still
+#     parseable by the 1.7.26 tool (its anchor is `Run \`…\` before`).
+if [ "$LANGUAGE" = "python" ]; then
+  grep -q 'uv run pytest -n auto' "$P1728/.sandcastle/implement.md" \
+    || { echo "a new python project's check command lost -n auto" >&2; exit 1; }
+  # The 1.7.26 tool exits 3 = "nothing to substitute", which is the correct outcome
+  # here (a fresh bootstrap already carries the translated command). `|| true` keeps
+  # `set -e` from reading that as a failure — the assertion below is the real check.
+  node "$S/tools/adapt-check-command.mjs" --root "$P1728" --scaffold "$S" >/dev/null 2>&1 || true
+  grep -q 'uv run pytest -n auto' "$P1728/.sandcastle/review-prompt.md" \
+    || { echo "the 1.7.26 substitution did not carry the -n auto form into review-prompt.md" >&2; exit 1; }
+fi
+
+# (b) A consumer upgrading ACROSS the change keeps working: its files still say the
+#     old (serial) command, and the 1.7.27 guard must not read that as a hand-edit.
+#     Measured before the fix: the step refused both files, the criterion never
+#     landed, and nothing failed loudly.
+P1728OLD="$TMP/fake-$LANGUAGE-1728-across"
+mkdir -p "$P1728OLD"
+git -C "$P1728OLD" init -q -b main
+git -C "$P1728OLD" remote add origin "https://github.com/$REPO.git"
+"$S/bootstrap-afk.sh" "$P1728OLD" --language "$LANGUAGE" --repo "$REPO" --no-build >/dev/null
+cp "$S/references/review-prompt.1.7.26.md"       "$P1728OLD/.sandcastle/review-prompt.md"
+cp "$S/references/review-prompt-fixer.1.7.26.md" "$P1728OLD/.sandcastle/review/prompt.md"
+cp "$S/references/review-axis-prompt.1.7.26.md"  "$P1728OLD/.sandcastle/review/axis-prompt.md"
+if [ "$LANGUAGE" = "python" ]; then
+  # The pre-1.7.28 spelling, which is what such a consumer actually holds.
+  # The fixture must hold the NEW spelling while the 1.7.26 snapshot holds the OLD
+  # one — that is the only combination where the guard's normalisation matters.
+  # Measured (2026-10-22): consumer=old matches either way; consumer=new matches
+  # ONLY when both spellings are normalised. Getting this backwards makes the
+  # control silently vacuous, which is what the first version of this section did.
+  # Translate the snapshot's node command the way a 1.7.27 consumer's file already
+  # reads, using the SAME tool the upgrade uses. Hand-rolled sed here drifted from
+  # the tool and produced a file holding both spellings at once — which the guard
+  # then (correctly) read as a hand-edit.
+  node "$S/tools/adapt-check-command.mjs" --root "$P1728OLD" --scaffold "$S" \
+    --file .sandcastle/review-prompt.md --file .sandcastle/review/prompt.md >/dev/null 2>&1 || true
+fi
+printf '{"afk_template_version":"1.7.26","templateVersion":1,"language":"%s","repository":"kilbertert/smoke","cron_hour":13}\n' \
+  "$LANGUAGE" > "$P1728OLD/.afk-bootstrap.json"
+OLD_OUT="$("$S/upgrade-afk.sh" "$P1728OLD" --cron-hour 13 2>&1)" \
+  || { echo "upgrade refused a consumer from before the parallel command" >&2; exit 1; }
+# It must SAY it restaged the file rather than passing quietly.
+grep -q 'restaged: .sandcastle/review-prompt.md' <<<"$OLD_OUT" \
+  || { echo "the 1.7.27 step skipped review-prompt.md without saying so" >&2; exit 1; }
+grep -q 'check the double' "$P1728OLD/.sandcastle/review-prompt.md" \
+  || { echo "a pre-1.7.28 consumer never got the 1.7.27 criterion (the guard mis-read the old command as an edit)" >&2; exit 1; }
+if [ "$LANGUAGE" = "python" ]; then
+  grep -q 'uv run pytest -n auto' "$P1728OLD/.sandcastle/review-prompt.md" \
+    || { echo "a pre-1.7.28 consumer was not moved onto the parallel command" >&2; exit 1; }
+fi
+
+echo "1.7.28 parallel-check-command checks passed"
+
 # REGRESSION (review): a consumer coming from BEFORE 1.7.24 must still receive the
 # criterion. The 1.7.24 step adds the adversary section to `review-prompt.md` in
 # `$WORK`, so a guard that compared `$TARGET` would refuse — and the file would

@@ -4121,10 +4121,18 @@ if [ "$to_minor" -ge 7 ] &&
     # (SC2016) however they are assembled, and a `# shellcheck disable=...` line is
     # worse — it would silence the class rather than this instance.
     norm() {
-      local q='`' python_check node_check
-      python_check="uv sync --extra dev && uv run pytest && uv run ruff check"
+      # BOTH python spellings collapse to the node one: the pre-1.7.28 command and
+      # the 1.7.28 one (which added `-n auto`). A consumer upgraded across 1.7.28
+      # carries whichever was current when it was last touched, and normalising only
+      # one made the guard see a hand-edit that was not there — measured: the 1.7.27
+      # step refused both files and the criterion never landed.
+      local q='`' node_check
       node_check="npm run check"
-      sed -E "s#${q}${python_check}${q}#${q}${node_check}${q}#g" "$1"
+      local old_python="uv sync --extra dev && uv run pytest && uv run ruff check"
+      local new_python="uv sync --extra dev && uv run pytest -n auto && uv run ruff check"
+      sed -E \
+        -e "s#${q}${old_python}${q}#${q}${node_check}${q}#g" \
+        -e "s#${q}${new_python}${q}#${q}${node_check}${q}#g" "$1"
     }
     if [ "$(norm "$WORK/$rel")" = "$(norm "$ref")" ]; then
       RESTAGE="$RESTAGE $rel"

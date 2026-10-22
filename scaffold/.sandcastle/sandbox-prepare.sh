@@ -23,7 +23,15 @@
 # For a repo whose checks are `uv run pytest` plus `npm run build`:
 #
 #     uv sync --extra dev
+#     uv pip install pytest-xdist execnet     # `pytest -n auto` needs it
 #     ( cd frontend && npm install && npm run build )
+#
+# **The test scheduler is deliberately not a declared dependency.** Adding it to
+# `pyproject.toml` rewrites `uv.lock`, and a project whose CD compares that lock's
+# hash against the production host refuses to deploy until someone updates the host
+# by hand. Installing it here instead costs one line and keeps the lock untouched
+# — but it also means a later `uv sync` removes it, which is exactly why this hook
+# has to install it on EVERY run rather than once.
 #
 # Keep it idempotent: sandcastle runs it for every iteration of a run, not only
 # the first. `npm ci` and `uv sync` already are; `npm run build` is cheap when

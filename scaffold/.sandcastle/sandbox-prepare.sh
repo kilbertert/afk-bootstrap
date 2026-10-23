@@ -23,7 +23,7 @@
 # For a repo whose checks are `uv run pytest` plus `npm run build`:
 #
 #     uv sync --extra dev
-#     uv pip install pytest-xdist execnet     # `pytest -n auto` needs it
+#     uv pip install pytest-xdist execnet     # `pytest -n 4` needs it
 #     ( cd frontend && npm install && npm run build )
 #
 # **The test scheduler is deliberately not a declared dependency.** Adding it to

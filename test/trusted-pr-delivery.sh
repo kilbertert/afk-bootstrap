@@ -11,6 +11,17 @@ export GIT_AUTHOR_EMAIL=test@example.com
 export GIT_COMMITTER_NAME=test
 export GIT_COMMITTER_EMAIL=test@example.com
 
+# ⚠️ Fixture repos below get committed, and a machine-wide `core.hooksPath`
+# applies to them too. On a self-hosted runner that carries the server's global
+# pre-commit hook, that hook refuses any commit outside a linked worktree ("the
+# canonical checkout is for reading and syncing, not for task work") — a rule
+# about the operator's checkout, applied to a throwaway fixture that is not one.
+# Measured 2026-10-23: CI died here after both smoke variants had already passed,
+# while the same script passed on a box without the hook.
+export GIT_CONFIG_COUNT=1
+export GIT_CONFIG_KEY_0=core.hooksPath
+export GIT_CONFIG_VALUE_0=/dev/null
+
 git init -q --bare --initial-branch=main "$TMP/origin.git"
 git init -q -b test/base "$TMP/seed"
 printf 'base one\n' > "$TMP/seed/base.txt"

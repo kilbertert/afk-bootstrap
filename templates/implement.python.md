@@ -13,12 +13,17 @@ Requirements:
    not invent a parallel runtime contract.
 2. Make the smallest coherent change and add or update focused tests for
    behavior you change.
-3. Run `uv sync --extra dev && uv run pytest -n auto && uv run ruff check` before
-   committing. Do not weaken or skip checks. **`-n auto` is not an optimisation to
+3. Run `uv sync --extra dev && uv run pytest -n 4 && uv run ruff check` before
+   committing. Do not weaken or skip checks. **`-n 4` is not an optimisation to
    skip when the machine looks busy** — measured on a real consumer repository
-   (AI-Ops, 2026-10-22): the suite takes 249.7 s serially and 46.4 s with
-   `-n auto`, the same tests either way. A per-lap check the agent runs on every
-   iteration is where that difference compounds.
+   (AI-Ops, 2026-10-22): the suite takes 249.7 s serially and 46.4 s in parallel,
+   the same tests either way.
+   **`-n 4`, not `-n auto`**: `auto` is the whole box, and this runs on a shared
+   self-hosted runner that also carries other agent sessions, the sshd and the
+   operator's own work. Measured 2026-10-23 on that host: seven concurrent
+   `-n auto` runs drove load average 5.28 → 79, and sshd could not get CPU — the
+   machine stopped being reachable, including the tailnet used to manage it. Half
+   the cores is still a 3.4× gain over serial and leaves the box answerable.
    If `pytest` rejects `-n` (`unrecognized arguments: -n`), the scheduler is not
    installed — install it once with `uv pip install pytest-xdist execnet` and run
    again. Dropping `-n` instead gives up the whole gain silently, and a plain

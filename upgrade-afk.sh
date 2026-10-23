@@ -4167,7 +4167,7 @@ if [ "$to_minor" -ge 7 ] &&
   # The half this step cannot deliver, said out loud. An agent reading "run the
   # suite on every lap" across several concurrent sessions is the actual incident;
   # `-n 4` alone only makes each of them smaller.
-  note "how many runs may exist at once is not settable from here — the project's own tests/conftest.py has to gate it (AI-Ops: MAX_CONCURRENT_RUNS=2)"
+  note "how many runs may exist at once is not settable from here — the project's own tests/conftest.py has to gate it (AI-Ops, health-flow and genesis-evidence each do, with MAX_CONCURRENT_RUNS=2; the lock file name must be shared, not per-repository)"
 fi
 
 

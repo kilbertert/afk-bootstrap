@@ -4093,7 +4093,14 @@ if [ "$to_minor" -ge 7 ] &&
       note "$rel: no uv-run-pytest command; left as the project wrote it"
       continue
     fi
-    perl -pi -e 's/uv run pytest(?![\w-])(?! -n auto)/uv run pytest -n auto/g' "$WORK/$rel"
+    # ⚠️ The negative lookahead must exclude EVERY `-n` this repository has ever
+    # shipped, not just 1.7.28's own. Measured: a consumer already carrying `-n 4`
+    # (from 1.7.29, or from a project that chose its own count) matched `uv run
+    # pytest` and got a second flag appended — `uv run pytest -n 4 -n 4`, which
+    # pytest accepts and runs, so nothing goes red and nothing says so. The script
+    # is idempotent per version, so re-running this step against a tree this step
+    # already touched is a normal path, not an edge case.
+    perl -pi -e 's/uv run pytest(?![\w-])(?! -n )/uv run pytest -n auto/g' "$WORK/$rel"
     if grep -q 'uv run pytest -n auto' "$WORK/$rel"; then
       note "restaged: $rel"
       NEW_FILES="$NEW_FILES $rel"
@@ -4101,6 +4108,66 @@ if [ "$to_minor" -ge 7 ] &&
       note "$rel: substitution did not take; left as it was"
     fi
   done
+fi
+
+
+# ---- step: 1.7.28 -> 1.7.29 — `-n 4`, and only one run at a time ------------
+# 1.7.28 shipped `-n auto` on the argument that more workers is strictly better.
+# That argument was measured on ONE run and never on how many runs exist.
+#
+# Measured 2026-10-23 on the shared host: several agent sessions each running the
+# suite drove load average 5.28 → 79; sshd and tailscaled starved, the tailnet
+# dropped, and the machine stopped being reachable — including the channel used to
+# manage it. `auto` is `os.cpu_count()`, so seven concurrent laps means ~56 workers
+# on 8 cores. The per-lap gain (5.4×) is real; the assumption that the box belongs
+# to this one run is not.
+#
+# TWO changes, because they bound two different things and changing one alone
+# reintroduces the incident:
+#   * `-n auto` → `-n 4` bounds how WIDE one run is (half an 8-core box, still 3.4×
+#     faster than serial; also correct for a 4-core GitHub-hosted runner);
+#   * nothing here bounds HOW MANY runs exist — that is the consumer project's own
+#     conftest slot gate, and this step cannot write it from here. The note below
+#     says so out loud rather than leaving the gap to be discovered.
+#
+# Delivered by substitution on the spelling already in the files, same anchored
+# shape as 1.7.28 and for the same reason: every consumer diverges from the
+# scaffold by its language render and its own verification paragraphs, so a `cmp`
+# restage would refuse in all of them.
+if [ "$to_minor" -ge 7 ] &&
+   { [ "$from_minor" -lt 7 ] ||
+     { [ "$from_minor" -eq 7 ] && [ "$from_patch" -lt 29 ]; }; }; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: half the cores per lap, not all of them =="
+
+  for rel in \
+    .sandcastle/implement.md \
+    .sandcastle/implement-prompt.md \
+    .sandcastle/implement/prompt.md \
+    .sandcastle/implement-pr/prompt.md \
+    .sandcastle/implement-prd/prompt.md \
+    .sandcastle/review-prompt.md \
+    .sandcastle/review/prompt.md ; do
+    [ -e "$WORK/$rel" ] || continue
+    if ! grep -q 'uv run pytest -n auto' "$WORK/$rel"; then
+      # Covers both "already migrated" and "this project never used -n auto".
+      # Neither is a defect and neither is silently dropping something.
+      note "$rel: no 'uv run pytest -n auto'; left as the project wrote it"
+      continue
+    fi
+    perl -pi -e 's/uv run pytest -n auto/uv run pytest -n 4/g' "$WORK/$rel"
+    if grep -q 'uv run pytest -n 4' "$WORK/$rel"; then
+      note "restaged: $rel"
+      NEW_FILES="$NEW_FILES $rel"
+    else
+      note "$rel: substitution did not take; left as it was"
+    fi
+  done
+
+  # The half this step cannot deliver, said out loud. An agent reading "run the
+  # suite on every lap" across several concurrent sessions is the actual incident;
+  # `-n 4` alone only makes each of them smaller.
+  note "how many runs may exist at once is not settable from here — the project's own tests/conftest.py has to gate it (AI-Ops: MAX_CONCURRENT_RUNS=2)"
 fi
 
 
@@ -4175,18 +4242,23 @@ if [ "$to_minor" -ge 7 ] &&
     # (SC2016) however they are assembled, and a `# shellcheck disable=...` line is
     # worse — it would silence the class rather than this instance.
     norm() {
-      # BOTH python spellings collapse to the node one: the pre-1.7.28 command and
-      # the 1.7.28 one (which added `-n auto`). A consumer upgraded across 1.7.28
-      # carries whichever was current when it was last touched, and normalising only
-      # one made the guard see a hand-edit that was not there — measured: the 1.7.27
-      # step refused both files and the criterion never landed.
+      # EVERY python spelling collapses to the node one: the pre-1.7.28 command, the
+      # 1.7.28 one (which added `-n auto`), and the 1.7.29 one (which narrowed it to
+      # `-n 4`). A consumer upgraded across a change carries whichever was current
+      # when it was last touched, and normalising only one made the guard see a
+      # hand-edit that was not there — measured twice: the 1.7.27 step refused both
+      # files and the criterion never landed, and again the moment 1.7.29 introduced
+      # a third spelling. Adding a spelling here is part of shipping the change, not
+      # a follow-up.
       local q='`' node_check
       node_check="npm run check"
       local old_python="uv sync --extra dev && uv run pytest && uv run ruff check"
-      local new_python="uv sync --extra dev && uv run pytest -n auto && uv run ruff check"
+      local auto_python="uv sync --extra dev && uv run pytest -n auto && uv run ruff check"
+      local four_python="uv sync --extra dev && uv run pytest -n 4 && uv run ruff check"
       sed -E \
         -e "s#${q}${old_python}${q}#${q}${node_check}${q}#g" \
-        -e "s#${q}${new_python}${q}#${q}${node_check}${q}#g" "$1"
+        -e "s#${q}${auto_python}${q}#${q}${node_check}${q}#g" \
+        -e "s#${q}${four_python}${q}#${q}${node_check}${q}#g" "$1"
     }
     if [ "$(norm "$WORK/$rel")" = "$(norm "$ref")" ]; then
       RESTAGE="$RESTAGE $rel"

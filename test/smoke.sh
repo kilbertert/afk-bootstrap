@@ -4318,8 +4318,12 @@ echo "1.7.27 test-double-criterion checks passed"
 
 # ---- 1.7.28: the check command runs the suite in parallel --------------------
 # Measured on a real consumer (AI-Ops, 2026-10-22): 249.7 s serially vs 46.4 s
-# with `-n auto`, identical tests. The agent runs this command on EVERY iteration,
+# in parallel, identical tests. The agent runs this command on EVERY iteration,
 # so the difference compounds per issue.
+#
+# ⚠️ The assertions below read `-n 4`, not `-n auto`: 1.7.29 narrowed the count
+# (see that section). The property this section owns is "a new project's check
+# command runs the suite in parallel at all" — the exact number is 1.7.29's.
 echo "1.7.28 parallel-check-command checks..."
 
 P1728="$TMP/fake-$LANGUAGE-1728"
@@ -4328,17 +4332,17 @@ git -C "$P1728" init -q -b main
 git -C "$P1728" remote add origin "https://github.com/$REPO.git"
 "$S/bootstrap-afk.sh" "$P1728" --language "$LANGUAGE" --repo "$REPO" --no-build >/dev/null
 
-# (a) A NEW project gets `-n auto` from the template, and the command is still
-#     parseable by the 1.7.26 tool (its anchor is `Run \`…\` before`).
+# (a) A NEW project gets a parallel command from the template, and the command is
+#     still parseable by the 1.7.26 tool (its anchor is `Run \`…\` before`).
 if [ "$LANGUAGE" = "python" ]; then
-  grep -q 'uv run pytest -n auto' "$P1728/.sandcastle/implement.md" \
-    || { echo "a new python project's check command lost -n auto" >&2; exit 1; }
+  grep -q 'uv run pytest -n 4' "$P1728/.sandcastle/implement.md" \
+    || { echo "a new python project's check command lost the worker count" >&2; exit 1; }
   # The 1.7.26 tool exits 3 = "nothing to substitute", which is the correct outcome
   # here (a fresh bootstrap already carries the translated command). `|| true` keeps
   # `set -e` from reading that as a failure — the assertion below is the real check.
   node "$S/tools/adapt-check-command.mjs" --root "$P1728" --scaffold "$S" >/dev/null 2>&1 || true
-  grep -q 'uv run pytest -n auto' "$P1728/.sandcastle/review-prompt.md" \
-    || { echo "the 1.7.26 substitution did not carry the -n auto form into review-prompt.md" >&2; exit 1; }
+  grep -q 'uv run pytest -n 4' "$P1728/.sandcastle/review-prompt.md" \
+    || { echo "the 1.7.26 substitution did not carry the worker count into review-prompt.md" >&2; exit 1; }
 fi
 
 # (b) A consumer upgrading ACROSS the change keeps working: its files still say the
@@ -4377,11 +4381,93 @@ grep -q 'restaged: .sandcastle/review-prompt.md' <<<"$OLD_OUT" \
 grep -q 'check the double' "$P1728OLD/.sandcastle/review-prompt.md" \
   || { echo "a pre-1.7.28 consumer never got the 1.7.27 criterion (the guard mis-read the old command as an edit)" >&2; exit 1; }
 if [ "$LANGUAGE" = "python" ]; then
-  grep -q 'uv run pytest -n auto' "$P1728OLD/.sandcastle/review-prompt.md" \
-    || { echo "a pre-1.7.28 consumer was not moved onto the parallel command" >&2; exit 1; }
+  grep -q 'uv run pytest -n 4' "$P1728OLD/.sandcastle/review-prompt.md" \
+    || { echo "a pre-1.7.28 consumer was not moved onto the worker-counted command" >&2; exit 1; }
 fi
 
 echo "1.7.28 parallel-check-command checks passed"
+
+# ---- 1.7.29: half the cores per lap, not all of them ------------------------
+# Measured on the shared host 2026-10-23: seven concurrent `-n auto` laps on 8 cores
+# drove load average 5.28 → 79; sshd starved, the tailnet dropped, and the machine
+# became unreachable. `auto` is the whole box, and the box is not this run's.
+echo "1.7.29 bounded-worker-count checks..."
+
+P1729="$TMP/fake-$LANGUAGE-1729"
+mkdir -p "$P1729"
+git -C "$P1729" init -q -b main
+git -C "$P1729" remote add origin "https://github.com/$REPO.git"
+"$S/bootstrap-afk.sh" "$P1729" --language "$LANGUAGE" --repo "$REPO" --no-build >/dev/null
+# A consumer that was last touched under 1.7.28: `-n auto` wherever that step had
+# put a worker count. Two shapes exist and both are realistic —
+#   * `uv run pytest -n auto`  (implement*.md, review*), and
+#   * a bare `uv run pytest`   (`implement-prd/prompt.md`, whose command is written
+#     as a list and which the 1.7.28 step only reaches on the upgrade path).
+# The second is checked separately below: the 1.7.29 step must leave it alone
+# rather than invent a count for a file that never had one.
+if [ "$LANGUAGE" = "python" ]; then
+  perl -pi -e 's/uv run pytest -n 4(?!\d)/uv run pytest -n auto/g' "$P1729/.sandcastle/"*.md
+  perl -pi -e 's/uv run pytest -n 4(?!\d)/uv run pytest -n auto/g' "$P1729/.sandcastle/"*/prompt.md
+  for f in .sandcastle/implement.md .sandcastle/implement-prompt.md .sandcastle/implement/prompt.md \
+           .sandcastle/implement-pr/prompt.md .sandcastle/review-prompt.md \
+           .sandcastle/review/prompt.md; do
+    grep -q 'uv run pytest -n auto' "$P1729/$f" \
+      || { echo "fixture: $f did not carry -n auto into the 1.7.29 case" >&2; exit 1; }
+  done
+fi
+printf '{"afk_template_version":"1.7.28","templateVersion":1,"language":"%s","repository":"kilbertert/smoke","cron_hour":13}\n' \
+  "$LANGUAGE" > "$P1729/.afk-bootstrap.json"
+
+OUT1729="$("$S/upgrade-afk.sh" "$P1729" --cron-hour 13 2>&1)" \
+  || { echo "upgrade refused a 1.7.28 consumer" >&2; exit 1; }
+
+if [ "$LANGUAGE" = "python" ]; then
+  # (a) Every prompt that HAD `auto` moved off it.
+  for f in .sandcastle/implement.md .sandcastle/implement-prompt.md .sandcastle/implement/prompt.md \
+           .sandcastle/implement-pr/prompt.md .sandcastle/review-prompt.md \
+           .sandcastle/review/prompt.md; do
+    grep -q 'uv run pytest -n auto' "$P1729/$f" \
+      && { echo "1.7.29 left -n auto in $f" >&2; exit 1; }
+    grep -q 'uv run pytest -n 4' "$P1729/$f" \
+      || { echo "1.7.29 did not give $f a worker count" >&2; exit 1; }
+  done
+  # (a2) A prompt that never carried a count keeps not carrying one. Substitution
+  #      on the flag cannot fire here, and that is the correct outcome — inventing
+  #      `-n 4` for a file the project wrote without it would be this step editing
+  #      a command it was not asked to change.
+  grep -q 'uv run pytest -n 4' "$P1729/.sandcastle/implement-prd/prompt.md" \
+    && { echo "1.7.29 invented a worker count for implement-prd/prompt.md" >&2; exit 1; }
+
+  # (b) NEGATIVE CONTROL for the lookahead: re-running the step against a tree that
+  #     ALREADY says `-n 4` must not produce `-n 4 -n 4`. pytest accepts a repeated
+  #     `-n` and runs, so this defect is invisible without asserting the shape.
+  #     Measured before the fix: exactly `uv run pytest -n 4 -n 4`.
+  printf '{"afk_template_version":"1.7.28","templateVersion":1,"language":"python","repository":"kilbertert/smoke","cron_hour":13}\n' \
+    > "$P1729/.afk-bootstrap.json"
+  "$S/upgrade-afk.sh" "$P1729" --cron-hour 13 >/dev/null 2>&1 || true
+  grep -q 'uv run pytest -n 4 -n\|uv run pytest -n auto -n' "$P1729/.sandcastle/implement.md" \
+    && { echo "1.7.29 doubled the worker flag on a re-run (-n 4 -n 4)" >&2; exit 1; }
+fi
+
+# (c) The step must SAY that the per-run width is all it can set. The number of
+#     concurrent runs is what actually took the host down, and it lives in the
+#     consumer's own conftest — an upgrade that silently implies "fixed" is worse
+#     than one that names the remaining half.
+grep -q 'how many runs may exist at once' <<<"$OUT1729" \
+  || { echo "1.7.29 did not say that concurrent-run count is out of its reach" >&2; exit 1; }
+
+# (d) NEGATIVE CONTROL for the gate: a consumer already at 1.7.29 must not re-run
+#     the step. Rewriting the version by hand is the only way in, so it also proves
+#     the gate reads the patch level rather than the presence of the substitution.
+printf '{"afk_template_version":"1.7.29","templateVersion":1,"language":"%s","repository":"kilbertert/smoke","cron_hour":13}\n' \
+  "$LANGUAGE" > "$P1729/.afk-bootstrap.json"
+OUT1729B="$("$S/upgrade-afk.sh" "$P1729" --cron-hour 13 2>&1)" \
+  || { echo "upgrade refused a consumer already at the current version" >&2; exit 1; }
+grep -q 'half the cores per lap' <<<"$OUT1729B" \
+  && { echo "the 1.7.29 step ran again for a consumer already at 1.7.29" >&2; exit 1; }
+
+echo "1.7.29 bounded-worker-count checks passed"
+
 
 # REGRESSION (review): a consumer coming from BEFORE 1.7.24 must still receive the
 # criterion. The 1.7.24 step adds the adversary section to `review-prompt.md` in

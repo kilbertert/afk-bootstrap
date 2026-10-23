@@ -10,6 +10,23 @@ esac
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
+# ⚠️ The throwaway repos below get `git commit`ed, and a machine-wide
+# `core.hooksPath` applies to them too. On a self-hosted runner that carries the
+# server's global pre-commit hook, that hook refuses any commit outside a linked
+# worktree ("the canonical checkout is for reading and syncing, not for task
+# work") — a rule about the operator's checkout, applied to a temp fixture that is
+# not one. Measured 2026-10-23: every smoke run on the self-hosted runner died
+# within seconds with that message, while the same script passed on a box without
+# the hook. Scoping the fixtures off the global hooks is what makes the test
+# depend on the scaffold rather than on the host it happens to run on.
+#
+# Done with the environment rather than a `git -c` wrapper because the commits are
+# not all made here: `bootstrap-afk.sh` and `upgrade-afk.sh` commit inside these
+# fixtures too, and only the environment reaches their children.
+export GIT_CONFIG_COUNT=1
+export GIT_CONFIG_KEY_0=core.hooksPath
+export GIT_CONFIG_VALUE_0=/dev/null
+
 TARGET="$TMP/fake-$LANGUAGE-project"
 REPO="kilbertert/fake-$LANGUAGE-project"
 mkdir "$TARGET"

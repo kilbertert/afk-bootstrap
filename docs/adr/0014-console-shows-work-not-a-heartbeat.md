@@ -108,3 +108,23 @@ PRD implement 步骤因此刷屏到无法阅读。
 被否的补充方案：**只在消费仓修，不改模板。** 那会让每一个新脚手架和每一个消费者继续
 拿到有缺陷的版本；1.7.31 的升级步骤因此识别「与 1.7.30 发布副本逐字节相同」的文件并
 替换，手改过的文件只报告不覆盖。
+
+## 追记 1.7.32 —— check 证明不了「运行真的用了它」
+
+genesis-evidence 的升级 PR 里，review 抓到 1.7.31 剩下的两个问题，第二个比第一个重要：
+
+3. **`writeSync` 写满管道会失败。** Node 的 stdout 在管道上是非阻塞的，读端没排空时
+   同步写会 `EAGAIN`——而那正是「失败的那次运行」，是最需要诊断的时候。摘要改为回退到
+   fd 2（stderr 是独立描述符），而不是被 `catch` 吞掉。
+4. **check 从不验证接线。** 它直接调用模块，所以把 `claudeProfile()` 里的
+   `quietThinkingHeartbeats()` 删掉，check 仍然全绿，而所有 runner 重新开始刷屏。
+   这正是 `profile-network.check.ts` 存在的理由——「helper 正确、接线没了」——这一次
+   是同一个形状。check 现在读 `profile.ts`，删掉或注释掉安装都会失败。
+
+顺带修掉一个**测试自己制造的假象**：1.7.30 段的 fixture 用 perl 剥离安装时，把
+`writeMcpConfig();` 后面的换行一起吃了，于是迁移忠实地在粘行的锚点后追加，看起来像是
+迁移的 bug。实测定位后改的是 fixture，不是迁移——记下来是因为下一次看到「迁移把代码
+粘在一起」时，先怀疑生成 fixture 的那条正则。
+
+四个缺陷各有变异守卫，均实测：去掉 `nextTick`、`writeSync`→`write`、删掉 stderr 回退、
+从 `profile.ts` 删/注释掉安装，都会让 `quiet-heartbeats.check.ts` 失败。

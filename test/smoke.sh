@@ -4725,3 +4725,73 @@ grep -q 'replaced quiet-heartbeats-1.7.31' <<<"$OUT1732" \
   || { echo "the upgraded 1.7.31 consumer fails its own check" >&2; exit 1; }
 
 echo "1.7.32 heartbeat wiring checks passed"
+
+# ---- 1.7.33: the summary stays out of stdout, and wiring is proven -----------
+# Two more review findings on the consumer PRs:
+#   * the summary was written to stdout, after `main.ts`'s JSON result — a caller
+#     doing `| jq` breaks on a SUCCESSFUL run;
+#   * the wiring assertion was a bare text match, so moving the call into a
+#     helper nobody invokes passed it.
+echo "1.7.33 heartbeat stdout-purity and wiring-scope checks..."
+
+# (a) The summary goes to stderr and never to stdout — observed, not read.
+# ⚠️ The first form of this assertion was measured to be a FALSE PASS: it fed
+# node -e a value through argv instead of stdin, so the parse failed for a reason
+# unrelated to the property. Keep both halves — stderr carries it, and stdout is
+# EXACTLY the JSON result.
+# $TMP is per-run (mktemp -d), so two smoke suites in parallel do not collide.
+STDERR33="$TMP/stdout-purity.err"
+OUT33="$( cd "$TARGET" && node --experimental-strip-types --input-type=module -e '
+  import { quietThinkingHeartbeats } from "./.sandcastle/quiet-heartbeats.ts";
+  quietThinkingHeartbeats();
+  process.stdout.write("{\"type\":\"system\",\"subtype\":\"thinking_tokens\"}\n");
+' 2>"$STDERR33" )"
+grep -q 'dropped 1 thinking-token frame' "$STDERR33" \
+  || { echo "the exit summary does not reach stderr" >&2; exit 1; }
+grep -q 'dropped' <<<"$OUT33" \
+  && { echo "the exit summary pollutes stdout — main.ts's JSON result follows it" >&2; exit 1; }
+# What a run actually prints — main.ts's JSON line — must remain parseable when
+# the filter is installed. The probe above emitted no such line, so this is the
+# property stated directly: stdout carries the JSON result and nothing else.
+JSON33="$( cd "$TARGET" && node --experimental-strip-types --input-type=module -e '
+  import { quietThinkingHeartbeats } from "./.sandcastle/quiet-heartbeats.ts";
+  quietThinkingHeartbeats();
+  process.stdout.write("{\"type\":\"system\",\"subtype\":\"thinking_tokens\"}\n");
+  console.log(JSON.stringify({ issue: 1, commits: 2 }));
+' 2>/dev/null )"
+[ "$JSON33" = '{"issue":1,"commits":2}' ] \
+  || { echo "stdout is not exactly main.ts's JSON result: $JSON33" >&2; exit 1; }
+
+# (b) MUTATION GUARD: moving the call into a helper nobody invokes must fail.
+W="$TMP/wire-scope-$LANGUAGE"
+mkdir -p "$W"
+cp "$TARGET/.sandcastle/quiet-heartbeats.ts" "$TARGET/.sandcastle/quiet-heartbeats.check.ts" "$W/"
+cp "$TARGET/.sandcastle/profile.ts" "$W/profile.ts"
+( cd "$W" && npx --yes tsx quiet-heartbeats.check.ts >/dev/null 2>&1 ) \
+  || { echo "the wiring check fails on an intact scaffold" >&2; exit 1; }
+python3 - "$W/profile.ts" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace("  quietThinkingHeartbeats();\n", "", 1)
+s = s.replace("export function claudeProfile(",
+              "function unusedHelper() {\n  quietThinkingHeartbeats();\n}\n\nexport function claudeProfile(", 1)
+open(p, "w").write(s)
+PY
+( cd "$W" && npx --yes tsx quiet-heartbeats.check.ts >/dev/null 2>&1 ) \
+  && { echo "the check passes with the install in dead code" >&2; exit 1; }
+
+# (c) MUTATION GUARD: an early return before the install must fail.
+cp "$TARGET/.sandcastle/profile.ts" "$W/profile.ts"
+python3 - "$W/profile.ts" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace("  // Materialise the MCP config",
+              "  if (process.env.X) return {} as never;\n  // Materialise the MCP config", 1)
+open(p, "w").write(s)
+PY
+( cd "$W" && npx --yes tsx quiet-heartbeats.check.ts >/dev/null 2>&1 ) \
+  && { echo "the check passes when the install is unreachable" >&2; exit 1; }
+
+echo "1.7.33 heartbeat stdout-purity and wiring-scope checks passed"

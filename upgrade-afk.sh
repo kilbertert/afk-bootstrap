@@ -4562,8 +4562,19 @@ fi
 #      gone" gap `profile-network.check.ts` documents; this check now reads
 #      `profile.ts` and fails on a removed or commented-out install.
 #
-# This step replaces whatever the template itself shipped (1.7.30's copy or
-# 1.7.31's), and only that — anything else is a project edit and is reported.
+# 1.7.32 fixed those. Review of the next consumer found two more:
+#
+#   5. **The summary was written to STDOUT.** `main.ts` ends a run with
+#      `console.log(JSON.stringify({...}))`, so anything appended after it breaks
+#      a caller doing `node .sandcastle/main.ts | jq` — on a successful run, for a
+#      diagnostic nobody asked for. The summary goes to stderr, always.
+#   6. **The wiring assertion was still a text match, and a text match says where
+#      a call is written, not that a run reaches it.** Moving the call into a
+#      helper nobody invokes passed it. The check now also proves the call sits in
+#      `claudeProfile`'s body and before any early `return`.
+#
+# This step replaces whatever the template itself shipped (1.7.30, 1.7.31, or
+# 1.7.32's copy), and only that — anything else is a project edit and reported.
 #
 # Its own check carries the mutation guard for every one of the four, verified by
 # reverting each fix and watching the check fail. The behavioural form of (2) was
@@ -4571,7 +4582,7 @@ fi
 # anyway — so that assertion reads the source-level property instead.
 if [ "$to_minor" -ge 7 ] &&
    { [ "$from_minor" -lt 7 ] ||
-     { [ "$from_minor" -eq 7 ] && [ "$from_patch" -lt 32 ]; }; }; then
+     { [ "$from_minor" -eq 7 ] && [ "$from_patch" -lt 33 ]; }; }; then
   STEP_RAN=1
   say "== $FROM -> $TEMPLATE_VERSION: the heartbeat filter, and proof a run uses it =="
 

@@ -128,3 +128,22 @@ genesis-evidence 的升级 PR 里，review 抓到 1.7.31 剩下的两个问题�
 
 四个缺陷各有变异守卫，均实测：去掉 `nextTick`、`writeSync`→`write`、删掉 stderr 回退、
 从 `profile.ts` 删/注释掉安装，都会让 `quiet-heartbeats.check.ts` 失败。
+
+## 追记 1.7.33 —— 诊断信息不能污染被解析的流
+
+health-flow 的升级 PR（第三次尝试）里，review 又抓到两条：
+
+5. **摘要写进了 stdout。** `main.ts` 以 `console.log(JSON.stringify({…}))` 结束，
+   那是这条命令的机器可读结果。任何追加到 stdout 的东西都排在它之后，于是
+   `node .sandcastle/main.ts | jq` 在**一次成功的运行**上解析失败——为了一条没人要的
+   诊断。摘要改为始终写 stderr。（1.7.32 的做法是「stdout 失败则回退 stderr」，方向对
+   但位置错：问题不在它写失败，而在它根本不该在 stdout 上。）
+6. **接线断言仍是文本匹配。** 文本只能说明调用写在哪，不能说明运行会到达它——把调用
+   挪进一个没人调用的 helper，检查照样通过。现在同时断言：调用位于 `claudeProfile`
+   的函数体内，且在任何提前 `return` 之前。
+
+写第 5 条的测试时又踩了一次假绿：第一版用 `node -e 'JSON.parse(process.argv[1])'` 喂值，
+`process.argv[1]` 在 `-e` 下不是那个值，解析自然失败——断言因与被测性质无关的原因变红，
+和它本意要守的东西毫无关系。改成直接断言「stdout 恰好等于那句 JSON」。这是本轮第三次
+「断言本身先要成立」的教训，写在这里是因为前两次（1.7.31 的异步写探针、1.7.32 的 fixture
+换行）也都是同一个形状。

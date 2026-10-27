@@ -4862,15 +4862,21 @@ echo "1.7.35 heartbeat count-disambiguation checks..."
 # line would silence the class rather than this instance. Build the string from a
 # dollar sign, the same way upgrade-afk.sh's `norm()` avoids its backticks.
 DOLLAR='$'
-grep -q "of ${DOLLAR}{observed} console line" "$TARGET/.sandcastle/quiet-heartbeats.ts" \
+grep -q "of ${DOLLAR}{observed} stream line" "$TARGET/.sandcastle/quiet-heartbeats.ts" \
   || { echo "the summary does not report how many console lines it judged" >&2; exit 1; }
 
-# (b) A run with no console output says "0 of 0", not just "0".
+# (b) A run with no AGENT STREAM says "0 of 0", not just "0".
+#
+# The probe reproduces the shape review caught 1.7.35 missing: a file-logged run
+# still prints its JSON result after run(), and counting that made the summary
+# read "0 of 1" — indistinguishable from a quiet console run. Printing the result
+# here is what makes this assertion able to fail.
 SILENT="$( cd "$TARGET" && node --experimental-strip-types --input-type=module -e '
   import { quietThinkingHeartbeats } from "./.sandcastle/quiet-heartbeats.ts";
   quietThinkingHeartbeats();
+  console.log(JSON.stringify({ issue: 7, commits: 0 }, null, 2));
 ' 2>&1 >/dev/null )"
-grep -q 'dropped 0 thinking-token frame(s) of 0 console line(s)' <<<"$SILENT" \
+grep -q 'dropped 0 thinking-token frame(s) of 0 stream line(s)' <<<"$SILENT" \
   || { echo "a run with no console output is indistinguishable from an unmatched filter: $SILENT" >&2; exit 1; }
 
 # (c) MUTATION GUARD: the increment must be load-bearing, and the count exact —
@@ -4884,3 +4890,57 @@ cp "$TARGET/.sandcastle/profile.ts" "$MUT35/"
   && { echo "the check passes when the judged-line counter never increments" >&2; exit 1; }
 
 echo "1.7.35 heartbeat count-disambiguation checks passed"
+
+# ---- 1.7.37: the count is stream-json lines, not everything on stdout --------
+# Review of the 1.7.35 promise: a file-logged run still prints its JSON result
+# from main.ts, and counting that made the summary read "0 of 1" — the very
+# confusion the number exists to remove. The counter now only counts lines that
+# look like stream-json frames.
+echo "1.7.37 heartbeat stream-line-count checks..."
+
+# (a) The counter is gated on frame shape, not on the newline alone. The pattern
+#     is built from a delimiter: a single-quoted `{"` is SC2016, and a
+#     `# shellcheck disable=` line would silence the class rather than this case.
+# The pattern is a TypeScript string literal containing both quote kinds, so it
+# goes in a FILE rather than through shell quoting: every inline spelling tried
+# either mis-quoted or turned the `{` into a regex interval, and both failures
+# read identically — "the counter is wrong" — on a correct file. Measured.
+printf '%s\n' "chunk.startsWith('{\"')" > "$TMP/stream-line-pattern.txt"
+grep -qF -f "$TMP/stream-line-pattern.txt" "$TARGET/.sandcastle/quiet-heartbeats.ts" \
+  || { echo "the counter counts every stdout line instead of stream-json frames" >&2; exit 1; }
+
+# (b) MUTATION GUARD: the file-logged shape must report 0. Reverting to the naive
+#     newline counter must make the check fail — otherwise the probe is decoration.
+#
+#     The mutation is a separate script file, not a heredoc nested inside another:
+#     the first version of this block was written that way and did not parse.
+MUT37="$TMP/mut37-$LANGUAGE"
+mkdir -p "$MUT37"
+cp "$TARGET/.sandcastle/quiet-heartbeats.check.ts" "$TARGET/.sandcastle/profile.ts" "$MUT37/"
+cat > "$MUT37/mutate.py" <<'PYMUT'
+import sys
+
+src, dst = sys.argv[1], sys.argv[2]
+text = open(src).read()
+framed = (
+    'if (typeof chunk === "string" && chunk.startsWith(\'{"\')'
+    ' && chunk.endsWith("\\n")) {\n'
+    "      observed += 1;\n"
+    "    }"
+)
+naive = 'if (typeof chunk === "string" && chunk.endsWith("\\n")) observed += 1;'
+if framed not in text:
+    sys.exit("the framed counter is not present in the shipped file")
+open(dst, "w").write(text.replace(framed, naive, 1))
+PYMUT
+python3 "$MUT37/mutate.py" "$TARGET/.sandcastle/quiet-heartbeats.ts" "$MUT37/quiet-heartbeats.ts" \
+  || { echo "fixture: the naive-counter mutation did not apply" >&2; exit 1; }
+# The sentinel is the FULL framed counter, not `startsWith`: the heartbeat matcher
+# 40 lines above also calls `startsWith("{")`, so the loose check reported a
+# successful mutation as a failed one. Measured.
+grep -qF "chunk.startsWith('{\"')" "$MUT37/quiet-heartbeats.ts" \
+  && { echo "fixture: the mutation left a framed counter behind" >&2; exit 1; }
+( cd "$MUT37" && npx --yes tsx quiet-heartbeats.check.ts >/dev/null 2>&1 ) \
+  && { echo "a file-logged run still reports a nonzero line count" >&2; exit 1; }
+
+echo "1.7.37 heartbeat stream-line-count checks passed"

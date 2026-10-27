@@ -4203,12 +4203,23 @@ if [ "$to_minor" -ge 7 ] &&
   # 1. The filter and its check are new files. Not overwritten when present: a
   #    project that widened or narrowed the match has a reason, and this script
   #    does not know it.
+  #
+  #    A consumer that already took 1.7.30 carries 1.7.30's copy of this file,
+  #    which is the defect 1.7.31 corrects (see that step). Both copies are
+  #    recognised here so an early adopter is repaired rather than told
+  #    "already present": the only difference between them is the fix itself.
   QUIET_FILES=""
   for rel in .sandcastle/quiet-heartbeats.ts .sandcastle/quiet-heartbeats.check.ts; do
     SRC="$S/scaffold/$rel"
     [ -e "$SRC" ] || { echo "migration reference missing: $SRC" >&2; exit 1; }
     if [ -e "$WORK/$rel" ]; then
-      note "$rel: already present; left as the project has it"
+      if cmp -s "$WORK/$rel" "$S/references/quiet-heartbeats-1.7.30/${rel##*/}"; then
+        cp "$SRC" "$WORK/$rel"
+        QUIET_FILES="$QUIET_FILES $rel"
+        note "$rel: 1.7.30's copy replaced with the 1.7.31 fix"
+      else
+        note "$rel: already present; left as the project has it"
+      fi
     else
       cp "$SRC" "$WORK/$rel"
       QUIET_FILES="$QUIET_FILES $rel"
@@ -4504,6 +4515,66 @@ if [ "$to_minor" -ge 7 ] &&
       NEW_FILES="$NEW_FILES .sandcastle/merge-prompt.md .sandcastle/update-branch/prompt.md"
     fi
   fi
+fi
+
+
+# ---- step: 1.7.30 -> 1.7.31 — the heartbeat filter honours the write contract
+# 1.7.30 shipped `quiet-heartbeats.ts` with two defects, both found in review of
+# the first consumer PR. Neither shows up as a failing run, which is why they
+# matter:
+#
+#   1. A suppressed write returned `true` and never invoked the caller's
+#      completion callback. `write(chunk[, encoding][, callback])` calls it even
+#      for a synchronous write, so any caller awaiting that callback hung — and
+#      stdout is process-wide, so that is every writer in the runner, not just
+#      the verbose sink.
+#   2. The exit summary went through the captured `stream.write`. `exit` cannot
+#      wait for an asynchronous write to flush, and Actions captures stdout
+#      through a pipe — so the one signal that tells a renamed frame from a run
+#      with no thinking could be discarded at exactly the moment it is needed.
+#
+# The fix is `writeSync` for the summary and `process.nextTick` for the callback.
+# This step replaces 1.7.30's copies ONLY when a consumer's file is byte-identical
+# to what 1.7.30 shipped; anything else is a project edit and is reported.
+#
+# Its own check carries the mutation guard: reverting either fix fails
+# `quiet-heartbeats.check.ts` — verified by running the check against both edits,
+# because the behavioural probes alone did NOT catch the second one (a piped
+# `spawnSync` delivered the async summary anyway, so the assertion was moved to
+# the source-level property that actually makes it safe).
+if [ "$to_minor" -ge 7 ] &&
+   { [ "$from_minor" -lt 7 ] ||
+     { [ "$from_minor" -eq 7 ] && [ "$from_patch" -lt 31 ]; }; }; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: the filter honours the writable-stream contract =="
+
+  HEART_FILES=""
+  for rel in .sandcastle/quiet-heartbeats.ts .sandcastle/quiet-heartbeats.check.ts; do
+    if [ ! -e "$WORK/$rel" ]; then
+      cp "$S/scaffold/$rel" "$WORK/$rel"
+      HEART_FILES="$HEART_FILES $rel"
+      note "added: $rel"
+      continue
+    fi
+    REF="$S/references/quiet-heartbeats-1.7.30/${rel##*/}"
+    if cmp -s "$WORK/$rel" "$REF"; then
+      cp "$S/scaffold/$rel" "$WORK/$rel"
+      HEART_FILES="$HEART_FILES $rel"
+      note "replaced with the 1.7.31 fix: $rel"
+    elif cmp -s "$WORK/$rel" "$S/scaffold/$rel"; then
+      note "$rel: already the 1.7.31 copy"
+    else
+      say ""
+      say "$rel differs from both what 1.7.30 shipped and what 1.7.31 ships."
+      say "It has project edits this script will not overwrite. To take the fix by hand:"
+      say "  - write the exit summary with fs.writeSync, not stream.write"
+      say "  - call a suppressed write's callback (process.nextTick(callback))"
+    fi
+  done
+
+  for rel in ${HEART_FILES:-}; do
+    NEW_FILES="$NEW_FILES $rel"
+  done
 fi
 
 

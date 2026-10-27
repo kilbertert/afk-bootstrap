@@ -4544,7 +4544,11 @@ git -C "$P1730" remote add origin "https://github.com/$REPO.git"
 # Strip what 1.7.30 adds, so the fixture is a real 1.7.29 tree.
 rm -f "$P1730/.sandcastle/quiet-heartbeats.ts" "$P1730/.sandcastle/quiet-heartbeats.check.ts"
 perl -0pi -e 's/^import \{ quietThinkingHeartbeats \} from "\.\/quiet-heartbeats\.js";\n//m' "$P1730/.sandcastle/profile.ts"
-perl -0pi -e 's/\n  \/\/ Scan the console stream for the CLI.*?\n  quietThinkingHeartbeats\(\);\n//s' "$P1730/.sandcastle/profile.ts"
+# Strip the comment block and the call, leaving the newline after
+# `writeMcpConfig();` intact — the same shape a real pre-1.7.30 tree has. A
+# pattern that also eats that newline glues the replacement to the next line and
+# blames the migration for a fixture defect (measured: it did).
+perl -0pi -e 's/  \/\/ Scan the console stream for the CLI.*?\n  quietThinkingHeartbeats\(\);\n//s' "$P1730/.sandcastle/profile.ts"
 perl -0pi -e 's/      # The heartbeat filter.*?\n      - name: Verify the console heartbeat filter\n        run: npx --yes tsx \.sandcastle\/quiet-heartbeats\.check\.ts\n//s' "$P1730/.github/workflows/afk-policy.yml"
 grep -q 'quiet' "$P1730/.sandcastle/profile.ts" \
   && { echo "fixture: the 1.7.29 shape still carries the filter" >&2; exit 1; }
@@ -4587,7 +4591,9 @@ git -C "$P1730ODD" remote add origin "https://github.com/$REPO.git"
 "$S/bootstrap-afk.sh" "$P1730ODD" --language "$LANGUAGE" --repo "$REPO" --no-build >/dev/null
 rm -f "$P1730ODD/.sandcastle/quiet-heartbeats.ts" "$P1730ODD/.sandcastle/quiet-heartbeats.check.ts"
 perl -0pi -e 's/^import \{ quietThinkingHeartbeats \} from "\.\/quiet-heartbeats\.js";\n//m' "$P1730ODD/.sandcastle/profile.ts"
-perl -0pi -e 's/\n  \/\/ Scan the console stream for the CLI.*?\n  quietThinkingHeartbeats\(\);\n//s' "$P1730ODD/.sandcastle/profile.ts"
+# Same newline-preserving strip as above; this fixture already removes the
+# surrounding anchors separately.
+perl -0pi -e 's/  \/\/ Scan the console stream for the CLI.*?\n  quietThinkingHeartbeats\(\);\n//s' "$P1730ODD/.sandcastle/profile.ts"
 # Remove BOTH anchors: the network import and the MCP materialisation call.
 perl -0pi -e 's/^import \{ sandboxNetworkOptions \} from "\.\/profile-network\.js";\n//m' "$P1730ODD/.sandcastle/profile.ts"
 perl -0pi -e 's/^  writeMcpConfig\(\);\n//m' "$P1730ODD/.sandcastle/profile.ts"
@@ -4645,7 +4651,7 @@ printf '{"afk_template_version":"1.7.30","templateVersion":1,"language":"%s","re
   "$LANGUAGE" > "$P1731/.afk-bootstrap.json"
 OUT1731="$("$S/upgrade-afk.sh" "$P1731" --cron-hour 13 2>&1)" \
   || { echo "upgrade refused a 1.7.30 consumer" >&2; exit 1; }
-grep -q 'replaced with the 1.7.31 fix' <<<"$OUT1731" \
+grep -q 'replaced quiet-heartbeats-1.7.30' <<<"$OUT1731" \
   || { echo "1.7.31 did not report replacing 1.7.30's defective copy" >&2; exit 1; }
 grep -q 'writeSync(' "$P1731/.sandcastle/quiet-heartbeats.ts" \
   || { echo "a 1.7.30 consumer's filter was not repaired" >&2; exit 1; }
@@ -4671,3 +4677,51 @@ grep -q 'a project edit this script must not discard' "$P1731E/.sandcastle/quiet
   || { echo "1.7.31 discarded a project edit to the filter" >&2; exit 1; }
 
 echo "1.7.31 heartbeat write-contract checks passed"
+
+# ---- 1.7.32: the check proves a run USES the filter -------------------------
+# The gap review found in 1.7.31: the check called the module directly, so
+# deleting the call from claudeProfile() left it — and CI — green while every
+# runner printed heartbeats again. That is the "helper correct, wiring gone"
+# shape profile-network.check.ts exists for, and it is now closed the same way.
+echo "1.7.32 heartbeat wiring checks..."
+
+# (a) The wiring assertion exists and is real: removing the install must fail.
+WIRE="$TMP/wire-$LANGUAGE"
+mkdir -p "$WIRE"
+cp "$TARGET/.sandcastle/quiet-heartbeats.ts" "$TARGET/.sandcastle/quiet-heartbeats.check.ts" "$WIRE/"
+cp "$TARGET/.sandcastle/profile.ts" "$WIRE/profile.ts"
+( cd "$WIRE" && npx --yes tsx quiet-heartbeats.check.ts >/dev/null 2>&1 ) \
+  || { echo "the wiring check fails on an intact scaffold" >&2; exit 1; }
+perl -0pi -e 's/^  quietThinkingHeartbeats\(\);\n//m' "$WIRE/profile.ts"
+grep -q 'quietThinkingHeartbeats();' "$WIRE/profile.ts" \
+  && { echo "mutation fixture: the install was not removed" >&2; exit 1; }
+( cd "$WIRE" && npx --yes tsx quiet-heartbeats.check.ts >/dev/null 2>&1 ) \
+  && { echo "the check passes when profile.ts stops installing the filter" >&2; exit 1; }
+# Commented out is the subtler spelling of the same regression.
+cp "$TARGET/.sandcastle/profile.ts" "$WIRE/profile.ts"
+perl -0pi -e 's/^  quietThinkingHeartbeats\(\);/  \/\/ quietThinkingHeartbeats();/m' "$WIRE/profile.ts"
+( cd "$WIRE" && npx --yes tsx quiet-heartbeats.check.ts >/dev/null 2>&1 ) \
+  && { echo "the check passes when profile.ts only *mentions* the filter" >&2; exit 1; }
+
+# (b) The exit summary falls back to stderr, so a full pipe does not eat it.
+grep -q 'writeSync(2,' "$TARGET/.sandcastle/quiet-heartbeats.ts" \
+  || { echo "the exit summary has no stderr fallback" >&2; exit 1; }
+
+# (c) A consumer carrying 1.7.31's copy is upgraded to 1.7.32, not left behind.
+P1732="$TMP/fake-$LANGUAGE-1732"
+mkdir -p "$P1732"
+git -C "$P1732" init -q -b main
+git -C "$P1732" remote add origin "https://github.com/$REPO.git"
+"$S/bootstrap-afk.sh" "$P1732" --language "$LANGUAGE" --repo "$REPO" --no-build >/dev/null
+cp "$S/references/quiet-heartbeats-1.7.31/quiet-heartbeats.ts" "$P1732/.sandcastle/quiet-heartbeats.ts"
+cp "$S/references/quiet-heartbeats-1.7.31/quiet-heartbeats.check.ts" "$P1732/.sandcastle/quiet-heartbeats.check.ts"
+printf '{"afk_template_version":"1.7.31","templateVersion":1,"language":"%s","repository":"kilbertert/smoke","cron_hour":13}\n' \
+  "$LANGUAGE" > "$P1732/.afk-bootstrap.json"
+OUT1732="$("$S/upgrade-afk.sh" "$P1732" --cron-hour 13 2>&1)" \
+  || { echo "upgrade refused a 1.7.31 consumer" >&2; exit 1; }
+grep -q 'replaced quiet-heartbeats-1.7.31' <<<"$OUT1732" \
+  || { echo "1.7.32 left a 1.7.31 consumer on the copy without the wiring check" >&2; exit 1; }
+( cd "$P1732" && npx --yes tsx .sandcastle/quiet-heartbeats.check.ts >/dev/null 2>&1 ) \
+  || { echo "the upgraded 1.7.31 consumer fails its own check" >&2; exit 1; }
+
+echo "1.7.32 heartbeat wiring checks passed"

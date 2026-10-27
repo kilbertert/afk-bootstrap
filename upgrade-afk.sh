@@ -4230,15 +4230,31 @@ if [ "$to_minor" -ge 7 ] &&
   #    spreads into `run()`, so this is one edit for seven runners and a future
   #    one inherits it. Anchored on the MCP materialisation call, which this same
   #    function has carried since 1.6.x and which executes once per run.
+  #
+  #    The live CALL is what a run depends on, so that is what this checks — not
+  #    the import. Keying on the import alone is how a tree that lost the call
+  #    (or never had it) came out of the migration with an import and no install,
+  #    and the 1.7.32 check then failed on a tree the upgrade had just stamped as
+  #    current. Measured on the smoke fixture that strips both lines.
   PROF="$WORK/.sandcastle/profile.ts"
-  if grep -qF "quiet-heartbeats.js" "$PROF"; then
-    note "profile.ts: heartbeat filter already installed"
+  if grep -qE '^[[:space:]]*quietThinkingHeartbeats\(\);' "$PROF"; then
+    if grep -qF "quiet-heartbeats.js" "$PROF"; then
+      note "profile.ts: heartbeat filter already installed"
+    else
+      say ""
+      say "profile.ts calls quietThinkingHeartbeats() but never imports it."
+      say "Add by hand: import { quietThinkingHeartbeats } from \"./quiet-heartbeats.js\";"
+    fi
   elif grep -qF 'import { sandboxNetworkOptions } from "./profile-network.js";' "$PROF" &&
        grep -qF "  writeMcpConfig();" "$PROF"; then
-    subst "$PROF" \
-      'import { sandboxNetworkOptions } from "./profile-network.js";' \
-      'import { sandboxNetworkOptions } from "./profile-network.js";
+    # The import is only added when it is genuinely absent; re-adding it would
+    # produce a duplicate binding.
+    if ! grep -qF "quiet-heartbeats.js" "$PROF"; then
+      subst "$PROF" \
+        'import { sandboxNetworkOptions } from "./profile-network.js";' \
+        'import { sandboxNetworkOptions } from "./profile-network.js";
 import { quietThinkingHeartbeats } from "./quiet-heartbeats.js";'
+    fi
     subst "$PROF" \
       "  writeMcpConfig();" \
       "  writeMcpConfig();
@@ -4518,7 +4534,8 @@ if [ "$to_minor" -ge 7 ] &&
 fi
 
 
-# ---- step: 1.7.30 -> 1.7.31 — the heartbeat filter honours the write contract
+# ---- step: 1.7.30 -> 1.7.32 — the heartbeat filter honours the write contract,
+#                              and a run without it cannot go unnoticed ---------
 # 1.7.30 shipped `quiet-heartbeats.ts` with two defects, both found in review of
 # the first consumer PR. Neither shows up as a failing run, which is why they
 # matter:
@@ -4533,20 +4550,30 @@ fi
 #      through a pipe — so the one signal that tells a renamed frame from a run
 #      with no thinking could be discarded at exactly the moment it is needed.
 #
-# The fix is `writeSync` for the summary and `process.nextTick` for the callback.
-# This step replaces 1.7.30's copies ONLY when a consumer's file is byte-identical
-# to what 1.7.30 shipped; anything else is a project edit and is reported.
+# 1.7.31 fixed those. Review of the next consumer found two more, of which the
+# second is the important one:
 #
-# Its own check carries the mutation guard: reverting either fix fails
-# `quiet-heartbeats.check.ts` — verified by running the check against both edits,
-# because the behavioural probes alone did NOT catch the second one (a piped
-# `spawnSync` delivered the async summary anyway, so the assertion was moved to
-# the source-level property that actually makes it safe).
+#   3. `writeSync` to a PIPE can fail with EAGAIN when the reader has not
+#      drained it — which is what a failing run looks like. The summary now falls
+#      back to fd 2 rather than being swallowed in exactly that run.
+#   4. **The check never asserted the wiring.** It called the module directly, so
+#      deleting the call from `claudeProfile()` left it green while every runner
+#      went back to printing heartbeats. That is the "helper correct, wiring
+#      gone" gap `profile-network.check.ts` documents; this check now reads
+#      `profile.ts` and fails on a removed or commented-out install.
+#
+# This step replaces whatever the template itself shipped (1.7.30's copy or
+# 1.7.31's), and only that — anything else is a project edit and is reported.
+#
+# Its own check carries the mutation guard for every one of the four, verified by
+# reverting each fix and watching the check fail. The behavioural form of (2) was
+# measured to be a false green — a piped `spawnSync` delivered the async summary
+# anyway — so that assertion reads the source-level property instead.
 if [ "$to_minor" -ge 7 ] &&
    { [ "$from_minor" -lt 7 ] ||
-     { [ "$from_minor" -eq 7 ] && [ "$from_patch" -lt 31 ]; }; }; then
+     { [ "$from_minor" -eq 7 ] && [ "$from_patch" -lt 32 ]; }; }; then
   STEP_RAN=1
-  say "== $FROM -> $TEMPLATE_VERSION: the filter honours the writable-stream contract =="
+  say "== $FROM -> $TEMPLATE_VERSION: the heartbeat filter, and proof a run uses it =="
 
   HEART_FILES=""
   for rel in .sandcastle/quiet-heartbeats.ts .sandcastle/quiet-heartbeats.check.ts; do
@@ -4556,20 +4583,32 @@ if [ "$to_minor" -ge 7 ] &&
       note "added: $rel"
       continue
     fi
-    REF="$S/references/quiet-heartbeats-1.7.30/${rel##*/}"
-    if cmp -s "$WORK/$rel" "$REF"; then
-      cp "$S/scaffold/$rel" "$WORK/$rel"
-      HEART_FILES="$HEART_FILES $rel"
-      note "replaced with the 1.7.31 fix: $rel"
-    elif cmp -s "$WORK/$rel" "$S/scaffold/$rel"; then
-      note "$rel: already the 1.7.31 copy"
-    else
-      say ""
-      say "$rel differs from both what 1.7.30 shipped and what 1.7.31 ships."
-      say "It has project edits this script will not overwrite. To take the fix by hand:"
-      say "  - write the exit summary with fs.writeSync, not stream.write"
-      say "  - call a suppressed write's callback (process.nextTick(callback))"
+    if cmp -s "$WORK/$rel" "$S/scaffold/$rel"; then
+      note "$rel: already the current copy"
+      continue
     fi
+    # Either defective shape is replaced: 1.7.30's (no callback, async summary)
+    # and 1.7.31's (both fixed, but with no wiring assertion and no stderr
+    # fallback). Both are OUR output, so replacing them discards nothing a project
+    # wrote — the same rule the ADR sets for every generated file.
+    REPLACED=0
+    for ref in "$S"/references/quiet-heartbeats-1.7.3*/"${rel##*/}"; do
+      [ -e "$ref" ] || continue
+      if cmp -s "$WORK/$rel" "$ref"; then
+        cp "$S/scaffold/$rel" "$WORK/$rel"
+        HEART_FILES="$HEART_FILES $rel"
+        note "replaced ${ref#"$S/references/"}: $rel"
+        REPLACED=1
+        break
+      fi
+    done
+    [ "$REPLACED" = "1" ] && continue
+    say ""
+    say "$rel differs from every copy this template has shipped."
+    say "It has project edits this script will not overwrite. To take the fix by hand:"
+    say "  - write the exit summary with fs.writeSync, falling back to fd 2"
+    say "  - call a suppressed write's callback (process.nextTick(callback))"
+    say "  - assert in the check that profile.ts calls quietThinkingHeartbeats()"
   done
 
   for rel in ${HEART_FILES:-}; do

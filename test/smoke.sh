@@ -4856,7 +4856,13 @@ echo "1.7.34 heartbeat scope-limit checks passed"
 echo "1.7.35 heartbeat count-disambiguation checks..."
 
 # (a) The summary carries BOTH numbers.
-grep -q 'of ${observed} console line' "$TARGET/.sandcastle/quiet-heartbeats.ts" \
+#
+# The pattern names a TypeScript template placeholder, so it must reach grep
+# literally — but a single-quoted `${…}` is SC2016, and a `# shellcheck disable=`
+# line would silence the class rather than this instance. Build the string from a
+# dollar sign, the same way upgrade-afk.sh's `norm()` avoids its backticks.
+DOLLAR='$'
+grep -q "of ${DOLLAR}{observed} console line" "$TARGET/.sandcastle/quiet-heartbeats.ts" \
   || { echo "the summary does not report how many console lines it judged" >&2; exit 1; }
 
 # (b) A run with no console output says "0 of 0", not just "0".

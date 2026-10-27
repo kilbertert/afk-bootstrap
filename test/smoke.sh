@@ -4703,9 +4703,14 @@ perl -0pi -e 's/^  quietThinkingHeartbeats\(\);/  \/\/ quietThinkingHeartbeats()
 ( cd "$WIRE" && npx --yes tsx quiet-heartbeats.check.ts >/dev/null 2>&1 ) \
   && { echo "the check passes when profile.ts only *mentions* the filter" >&2; exit 1; }
 
-# (b) The exit summary falls back to stderr, so a full pipe does not eat it.
-grep -q 'writeSync(2,' "$TARGET/.sandcastle/quiet-heartbeats.ts" \
-  || { echo "the exit summary has no stderr fallback" >&2; exit 1; }
+# (b) The exit summary goes to stderr (fd 2), synchronously. Asserted on the
+#     property rather than one spelling of the call: 1.7.35 split it across lines
+#     to fit the second count, and a substring match on `writeSync(2,` would have
+#     failed a correct file — which is what it did, measured.
+# Multi-line: grep matches per line, and the call is spread across three of them.
+# `perl -0777` slurps the file, which is what the property needs.
+perl -0777 -ne 'exit(/writeSync\(\s*2\s*,/ ? 0 : 1)' "$TARGET/.sandcastle/quiet-heartbeats.ts" \
+  || { echo "the exit summary is not written to stderr synchronously" >&2; exit 1; }
 
 # (c) A consumer carrying 1.7.31's copy is upgraded to 1.7.32, not left behind.
 P1732="$TMP/fake-$LANGUAGE-1732"
@@ -4843,3 +4848,33 @@ PY
   && { echo "a helper install still passes after the limit was documented" >&2; exit 1; }
 
 echo "1.7.34 heartbeat scope-limit checks passed"
+
+# ---- 1.7.35: "dropped 0" is not the same fact as "wrote nothing" ------------
+# A runner using `logging: { type: "file" }` never writes to stdout, so its
+# summary read identically to a console run that simply had no thinking — the two
+# cases the one diagnostic line exists to separate.
+echo "1.7.35 heartbeat count-disambiguation checks..."
+
+# (a) The summary carries BOTH numbers.
+grep -q 'of ${observed} console line' "$TARGET/.sandcastle/quiet-heartbeats.ts" \
+  || { echo "the summary does not report how many console lines it judged" >&2; exit 1; }
+
+# (b) A run with no console output says "0 of 0", not just "0".
+SILENT="$( cd "$TARGET" && node --experimental-strip-types --input-type=module -e '
+  import { quietThinkingHeartbeats } from "./.sandcastle/quiet-heartbeats.ts";
+  quietThinkingHeartbeats();
+' 2>&1 >/dev/null )"
+grep -q 'dropped 0 thinking-token frame(s) of 0 console line(s)' <<<"$SILENT" \
+  || { echo "a run with no console output is indistinguishable from an unmatched filter: $SILENT" >&2; exit 1; }
+
+# (c) MUTATION GUARD: the increment must be load-bearing, and the count exact —
+#     `\d+` was measured to accept a counter that never moves.
+MUT35="$TMP/mut35-$LANGUAGE"
+mkdir -p "$MUT35"
+cp "$TARGET/.sandcastle/quiet-heartbeats.check.ts" "$MUT35/"
+sed 's/ observed += 1;//' "$TARGET/.sandcastle/quiet-heartbeats.ts" > "$MUT35/quiet-heartbeats.ts"
+cp "$TARGET/.sandcastle/profile.ts" "$MUT35/"
+( cd "$MUT35" && npx --yes tsx quiet-heartbeats.check.ts >/dev/null 2>&1 ) \
+  && { echo "the check passes when the judged-line counter never increments" >&2; exit 1; }
+
+echo "1.7.35 heartbeat count-disambiguation checks passed"

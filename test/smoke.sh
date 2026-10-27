@@ -4601,3 +4601,73 @@ grep -q 'quiet-heartbeats.js' "$P1730ODD/.sandcastle/profile.ts" \
   && { echo "1.7.30 wrote a dangling import into an unanchored profile.ts" >&2; exit 1; }
 
 echo "1.7.30 heartbeat-filter checks passed"
+
+# ---- 1.7.31: the filter honours the writable-stream contract -----------------
+# 1.7.30 shipped two defects that a passing run never shows: a suppressed write
+# never called its completion callback, and the exit summary went through an
+# async write that termination can discard. The check catches both — verified by
+# reverting each fix and watching it fail — so this section's job is that the
+# upgrade DELIVERS the fixed copy to a consumer that already took 1.7.30.
+echo "1.7.31 heartbeat write-contract checks..."
+
+# (a) The shipped copy is the fixed one: it writes the summary synchronously and
+#     calls the callback. Asserted on the source because that is what the
+#     mutation test showed is reliable.
+grep -q 'writeSync(' "$TARGET/.sandcastle/quiet-heartbeats.ts" \
+  || { echo "the shipped filter does not write its exit summary synchronously" >&2; exit 1; }
+grep -q 'nextTick(callback' "$TARGET/.sandcastle/quiet-heartbeats.ts" \
+  || { echo "the shipped filter never calls a suppressed write's callback" >&2; exit 1; }
+
+# (b) MUTATION GUARD: both defects must fail the check. Without this, a check
+#     that passes for the broken code certifies the bug it was written for.
+MUT="$TMP/mut-$LANGUAGE"
+mkdir -p "$MUT"
+cp "$TARGET/.sandcastle/quiet-heartbeats.check.ts" "$MUT/"
+# Drop the callback, keep everything else.
+sed 's/process\.nextTick(callback as () => void);//' "$TARGET/.sandcastle/quiet-heartbeats.ts" > "$MUT/quiet-heartbeats.ts"
+( cd "$MUT" && npx --yes tsx quiet-heartbeats.check.ts >/dev/null 2>&1 ) \
+  && { echo "the check passes when a suppressed write never calls its callback" >&2; exit 1; }
+# Make the exit summary an async write again, keep the callback.
+sed 's/writeSync(/write(/' "$TARGET/.sandcastle/quiet-heartbeats.ts" > "$MUT/quiet-heartbeats.ts"
+( cd "$MUT" && npx --yes tsx quiet-heartbeats.check.ts >/dev/null 2>&1 ) \
+  && { echo "the check passes when the exit summary is an async write" >&2; exit 1; }
+
+# (c) A consumer already carrying 1.7.30's copy is REPAIRED, not told
+#     "already present".
+P1731="$TMP/fake-$LANGUAGE-1731"
+mkdir -p "$P1731"
+git -C "$P1731" init -q -b main
+git -C "$P1731" remote add origin "https://github.com/$REPO.git"
+"$S/bootstrap-afk.sh" "$P1731" --language "$LANGUAGE" --repo "$REPO" --no-build >/dev/null
+cp "$S/references/quiet-heartbeats-1.7.30/quiet-heartbeats.ts" "$P1731/.sandcastle/quiet-heartbeats.ts"
+cp "$S/references/quiet-heartbeats-1.7.30/quiet-heartbeats.check.ts" "$P1731/.sandcastle/quiet-heartbeats.check.ts"
+printf '{"afk_template_version":"1.7.30","templateVersion":1,"language":"%s","repository":"kilbertert/smoke","cron_hour":13}\n' \
+  "$LANGUAGE" > "$P1731/.afk-bootstrap.json"
+OUT1731="$("$S/upgrade-afk.sh" "$P1731" --cron-hour 13 2>&1)" \
+  || { echo "upgrade refused a 1.7.30 consumer" >&2; exit 1; }
+grep -q 'replaced with the 1.7.31 fix' <<<"$OUT1731" \
+  || { echo "1.7.31 did not report replacing 1.7.30's defective copy" >&2; exit 1; }
+grep -q 'writeSync(' "$P1731/.sandcastle/quiet-heartbeats.ts" \
+  || { echo "a 1.7.30 consumer's filter was not repaired" >&2; exit 1; }
+( cd "$P1731" && npx --yes tsx .sandcastle/quiet-heartbeats.check.ts >/dev/null 2>&1 ) \
+  || { echo "the repaired filter fails its own check" >&2; exit 1; }
+
+# (d) A consumer that edited the filter keeps its version and is TOLD.
+P1731E="$TMP/fake-$LANGUAGE-1731-edited"
+mkdir -p "$P1731E"
+git -C "$P1731E" init -q -b main
+git -C "$P1731E" remote add origin "https://github.com/$REPO.git"
+"$S/bootstrap-afk.sh" "$P1731E" --language "$LANGUAGE" --repo "$REPO" --no-build >/dev/null
+cp "$S/references/quiet-heartbeats-1.7.30/quiet-heartbeats.ts" "$P1731E/.sandcastle/quiet-heartbeats.ts"
+cp "$S/references/quiet-heartbeats-1.7.30/quiet-heartbeats.check.ts" "$P1731E/.sandcastle/quiet-heartbeats.check.ts"
+printf '\n// a project edit this script must not discard\n' >> "$P1731E/.sandcastle/quiet-heartbeats.ts"
+printf '{"afk_template_version":"1.7.30","templateVersion":1,"language":"%s","repository":"kilbertert/smoke","cron_hour":13}\n' \
+  "$LANGUAGE" > "$P1731E/.afk-bootstrap.json"
+OUT1731E="$("$S/upgrade-afk.sh" "$P1731E" --cron-hour 13 2>&1)" \
+  || { echo "upgrade refused a consumer with an edited filter" >&2; exit 1; }
+grep -q 'project edits this script will not overwrite' <<<"$OUT1731E" \
+  || { echo "1.7.31 overwrote or silently skipped an edited filter" >&2; exit 1; }
+grep -q 'a project edit this script must not discard' "$P1731E/.sandcastle/quiet-heartbeats.ts" \
+  || { echo "1.7.31 discarded a project edit to the filter" >&2; exit 1; }
+
+echo "1.7.31 heartbeat write-contract checks passed"

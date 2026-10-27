@@ -4573,8 +4573,14 @@ fi
 #      helper nobody invokes passed it. The check now also proves the call sits in
 #      `claudeProfile`'s body and before any early `return`.
 #
-# This step replaces whatever the template itself shipped (1.7.30, 1.7.31, or
-# 1.7.32's copy), and only that — anything else is a project edit and reported.
+#   7. **The scope check had no stated limit.** A nested uncalled function inside
+#      `claudeProfile` passes it. Closing that needs the call graph — i.e.
+#      importing the Sandcastle provider, the one thing this check exists
+#      without — so 1.7.34 states the limit in the check and prints a note when
+#      the shape appears, instead of leaving a reader to assume coverage.
+#
+# This step replaces whatever the template itself shipped (1.7.30 through
+# 1.7.33's copy), and only that — anything else is a project edit and reported.
 #
 # Its own check carries the mutation guard for every one of the four, verified by
 # reverting each fix and watching the check fail. The behavioural form of (2) was
@@ -4582,7 +4588,7 @@ fi
 # anyway — so that assertion reads the source-level property instead.
 if [ "$to_minor" -ge 7 ] &&
    { [ "$from_minor" -lt 7 ] ||
-     { [ "$from_minor" -eq 7 ] && [ "$from_patch" -lt 33 ]; }; }; then
+     { [ "$from_minor" -eq 7 ] && [ "$from_patch" -lt 34 ]; }; }; then
   STEP_RAN=1
   say "== $FROM -> $TEMPLATE_VERSION: the heartbeat filter, and proof a run uses it =="
 

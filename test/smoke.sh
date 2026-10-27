@@ -4795,3 +4795,51 @@ PY
   && { echo "the check passes when the install is unreachable" >&2; exit 1; }
 
 echo "1.7.33 heartbeat stdout-purity and wiring-scope checks passed"
+
+# ---- 1.7.34: the scope check states its own limit ----------------------------
+# Review of a consumer PR: the scope assertion still passes when the install sits
+# in a nested, uncalled function inside claudeProfile. Closing that needs the call
+# graph — importing @ai-hero/sandcastle, which a fresh scaffold does not have and
+# this check must run without. So the limit is documented AND made observable: the
+# check prints a note when the shape appears, rather than passing silently.
+echo "1.7.34 heartbeat scope-limit checks..."
+
+# (a) The documented limit is stated in the check, not left implicit.
+grep -q 'nested uncalled function' "$TARGET/.sandcastle/quiet-heartbeats.check.ts" \
+  || { echo "the scope check does not state its known limit" >&2; exit 1; }
+
+# (b) The limit is OBSERVABLE: the nested shape produces a note. It still passes
+#     — that is the honest outcome — but it is not silent.
+N="$TMP/nested-$LANGUAGE"
+mkdir -p "$N"
+cp "$TARGET/.sandcastle/quiet-heartbeats.ts" "$TARGET/.sandcastle/quiet-heartbeats.check.ts" "$TARGET/.sandcastle/profile.ts" "$N/"
+python3 - "$N/profile.ts" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace("  quietThinkingHeartbeats();\n", "", 1)
+i = s.index("function claudeProfile")
+j = s.index("{", s.index(":", i))
+s = s[:j + 1] + "\n  function deadNested() {\n    quietThinkingHeartbeats();\n  }\n" + s[j + 1:]
+open(p, "w").write(s)
+PY
+NESTED_OUT="$( cd "$N" && npx --yes tsx quiet-heartbeats.check.ts 2>&1 )"
+grep -q 'documented limit' <<<"$NESTED_OUT" \
+  || { echo "the nested-install shape passes the scope check silently" >&2; exit 1; }
+
+# (c) The shapes the check DOES cover still fail. Re-asserting one here because
+#     (b) adds a path through the same code.
+cp "$TARGET/.sandcastle/profile.ts" "$N/profile.ts"
+python3 - "$N/profile.ts" <<'PY'
+import sys
+p = sys.argv[1]
+s = open(p).read()
+s = s.replace("  quietThinkingHeartbeats();\n", "", 1)
+s = s.replace("export function claudeProfile(",
+              "function unusedHelper() {\n  quietThinkingHeartbeats();\n}\n\nexport function claudeProfile(", 1)
+open(p, "w").write(s)
+PY
+( cd "$N" && npx --yes tsx quiet-heartbeats.check.ts >/dev/null 2>&1 ) \
+  && { echo "a helper install still passes after the limit was documented" >&2; exit 1; }
+
+echo "1.7.34 heartbeat scope-limit checks passed"

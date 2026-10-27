@@ -4512,3 +4512,92 @@ grep -q 'You are the adversary, not the author' "$P1727OLD/.sandcastle/review-pr
   || { echo "a pre-1.7.24 consumer lost the adversary duty" >&2; exit 1; }
 grep -q 'check the double' "$P1727OLD/.sandcastle/review-prompt.md" \
   || { echo "a pre-1.7.24 consumer never got the double criterion" >&2; exit 1; }
+
+# ---- 1.7.30: thinking-token heartbeats are kept out of the console ----------
+# Measured 2026-10-27 (Claude Code 2.1.311, one real prompt): 227-342 frames of
+# `{"type":"system","subtype":"thinking_tokens",…}` per run, 58% of every byte.
+# The filter's own check is run here too: it is wired into afk-policy.yml, and a
+# check nobody runs is the failure mode this repository keeps closing.
+echo "1.7.30 heartbeat-filter checks..."
+
+# (a) A NEW project gets the filter installed and the check wired.
+for f in .sandcastle/quiet-heartbeats.ts .sandcastle/quiet-heartbeats.check.ts; do
+  [ -e "$TARGET/$f" ] || { echo "a new scaffold has no $f" >&2; exit 1; }
+done
+grep -q 'quietThinkingHeartbeats()' "$TARGET/.sandcastle/profile.ts" \
+  || { echo "a new scaffold never installs the heartbeat filter" >&2; exit 1; }
+grep -q 'quiet-heartbeats.check.ts' "$TARGET/.github/workflows/afk-policy.yml" \
+  || { echo "a new scaffold never runs the heartbeat check" >&2; exit 1; }
+
+# (b) The filter's check itself, against the real frame shapes.
+( cd "$TARGET" && npx --yes tsx .sandcastle/quiet-heartbeats.check.ts >/dev/null 2>&1 ) \
+  || { echo "the heartbeat check fails on a fresh scaffold" >&2; exit 1; }
+
+# (c) A consumer at 1.7.29 is upgraded: files copied, profile.ts gains the call,
+#     CI gains the step. Deliberately a consumer that ALREADY ran the earlier
+#     steps — the gate is the patch level, not the presence of anything else.
+P1730="$TMP/fake-$LANGUAGE-1730"
+mkdir -p "$P1730"
+git -C "$P1730" init -q -b main
+git -C "$P1730" remote add origin "https://github.com/$REPO.git"
+"$S/bootstrap-afk.sh" "$P1730" --language "$LANGUAGE" --repo "$REPO" --no-build >/dev/null
+# Strip what 1.7.30 adds, so the fixture is a real 1.7.29 tree.
+rm -f "$P1730/.sandcastle/quiet-heartbeats.ts" "$P1730/.sandcastle/quiet-heartbeats.check.ts"
+perl -0pi -e 's/^import \{ quietThinkingHeartbeats \} from "\.\/quiet-heartbeats\.js";\n//m' "$P1730/.sandcastle/profile.ts"
+perl -0pi -e 's/\n  \/\/ Scan the console stream for the CLI.*?\n  quietThinkingHeartbeats\(\);\n//s' "$P1730/.sandcastle/profile.ts"
+perl -0pi -e 's/      # The heartbeat filter.*?\n      - name: Verify the console heartbeat filter\n        run: npx --yes tsx \.sandcastle\/quiet-heartbeats\.check\.ts\n//s' "$P1730/.github/workflows/afk-policy.yml"
+grep -q 'quiet' "$P1730/.sandcastle/profile.ts" \
+  && { echo "fixture: the 1.7.29 shape still carries the filter" >&2; exit 1; }
+printf '{"afk_template_version":"1.7.29","templateVersion":1,"language":"%s","repository":"kilbertert/smoke","cron_hour":13}\n' \
+  "$LANGUAGE" > "$P1730/.afk-bootstrap.json"
+
+OUT1730="$("$S/upgrade-afk.sh" "$P1730" --cron-hour 13 2>&1)" \
+  || { echo "upgrade refused a 1.7.29 consumer" >&2; exit 1; }
+grep -q 'heartbeats out of the log' <<<"$OUT1730" \
+  || { echo "1.7.30 did not announce its own step" >&2; exit 1; }
+for f in .sandcastle/quiet-heartbeats.ts .sandcastle/quiet-heartbeats.check.ts; do
+  [ -e "$P1730/$f" ] || { echo "1.7.30 did not add $f" >&2; exit 1; }
+done
+grep -q 'quietThinkingHeartbeats();' "$P1730/.sandcastle/profile.ts" \
+  || { echo "1.7.30 did not install the filter in profile.ts" >&2; exit 1; }
+grep -q 'quiet-heartbeats.check.ts' "$P1730/.github/workflows/afk-policy.yml" \
+  || { echo "1.7.30 did not wire the check into CI" >&2; exit 1; }
+( cd "$P1730" && npx --yes tsx .sandcastle/quiet-heartbeats.check.ts >/dev/null 2>&1 ) \
+  || { echo "the heartbeat check fails on an upgraded consumer" >&2; exit 1; }
+
+# (d) NEGATIVE CONTROL: a consumer already at 1.7.30 must not run the step again
+#     — and the install must stay a single call, not accumulate one per upgrade.
+printf '{"afk_template_version":"1.7.29","templateVersion":1,"language":"%s","repository":"kilbertert/smoke","cron_hour":13}\n' \
+  "$LANGUAGE" > "$P1730/.afk-bootstrap.json"
+OUT1730B="$("$S/upgrade-afk.sh" "$P1730" --cron-hour 13 2>&1)" \
+  || { echo "upgrade refused an already-upgraded consumer" >&2; exit 1; }
+[ "$(grep -c 'quietThinkingHeartbeats();' "$P1730/.sandcastle/profile.ts")" = "1" ] \
+  || { echo "a second upgrade installed the heartbeat filter twice" >&2; exit 1; }
+[ "$(grep -c 'quiet-heartbeats.check.ts' "$P1730/.github/workflows/afk-policy.yml")" = "1" ] \
+  || { echo "a second upgrade wired the heartbeat check twice" >&2; exit 1; }
+grep -q 'already installed' <<<"$OUT1730B" \
+  || { echo "a second upgrade did not report the filter as already installed" >&2; exit 1; }
+
+# (e) A consumer that restructured claudeProfile (no anchor) is TOLD, not
+#     half-edited. The import must not land without the call.
+P1730ODD="$TMP/fake-$LANGUAGE-1730-odd"
+mkdir -p "$P1730ODD"
+git -C "$P1730ODD" init -q -b main
+git -C "$P1730ODD" remote add origin "https://github.com/$REPO.git"
+"$S/bootstrap-afk.sh" "$P1730ODD" --language "$LANGUAGE" --repo "$REPO" --no-build >/dev/null
+rm -f "$P1730ODD/.sandcastle/quiet-heartbeats.ts" "$P1730ODD/.sandcastle/quiet-heartbeats.check.ts"
+perl -0pi -e 's/^import \{ quietThinkingHeartbeats \} from "\.\/quiet-heartbeats\.js";\n//m' "$P1730ODD/.sandcastle/profile.ts"
+perl -0pi -e 's/\n  \/\/ Scan the console stream for the CLI.*?\n  quietThinkingHeartbeats\(\);\n//s' "$P1730ODD/.sandcastle/profile.ts"
+# Remove BOTH anchors: the network import and the MCP materialisation call.
+perl -0pi -e 's/^import \{ sandboxNetworkOptions \} from "\.\/profile-network\.js";\n//m' "$P1730ODD/.sandcastle/profile.ts"
+perl -0pi -e 's/^  writeMcpConfig\(\);\n//m' "$P1730ODD/.sandcastle/profile.ts"
+printf '{"afk_template_version":"1.7.29","templateVersion":1,"language":"%s","repository":"kilbertert/smoke","cron_hour":13}\n' \
+  "$LANGUAGE" > "$P1730ODD/.afk-bootstrap.json"
+OUT1730ODD="$("$S/upgrade-afk.sh" "$P1730ODD" --cron-hour 13 2>&1)" \
+  || { echo "upgrade refused an unanchored consumer instead of reporting it" >&2; exit 1; }
+grep -q 'Install it by hand' <<<"$OUT1730ODD" \
+  || { echo "1.7.30 silently skipped an unanchored profile.ts" >&2; exit 1; }
+grep -q 'quiet-heartbeats.js' "$P1730ODD/.sandcastle/profile.ts" \
+  && { echo "1.7.30 wrote a dangling import into an unanchored profile.ts" >&2; exit 1; }
+
+echo "1.7.30 heartbeat-filter checks passed"

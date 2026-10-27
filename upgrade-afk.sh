@@ -4579,8 +4579,13 @@ fi
 #      without — so 1.7.34 states the limit in the check and prints a note when
 #      the shape appears, instead of leaving a reader to assume coverage.
 #
+#   8. **"dropped 0" could not be told from "wrote nothing".** A runner using
+#      `logging: { type: "file" }` never writes to stdout, so its summary read the
+#      same as a console run with no thinking — destroying the diagnostic the line
+#      exists for. 1.7.35 reports both numbers: "dropped N of M console line(s)".
+#
 # This step replaces whatever the template itself shipped (1.7.30 through
-# 1.7.33's copy), and only that — anything else is a project edit and reported.
+# 1.7.34's copy), and only that — anything else is a project edit and reported.
 #
 # Its own check carries the mutation guard for every one of the four, verified by
 # reverting each fix and watching the check fail. The behavioural form of (2) was
@@ -4588,7 +4593,7 @@ fi
 # anyway — so that assertion reads the source-level property instead.
 if [ "$to_minor" -ge 7 ] &&
    { [ "$from_minor" -lt 7 ] ||
-     { [ "$from_minor" -eq 7 ] && [ "$from_patch" -lt 34 ]; }; }; then
+     { [ "$from_minor" -eq 7 ] && [ "$from_patch" -lt 35 ]; }; }; then
   STEP_RAN=1
   say "== $FROM -> $TEMPLATE_VERSION: the heartbeat filter, and proof a run uses it =="
 

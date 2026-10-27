@@ -4810,7 +4810,7 @@ echo "1.7.33 heartbeat stdout-purity and wiring-scope checks passed"
 echo "1.7.34 heartbeat scope-limit checks..."
 
 # (a) The documented limit is stated in the check, not left implicit.
-grep -q 'nested uncalled function' "$TARGET/.sandcastle/quiet-heartbeats.check.ts" \
+grep -q 'cannot tell whether it is called' "$TARGET/.sandcastle/quiet-heartbeats.check.ts" \
   || { echo "the scope check does not state its known limit" >&2; exit 1; }
 
 # (b) The limit is OBSERVABLE: the nested shape produces a note. It still passes

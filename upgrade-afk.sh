@@ -4171,6 +4171,116 @@ if [ "$to_minor" -ge 7 ] &&
 fi
 
 
+# ---- step: 1.7.29 -> 1.7.30 — the console shows work, not a heartbeat -------
+# 1.6.5 turned on `verbose` so a run's tool calls would reach the log. What that
+# also let through is a frame per estimated thinking-token step, which the CLI
+# streams continuously while the model reasons:
+#
+#   {"type":"system","subtype":"thinking_tokens","estimated_tokens":42,…}
+#
+# Measured 2026-10-27, Claude Code 2.1.311, one real prompt on the relay profile:
+# 227-342 such frames in a single run, **58% of every byte the run wrote**, against
+# a handful of assistant / tool_use / result lines. In an Actions log that is the
+# whole visible run — the reader scrolls hundreds of heartbeats to find the one
+# tool call they opened the log for. On Auto-Test that is what made the PRD
+# implement step unreadable.
+#
+# There is no CLI switch for it: `CLAUDE_CODE_DISABLE_THINKING=1` and
+# `CLAUDE_CODE_THINKING_DISPLAY_UPDATES=0` were both measured and both still
+# emitted the frames (232 and 342). The frame is part of stream-json's contract —
+# an interactive client draws it as a spinner — so the filter belongs on our side
+# of the pipe, and it drops exactly that frame rather than turning `verbose` off
+# (which is what makes tool calls visible in the first place).
+#
+# Anchored on 1.6.5's own output, and skipped when the import is already there, so
+# a consumer that reached this step twice is a no-op rather than a second install.
+if [ "$to_minor" -ge 7 ] &&
+   { [ "$from_minor" -lt 7 ] ||
+     { [ "$from_minor" -eq 7 ] && [ "$from_patch" -lt 30 ]; }; }; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: thinking-token heartbeats out of the log =="
+
+  # 1. The filter and its check are new files. Not overwritten when present: a
+  #    project that widened or narrowed the match has a reason, and this script
+  #    does not know it.
+  QUIET_FILES=""
+  for rel in .sandcastle/quiet-heartbeats.ts .sandcastle/quiet-heartbeats.check.ts; do
+    SRC="$S/scaffold/$rel"
+    [ -e "$SRC" ] || { echo "migration reference missing: $SRC" >&2; exit 1; }
+    if [ -e "$WORK/$rel" ]; then
+      note "$rel: already present; left as the project has it"
+    else
+      cp "$SRC" "$WORK/$rel"
+      QUIET_FILES="$QUIET_FILES $rel"
+    fi
+  done
+
+  # 2. profile.ts installs it. `claudeProfile()` is the one function every runner
+  #    spreads into `run()`, so this is one edit for seven runners and a future
+  #    one inherits it. Anchored on the MCP materialisation call, which this same
+  #    function has carried since 1.6.x and which executes once per run.
+  PROF="$WORK/.sandcastle/profile.ts"
+  if grep -qF "quiet-heartbeats.js" "$PROF"; then
+    note "profile.ts: heartbeat filter already installed"
+  elif grep -qF 'import { sandboxNetworkOptions } from "./profile-network.js";' "$PROF" &&
+       grep -qF "  writeMcpConfig();" "$PROF"; then
+    subst "$PROF" \
+      'import { sandboxNetworkOptions } from "./profile-network.js";' \
+      'import { sandboxNetworkOptions } from "./profile-network.js";
+import { quietThinkingHeartbeats } from "./quiet-heartbeats.js";'
+    subst "$PROF" \
+      "  writeMcpConfig();" \
+      "  writeMcpConfig();
+  // Scan the console stream for the CLI's thinking-token heartbeats. Placed here,
+  // in the one function every runner spreads into \`run()\`, so a runner added
+  // later is covered without anyone remembering to call this.
+  quietThinkingHeartbeats();"
+    QUIET_FILES="$QUIET_FILES .sandcastle/profile.ts"
+    note "profile.ts: heartbeat filter installed"
+  else
+    # Reported, never guessed: the import line is a real anchor here — `subst`
+    # fails on a missing anchor, and a project that restructured claudeProfile
+    # would get a half-edited file and a recorded success.
+    say ""
+    say "profile.ts carries neither the 1.5.x network import nor the 1.6.x"
+    say "writeMcpConfig() call this step anchors on. Install it by hand:"
+    say "  - import { quietThinkingHeartbeats } from \"./quiet-heartbeats.js\";"
+    say "  - call quietThinkingHeartbeats() once inside claudeProfile()."
+  fi
+
+  # 3. CI runs the filter's check. Anchored on the MCP config step 1.6.1 wires;
+  #    a project that reorganised its CI is told, not edited.
+  POLICY="$WORK/.github/workflows/afk-policy.yml"
+  if [ ! -e "$POLICY" ]; then
+    note "afk-policy.yml absent; the scaffold supplies it"
+  elif grep -qF "quiet-heartbeats.check.ts" "$POLICY"; then
+    note "afk-policy.yml: heartbeat check already wired"
+  else
+    Q1="      - name: Verify sandbox MCP config
+        run: npx --yes tsx .sandcastle/mcp-config.check.ts"
+    Q2="$Q1
+      # The heartbeat filter's two failure modes are both silent: too wide eats
+      # agent output, too narrow lets the flood back in with nothing reporting it.
+      # Neither shows up as a failed run, so the match is asserted here.
+      - name: Verify the console heartbeat filter
+        run: npx --yes tsx .sandcastle/quiet-heartbeats.check.ts"
+    if grep -qF "$Q1" "$POLICY"; then
+      subst "$POLICY" "$Q1" "$Q2"
+      QUIET_FILES="$QUIET_FILES .github/workflows/afk-policy.yml"
+      note "afk-policy.yml: heartbeat check added"
+    else
+      say ""
+      say "afk-policy.yml has no 'Verify sandbox MCP config' step to anchor on."
+      say "Add a step running 'npx --yes tsx .sandcastle/quiet-heartbeats.check.ts' by hand."
+    fi
+  fi
+
+  for rel in ${QUIET_FILES:-}; do
+    NEW_FILES="$NEW_FILES $rel"
+  done
+fi
+
+
 # ---- step: 1.7.26 -> 1.7.27 — the reviewers learn where green tests lie ------
 # 1.7.24 and 1.7.25 gave both review paths the adversary duty and the sentence
 # "a green suite is not evidence". This step adds the half that sentence implies

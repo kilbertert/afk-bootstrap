@@ -1,0 +1,87 @@
+# 14. 控制台显示的是工作，不是心跳 —— `verbose` 保留，只滤掉 thinking_tokens 帧
+
+日期：2026-10-27
+状态：Accepted
+影响版本：`scaffold/.sandcastle/quiet-heartbeats.ts`（新增）；
+`scaffold/.sandcastle/quiet-heartbeats.check.ts`（新增）；
+`scaffold/.sandcastle/profile.ts`（`claudeProfile()` 里装过滤器）；
+`scaffold/.github/workflows/afk-policy.yml`（CI 跑那条 check）；
+`upgrade-afk.sh`（1.7.30 步骤）；`test/smoke.sh`（1.7.30 段，5 组断言）
+
+## 背景
+
+1.6.5 给三个 runner 加了 `logging: { type: "stdout", verbose: true }`，理由是
+sandcastle 的类型化 `toolCall` 事件只认识四个工具（Bash、WebSearch、WebFetch、
+Agent），Read / Edit / Write 以及每一个 `mcp__*` 调用**完全不可见**。当时的实测是
+「日志里 70 次工具调用全是 Bash」，而那次会话其实也用了 Read 和 MCP。
+
+`verbose` 的实现是 `process.stdout.write(line + "\n")`，**每一行原始 stdout 都照写**。
+它没有区分「这行是工具调用」和「这行是别的东西」。
+
+Claude Code 2.1.311 在模型思考期间会持续发这一类帧：
+
+```
+{"type":"system","subtype":"thinking_tokens","estimated_tokens":42,
+ "estimated_tokens_delta":4,"session_id":"…","uuid":"…"}
+```
+
+2026-10-27 实测（本机中继 profile，一份真实的 implement 类 prompt）：
+
+| 帧类型 | 条数 | 字节占比 |
+|---|---|---|
+| `system/thinking_tokens` | 227–342 | **58%** |
+| `system/hook_response` | 4 | 18% |
+| `system/init` | 1 | 11% |
+| `assistant` | 2 | 7% |
+| `result` | 1 | 3% |
+
+也就是说 `verbose` 加进来的东西里，超过一半是心跳；真正的工具调用只有几行。
+在 GitHub Actions 日志里，这等于整个可见的运行过程被心跳淹没——Auto-Test 的
+PRD implement 步骤因此刷屏到无法阅读。
+
+## 决定
+
+**保留 `verbose`，在 sandcastle 的 verbose sink 上按帧类型过滤。**
+
+1. 新增 `.sandcastle/quiet-heartbeats.ts`：包一层 `process.stdout.write`，丢弃
+   **解析后** `type === "system" && subtype === "thinking_tokens"` 的行，其余原样写出。
+2. 在 `claudeProfile()` 中调用一次。七个 runner 都通过这个函数拿到 `run()` 的参数，
+   所以一处安装覆盖全部，将来加的 runner 自动继承。
+3. 进程退出时打印 `[afk] dropped N thinking-token frame(s)`。
+
+第 3 点不是装饰。帧名属于另一个产品：一旦 Claude Code 改名，过滤器会**静默失效**，
+刷屏回来而没有任何东西变红。「drop 0」是唯一能区分「改名了」和「这轮确实没思考」的信号。
+
+匹配用解析后的字段而不是子串，是因为 agent 可能在回答里引用这一行——本模块自己的
+注释就是这种引用，一个被要求解释该过滤器的 agent 一定会打印它。用子串匹配会把它一起吃掉。
+
+## 被否的方案
+
+- **去掉 `verbose`。** 这是最短的修法，但它把 1.6.5 修的那个洞原样还回去：工具调用
+  重新变成不可见。用「看不见工具调用」换「看不见心跳」，是拿一个诊断盲区换另一个。
+
+- **在 CLI 侧关掉。** 实测两条路径都不行：
+  `CLAUDE_CODE_DISABLE_THINKING=1` 仍发 232 帧，
+  `CLAUDE_CODE_THINKING_DISPLAY_UPDATES=0` 仍发 342 帧。这两帧属于 stream-json 的
+  契约——交互式客户端拿它当 spinner 用——CLI 没有理由省略，也就没有开关可关。
+
+- **把 `logging` 换成 `{ type: "file" }`，只把摘要写进 Actions 日志。**
+  那样 Actions 里连工具调用都没有了，问题只是从「太多」变成「太少」；而且
+  `verbose` 在 file 模式下写的是同一个文件，过滤问题一点没变。
+
+- **在 workflow 里用 `grep -v` 过滤 npm 输出。** 过滤器要放在真实运行的那一侧：
+  workflow 里过滤会漏掉本地直跑 `tsx .sandcastle/implement-prd/implement-prd.ts`
+  的路径，而那条路径正是排查时最常用的。
+
+## 后果
+
+- 每个 AFK 运行的可见行数约降一个数量级（344 → 12 行量级，实测同一条 prompt）。
+- 过滤器是全局 stdout 补丁。它依赖 sandcastle **一次写一整行、带换行符**这一行为；
+  没有换行的块不做判断——宁可漏掉一行心跳，也不拿半行去匹配而吃掉真实输出。
+  这条行为写进了 check，sandcastle 若改变写入方式，会先红在这条断言上。
+- 帧名 `thinking_tokens` 是外部契约，不由本仓决定。改名时过滤静默失效，
+  退回到 1.7.29 的行为（刷屏但仍可用），退出行的 `dropped 0` 是发现它的入口。
+- 升级步骤按 `1.7.29 -> 1.7.30` 补丁位门控，且**幂等**：重复执行不会装第二次。
+  smoke 里用「同一 fixture 连升两次、断言 `quietThinkingHeartbeats();` 只出现一次」
+  钉住这条，因为脚本按版本幂等在本仓是正常路径而不是边角情况（ADR 0013 已记过一次
+  同类事故）。

@@ -4593,7 +4593,7 @@ fi
 # anyway — so that assertion reads the source-level property instead.
 if [ "$to_minor" -ge 7 ] &&
    { [ "$from_minor" -lt 7 ] ||
-     { [ "$from_minor" -eq 7 ] && [ "$from_patch" -lt 35 ]; }; }; then
+     { [ "$from_minor" -eq 7 ] && [ "$from_patch" -lt 36 ]; }; }; then
   STEP_RAN=1
   say "== $FROM -> $TEMPLATE_VERSION: the heartbeat filter, and proof a run uses it =="
 

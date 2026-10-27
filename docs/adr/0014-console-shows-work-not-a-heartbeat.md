@@ -181,3 +181,17 @@ AI-Ops 的 PR 上 review 指出：`claudeProfile` 在**校验 profile 之前**�
 数字，就必须断言那个数字。改成 `of 1 console line` 后变异立刻失败。
 
 这是本轮第六次「先确认断言真的在守它声称守的东西」。前五次里四次是修，一次是承认。
+
+## 追记 1.7.36 —— note 说观察，不说结论
+
+1.7.34 打印的 note 写的是「a nested uncalled function contains the install」。review 指出：
+如果 `claudeProfile` 真的调用了那个嵌套 helper，这行仍然说它「未调用」——它把一个
+**观察**（安装在一个嵌套函数里）写成了**结论**（那个函数没被调用），而后者恰恰是
+这个 check 承认自己看不见的东西。
+
+改成「the install appears inside a nested function; this check cannot tell whether it is
+called」。一条断言了 check 看不见的东西的 note，比没有 note 更糟：它会让下一个人相信
+一个未经检验的判断。
+
+这是本轮第四次「绿色的东西承担了它没承担的责任」的变体，也是唯一一次问题出在**失败
+路径之外的输出**上——不是断言太松，而是提示太满。

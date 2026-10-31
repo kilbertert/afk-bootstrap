@@ -31,7 +31,11 @@ concurrency:
 jobs:
   lint:
     name: spec-tree lint
-    runs-on: [self-hosted, afk-bootstrap]
+    # GitHub-hosted: the job needs a checkout, node, and one npm-installed CLI.
+    # It previously used the repository runner, which put a required check behind
+    # a long-lived host process; stopping that runner (2026-10-31) would have left
+    # every PR queued until timeout.
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - name: Check out repository

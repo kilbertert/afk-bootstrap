@@ -63,6 +63,42 @@ jobs:
           test/smoke.sh node
           test/smoke.sh python
           bash test/trusted-pr-delivery.sh
+      # A migration must not write back a file the project took out of version
+      # control. The signal is git history, so this test needs a real repository
+      # rather than the hand-built fixtures `smoke.sh` uses — `git init` in a
+      # temp directory produces a tree with no history to read, which is why the
+      # first attempt at this assertion passed for the wrong reason.
+      #
+      # The repository it clones is this one: afk-bootstrap has no removed
+      # REPO-MAP.md, so the test builds the two states by adding a commit.
+      # Cloning the canonical checkout from a fresh one is cheap and keeps the
+      # test independent of any sibling project's layout.
+      - name: A migration honours a project's removed REPO-MAP.md
+        # The signal is git history, so the test needs a real project tree. This
+        # repository is not one: it ships `.sandcastle/` under `scaffold/` and has
+        # no AFK checkout of its own, so `$PWD` fails the precondition immediately.
+        # A consumer repository is cloned instead — the test builds both states
+        # (removed, tracked) from it and asserts one of each.
+        #
+        # `AFK_TEST_PROJECT` overrides the source; without it the step is skipped
+        # rather than failed, because a fork or an offline runner is not a reason
+        # to call this repository broken.
+        env:
+          AFK_TEST_PROJECT: ${{ vars.AFK_TEST_PROJECT }}
+        run: |
+          set -euo pipefail
+          src="${AFK_TEST_PROJECT:-$RUNNER_TEMP/afk-test-project}"
+          if [ -z "${AFK_TEST_PROJECT:-}" ]; then
+            # Full history, not --depth: the fixture needs the commit that removed the
+            # map, and a shallow clone does not reach it. Measured: --depth 50 fails
+            # the fixture's own "no history" precondition, which is the assertion
+            # doing its job rather than a flaky test.
+            if ! git clone -q https://github.com/kilbertert/AI-Ops "$src" 2>/dev/null; then
+              echo "note: could not clone a project tree; skipping (not a failure)"
+              exit 0
+            fi
+          fi
+          bash test/repo-map-removal.sh "$src"
       # The scaffolder's own decision records. `afk-bootstrap` is an
       # afk-bootstrap project, so it adopts what it ships — and the records it
       # carries are the ones that explain why the template looks the way it does.

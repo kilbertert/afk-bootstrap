@@ -77,8 +77,35 @@ mkdir -p "$TARGET"
 cp -R --no-clobber "$S/scaffold/." "$TARGET/"
 
 # ---- point the copied profile.ts at THIS project's image -------------------
-# Render the AFK_IMAGE default with the image built below.
-sed -i "s#__AFK_IMAGE__#sandcastle:$SLUG#g" "$TARGET/.sandcastle/profile.ts"
+# The image is published by `.github/workflows/sandbox-image.yml`, which the
+# scaffold above placed in this project. It is NOT built here any more: a local
+# `docker build` produced an image only this host had, and nothing re-created it
+# after the first loss (see `--no-build` below, which is now a no-op kept for
+# compatibility with existing callers).
+#
+# GHCR requires a lowercase path, and the owner's login is not something this
+# script can lowercase for `$REPO` without also lowercasing the repository name
+# it records elsewhere — `$SLUG` already carries the lowercased repo, and the
+# owner goes through the same filter.
+OWNER_SLUG="$(printf '%s' "${REPO%%/*}" | tr '[:upper:]' '[:lower:]' \
+  | sed -E 's/[^a-z0-9_.-]/-/g')"
+sed -i "s#__AFK_IMAGE__#ghcr.io/$OWNER_SLUG/$SLUG-sandbox:latest#g" \
+  "$TARGET/.sandcastle/profile.ts"
+
+# The image publishing workflow names the same registry path. Rendered from the
+# same two values as the line above, so the name a workflow publishes and the
+# name `profile.ts` pulls cannot drift apart.
+SBOX_WF="$TARGET/.github/workflows/sandbox-image.yml"
+if [ -e "$SBOX_WF" ]; then
+  sed -i "s#__AFK_OWNER__#$OWNER_SLUG#g;s#__AFK_SLUG__#$SLUG#g" "$SBOX_WF"
+fi
+
+# The image bakes a fixed uid, and `docker()` is told to expect exactly that one
+# rather than defaulting to whoever runs the job. Both numbers come from the
+# build args in `sandbox-image.yml`; these placeholders must stay in step with
+# them, which `profile-image.check.ts` asserts.
+sed -i "s#__AFK_AGENT_UID__#1000#g;s#__AFK_AGENT_GID__#1000#g" \
+  "$TARGET/.sandcastle/profile.ts"
 
 # ---- name this project in the knowledge graph ------------------------------
 # The graph server refuses a call that does not name its project, and the name
@@ -321,11 +348,17 @@ if [ ! -e "$TARGET/.sandcastle/REPO-MAP.md" ]; then
     || echo "note: could not generate .sandcastle/REPO-MAP.md — run it by hand" >&2
 fi
 
-# ---- build the sandbox image ----------------------------------------------
-if [ "$DO_BUILD" = "1" ]; then
-  IMG="sandcastle:$SLUG"
-  echo "== building $IMG =="
-  (cd "$TARGET" && docker build --build-arg AGENT_UID="$(id -u)" --build-arg AGENT_GID="$(id -g)" -t "$IMG" .sandcastle)
+# ---- the sandbox image is published by CI, not built here ------------------
+# `--no-build` used to skip a local `docker build`. That build is gone: it
+# produced an image only this host had, and nothing re-created it after the first
+# loss — the failure then surfaced days later, several steps into a review job,
+# as "Image ... not found locally". `.github/workflows/sandbox-image.yml` now
+# publishes to GHCR on every Dockerfile change, and that is the only source.
+#
+# The flag is still accepted (and ignored) so existing callers do not break; it
+# is reported rather than silently doing nothing.
+if [ "$DO_BUILD" = "0" ]; then
+  echo "note: --no-build is obsolete; the sandbox image is published by CI" >&2
 fi
 
 # ---- report ----------------------------------------------------------------
@@ -335,6 +368,13 @@ cat <<EOF
 Next steps (host runner owns delivery — this script commits nothing):
 
 1. Commit the scaffold on a task branch, push, open a PR, and merge it.
+   The merge is what publishes the sandbox image:
+   .github/workflows/sandbox-image.yml builds
+   ghcr.io/$OWNER_SLUG/$SLUG-sandbox:latest on main, and profile.ts names that
+   tag. A sandbox started before that first merge fails with "Image ... not
+   found locally" — the pull has nothing to pull yet. Nothing needs doing by
+   hand: check the "Sandbox image" workflow is green before labelling an issue
+   agent:implement.
 2. Pick the model provider for Actions:
      gh variable set AFK_PROFILE --repo $REPO --body claude-deepseek
    (or claude, which talks to the Anthropic API directly; profiles are

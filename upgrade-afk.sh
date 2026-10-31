@@ -5062,11 +5062,15 @@ say "== upgraded $TARGET: $FROM -> $TEMPLATE_VERSION =="
 cat <<EOF
 Still to do (host runner owns delivery — this script commits nothing):
 
-1. Publish the sandbox image, if this upgrade added the workflow:
-     Actions -> Sandbox image -> Run workflow  (or push a Dockerfile change)
-   Until it has run on main once, a sandbox has no image to pull and fails with
-   "not found locally". This replaces the old advice to run "docker build" on
-   the development host — that build is gone, deliberately. See the 1.7.38 note.
+1. Publish the sandbox image BEFORE this migration reaches main:
+     Actions -> Sandbox image -> Run workflow  (select this PR's branch)
+   The workflow is already in the PR, and a pull-request run of it builds and
+   verifies without publishing, so the way to publish early is: merge is not
+   required, run the workflow with this branch selected and it pushes from the
+   branch. Do that, confirm the run is green, and only then merge.
+   Until the image exists, a sandbox started from main fails with "not found
+   locally". This replaces the old advice to run "docker build" on the
+   development host — that build is gone, deliberately. See the 1.7.38 note.
 2. Then switch the repository variable, in that order:
      gh variable set AFK_PROFILE --repo <owner/name> --body claude-deepseek
    Changing it before the image exists makes the container's claude wrapper exit

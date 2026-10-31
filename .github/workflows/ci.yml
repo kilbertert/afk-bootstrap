@@ -13,7 +13,19 @@ concurrency:
 
 jobs:
   syntax:
-    runs-on: [self-hosted, afk-bootstrap]
+    # GitHub-hosted, not the repository runner. This job needs a checkout, node,
+    # and a system python — nothing from the host. Running it on a self-hosted
+    # runner made the required check depend on a long-lived process on the
+    # development machine: when that runner was stopped (2026-10-31, it had been
+    # idle for four days) every push and PR sat `queued` until timeout, so the
+    # branch looked broken for a reason that had nothing to do with the change.
+    #
+    # The runner's PATH is what made this look host-specific in the first place:
+    # it carries no conda, so `python3` was the Debian system interpreter and the
+    # PEP 668 note below applied. On a hosted runner the same caveat holds —
+    # `actions/setup-python` is not used, so `python3` is still the image's system
+    # interpreter. Keep the flag; it is about the interpreter, not the runner.
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
@@ -24,12 +36,13 @@ jobs:
         run: bash -n bootstrap-afk.sh upgrade-afk.sh test/smoke.sh test/trusted-pr-delivery.sh
       - name: Workflow structure check
         run: |
-          # The runner's `python3` resolves through PATH, and this repository's
-          # runner unit sets a PATH with no conda on it — so it is the system
-          # interpreter (`/usr/bin/python3`, Debian/Ubuntu), not a user Python.
-          # That interpreter is PEP 668 "externally managed": `pip install
-          # --user` refuses with `externally-managed-environment`, and the step
-          # fails before `test/workflows.py` ever runs.
+          # `python3` here is the image's system interpreter (Debian/Ubuntu), not
+          # a user Python: this step deliberately does not run
+          # `actions/setup-python`, because the check must see the same
+          # interpreter a plain `python3` resolves to. That interpreter is PEP 668
+          # "externally managed": `pip install --user` refuses with
+          # `externally-managed-environment`, and the step fails before
+          # `test/workflows.py` ever runs.
           #
           # Measured: this went red on 2026-10-17 with no repository change. The
           # trigger was an unattended security upgrade on 2026-10-15 04:01 that

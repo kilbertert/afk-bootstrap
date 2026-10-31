@@ -4639,11 +4639,189 @@ if [ "$to_minor" -ge 7 ] &&
 fi
 
 
+# ---- step: 1.7.37 -> 1.7.38 — the sandbox image is published, not built -----
+# The image `profile.ts` names used to be `sandcastle:<repo>`, satisfied only by a
+# `docker build` someone remembered to run on the development host. Nothing
+# re-created it: the weekly cleanup never touches images, this script printed the
+# rebuild command as prose and never checked it, and Sandcastle's `checkImageUid`
+# runs `docker image inspect` and reports "not found locally" instead of pulling.
+#
+# Measured cost: one project lost the image and its `architecture-review` failed
+# every weekday from 2026-10-17 to 2026-10-30. The failure surfaced several steps
+# into a job as `Image '...' not found locally`, which reads as a runner or code
+# problem. Nobody looked for two weeks.
+#
+# This step moves the image to GHCR, published by a workflow this project owns,
+# and pins the uid on both sides so the two cannot drift:
+#
+#   .sandcastle/profile.ts                 pulls ghcr.io/<owner>/<slug>-sandbox:latest
+#                                          and passes containerUid/Gid explicitly
+#   .github/workflows/sandbox-image.yml    publishes that name with AGENT_UID/GID
+#   .sandcastle/profile-image.check.ts     fails when any of the four disagree
+#
+# The check is wired into `afk-policy.yml` below. That wiring is the part that
+# makes this a fix rather than a relocation: the previous arrangement failed
+# just as silently, it just failed later and somewhere less legible.
+#
+# Ordering the caller must respect: the image does not exist until the workflow
+# has run on main once, so the project's first merge after this migration is what
+# publishes it. The report says so.
+if [ "$to_minor" -ge 7 ] &&
+   { [ "$from_minor" -lt 7 ] ||
+     { [ "$from_minor" -eq 7 ] && [ "$from_patch" -lt 38 ]; }; }; then
+  STEP_RAN=1
+  say "== $FROM -> $TEMPLATE_VERSION: the sandbox image is published, not built =="
+
+  # The registry path, derived the way bootstrap derives it: the recorded
+  # `repository` field is the authority (this script may run from a checkout whose
+  # directory name differs), lowercased because GHCR requires it.
+  REPO_FIELD="$(sed -n 's/.*"repository"[[:space:]]*:[[:space:]]*"\([^"]*\)".*/\1/p' \
+    "$WORK/.afk-bootstrap.json" | head -1)"
+  if [ -z "$REPO_FIELD" ] || [ "${REPO_FIELD%%/*}" = "$REPO_FIELD" ]; then
+    say ""
+    say ".afk-bootstrap.json does not record a full <owner>/<repo>; cannot derive the image name."
+    say "Set AFK_IMAGE in the repository variables instead, or fix the metadata and re-run."
+    # Not fatal: the rest of the step (uid pinning, check wiring) is still valid,
+    # and refusing would strand every other fix in this version. The image name is
+    # reported so the operator can finish it by hand.
+  else
+    OWNER_SLUG="$(printf '%s' "${REPO_FIELD%%/*}" | tr '[:upper:]' '[:lower:]' \
+      | sed -E 's/[^a-z0-9_.-]/-/g')"
+    REPO_SLUG="$(printf '%s' "${REPO_FIELD##*/}" | tr '[:upper:]' '[:lower:]' \
+      | sed -E 's/[^a-z0-9_.-]/-/g')"
+    IMAGE_REF="ghcr.io/$OWNER_SLUG/$REPO_SLUG-sandbox:latest"
+
+    # ---- profile.ts: the image name, then the explicit uid ------------------
+    if [ -e "$WORK/.sandcastle/profile.ts" ]; then
+      # Anchor on the whole `imageName:` line, not the string "AFK_IMAGE" — a
+      # comment mentioning it would satisfy a substring test and the edit would
+      # never happen while this reported success.
+      if grep -qE "^[[:space:]]*imageName:[[:space:]]*process\.env\.AFK_IMAGE[[:space:]]*\?\?" \
+           "$WORK/.sandcastle/profile.ts"; then
+        sed -i -E "s#^([[:space:]]*imageName:[[:space:]]*process\.env\.AFK_IMAGE[[:space:]]*\?\?[[:space:]]*\")[^\"]*(\".*)\$#\1$IMAGE_REF\2#" \
+          "$WORK/.sandcastle/profile.ts"
+        note "profile.ts: imageName -> $IMAGE_REF"
+      else
+        say ""
+        say ".sandcastle/profile.ts has no \`imageName: process.env.AFK_IMAGE ?? \"...\"\` line."
+        say "It may have been restructured by the project. Point it at:"
+        say "  $IMAGE_REF"
+      fi
+
+      # `containerUid`/`containerGid` are added immediately after the imageName
+      # assignment, and only when neither is already present. A project that set
+      # its own value keeps it — these are the numbers its image bakes, and this
+      # script cannot know them better than the project does.
+      if ! grep -qE "^[[:space:]]*containerUid:" "$WORK/.sandcastle/profile.ts"; then
+        # `containerGid` alone is equally disqualifying: adding a uid beside an
+        # existing gid would set the pair from two different decisions.
+        if grep -qE "^[[:space:]]*containerGid:" "$WORK/.sandcastle/profile.ts"; then
+          note "profile.ts: containerGid is set but containerUid is not — left for the project to finish"
+        else
+          awk '
+            { print }
+            /^[[:space:]]*imageName:[[:space:]]*process\.env\.AFK_IMAGE/ && !done {
+              match($0, /^[[:space:]]*/)
+              indent = substr($0, 1, RLENGTH)
+              print indent "// The published image bakes one uid; docker() otherwise expects"
+              print indent "// process.getuid(). Stating it keeps the two from disagreeing on"
+              print indent "// another account. profile-image.check.ts asserts they match the"
+              print indent "// workflow build args."
+              print indent "containerUid: 1000,"
+              print indent "containerGid: 1000,"
+              done = 1
+            }
+          ' "$WORK/.sandcastle/profile.ts" > "$WORK/.sandcastle/profile.ts.tmp" \
+            && mv "$WORK/.sandcastle/profile.ts.tmp" "$WORK/.sandcastle/profile.ts"
+          note "profile.ts: added containerUid/containerGid 1000"
+        fi
+      fi
+    fi
+
+    # ---- the publishing workflow -------------------------------------------
+    # Directory-published, so this only has to be staged. `sed` renders the two
+    # placeholders the scaffold carries; leaving them would publish to a path
+    # named `__AFK_OWNER__`.
+    if [ -e "$WORK/.github/workflows/sandbox-image.yml" ]; then
+      note "sandbox-image.yml: already present"
+    elif [ -e "$S/scaffold/.github/workflows/sandbox-image.yml" ]; then
+      sed "s#__AFK_OWNER__#$OWNER_SLUG#g;s#__AFK_SLUG__#$REPO_SLUG#g" \
+        "$S/scaffold/.github/workflows/sandbox-image.yml" \
+        > "$WORK/.github/workflows/sandbox-image.yml"
+      note "added: .github/workflows/sandbox-image.yml -> $IMAGE_REF"
+    else
+      say ""
+      say "the template has no scaffold/.github/workflows/sandbox-image.yml; nothing publishes $IMAGE_REF"
+    fi
+  fi
+
+  # ---- the wiring check ---------------------------------------------------
+  # Added regardless of the branch above: it is the piece that turns a silent
+  # drift into a red policy job, and it is useful even before the name is right.
+  if [ -e "$WORK/.sandcastle/profile-image.check.ts" ]; then
+    note ".sandcastle/profile-image.check.ts: already present"
+  elif [ -e "$S/scaffold/.sandcastle/profile-image.check.ts" ]; then
+    cp "$S/scaffold/.sandcastle/profile-image.check.ts" "$WORK/.sandcastle/profile-image.check.ts"
+    NEW_FILES="$NEW_FILES .sandcastle/profile-image.check.ts"
+    note "added: .sandcastle/profile-image.check.ts"
+  fi
+
+  # The check has to run somewhere. A runnable check with no runner is the
+  # failure this whole version is about, so its absence is reported rather than
+  # assumed away.
+  POLICY_WF="$WORK/.github/workflows/afk-policy.yml"
+  if [ ! -e "$POLICY_WF" ]; then
+    say ""
+    say "no .github/workflows/afk-policy.yml; profile-image.check.ts is not wired into CI"
+  elif grep -qE "profile-image\.check\.ts" "$POLICY_WF"; then
+    note "afk-policy.yml: profile-image check already wired"
+  else
+    # Anchored on the mcp-config step, which every scaffold has shipped since
+    # 1.7.x, and inserted as a sibling step at the same indentation. Two lines are
+    # enough: the workflow's other steps self-describe, and a comment block here
+    # would be the only one in the file without a stated failure mode.
+    if grep -qE "^[[:space:]]*run: npx --yes tsx \.sandcastle/mcp-config\.check\.ts[[:space:]]*$" "$POLICY_WF"; then
+      awk '
+        { print }
+        /^[[:space:]]*run: npx --yes tsx \.sandcastle\/mcp-config\.check\.ts[[:space:]]*$/ && !done {
+          # `run:` sits two columns deeper than its "- name:" sibling dash.
+          match($0, /^[[:space:]]*/)
+          runIndent = RLENGTH
+          ind = substr($0, 1, runIndent - 2)
+          # Re-emit the ORIGINAL line for the run body — taking substr from the
+          # start and re-adding a prefix silently eats characters, which produced
+          # `rurun:` the first time round.
+          print ind "# The image name and the uid live in two files that have to agree, and a"
+          print ind "# disagreement is invisible until a sandbox starts — where it reads as a"
+          print ind "# runner or code problem. That is how one project stayed red for two weeks."
+          print ind "- name: Verify the sandbox image wiring"
+          print ind "  run: npx --yes tsx .sandcastle/profile-image.check.ts"
+          done = 1
+        }
+      ' "$POLICY_WF" > "$POLICY_WF.tmp" && mv "$POLICY_WF.tmp" "$POLICY_WF"
+      note "afk-policy.yml: wired the sandbox image check"
+    else
+      say ""
+      say "afk-policy.yml has no mcp-config check step to anchor on; add by hand:"
+      say "  run: npx --yes tsx .sandcastle/profile-image.check.ts"
+    fi
+  fi
+
+  # The old advice told the operator to rebuild the image by hand. Leaving it
+  # would leave the exact habit this version removes.
+  say ""
+  say "The sandbox image is now published by .github/workflows/sandbox-image.yml."
+  say "Run it once on main after merging (push touching .sandcastle/Dockerfile, or"
+  say "Actions -> Sandbox image -> Run workflow) — until then a sandbox has no image"
+  say "to pull and fails with \"not found locally\"."
+fi
+
+
 # ---- report and publish ----------------------------------------------------
 # What changed is derived by comparing staged against original, so it cannot
 # drift from what the steps actually did.
 CHANGED=0
-for rel in .sandcastle/Dockerfile .sandcastle/profile.ts .sandcastle/main.ts .sandcastle/profile-network.ts .sandcastle/profile-network.check.ts .afk-bootstrap.json; do
+for rel in .sandcastle/Dockerfile .sandcastle/profile.ts .sandcastle/main.ts .sandcastle/profile-network.ts .sandcastle/profile-network.check.ts .sandcastle/profile-image.check.ts .afk-bootstrap.json; do
   # Only report a file this run actually staged: the network modules arrive in
   # 1.5.0, so a run that only executes the 1.5.1 CI step has none to compare.
   [ -e "$WORK/$rel" ] || continue
@@ -4884,12 +5062,15 @@ say "== upgraded $TARGET: $FROM -> $TEMPLATE_VERSION =="
 cat <<EOF
 Still to do (host runner owns delivery — this script commits nothing):
 
-1. Rebuild the sandbox image from the upgraded Dockerfile:
-     docker build --build-arg AGENT_UID="\$(id -u)" --build-arg AGENT_GID="\$(id -g)" -t <image> .sandcastle
+1. Publish the sandbox image, if this upgrade added the workflow:
+     Actions -> Sandbox image -> Run workflow  (or push a Dockerfile change)
+   Until it has run on main once, a sandbox has no image to pull and fails with
+   "not found locally". This replaces the old advice to run "docker build" on
+   the development host — that build is gone, deliberately. See the 1.7.38 note.
 2. Then switch the repository variable, in that order:
      gh variable set AFK_PROFILE --repo <owner/name> --body claude-deepseek
-   Changing it before the rebuild makes the image's claude wrapper exit 2,
-   because the old image has no claude-deepseek dispatch arm.
+   Changing it before the image exists makes the container's claude wrapper exit
+   2, because the old image has no claude-deepseek dispatch arm.
 3. Update the project prose listed above — this script reports it but never
    rewrites a project-owned document.
 EOF

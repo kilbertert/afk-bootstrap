@@ -90,7 +90,12 @@ git -C "$WORKTREE_SEED" worktree add -q -b chore/afk-target "$WORKTREE_TARGET" H
 "$S/bootstrap-afk.sh" "$WORKTREE_TARGET" --language "$LANGUAGE" --repo "$REPO" --no-build >/dev/null
 [ -f "$WORKTREE_TARGET/.sandcastle/CODING_STANDARDS.md" ] \
   || { echo "installer rejected a valid linked worktree" >&2; exit 1; }
-grep -q "sandcastle:fake-$LANGUAGE-project" "$WORKTREE_TARGET/.sandcastle/profile.ts" \
+# The image name must be derived from the RECORDED repository, not from the
+# checkout path: a linked worktree lives at a different path and would otherwise
+# render a different tag for the same project. The published form makes that
+# property easier to state precisely — the name is the registry path bootstrap
+# derives from `--repo`, and it is identical in both checkouts.
+grep -q "ghcr.io/kilbertert/fake-$LANGUAGE-project-sandbox:latest" "$WORKTREE_TARGET/.sandcastle/profile.ts" \
   || { echo "linked worktree image name is not repository-stable" >&2; exit 1; }
 
 for f in \
@@ -122,7 +127,19 @@ grep -q '"afk"' "$TARGET/package.json" || { echo "afk script missing" >&2; exit 
 grep -q '"ralph"' "$TARGET/package.json" || { echo "ralph script missing" >&2; exit 1; }
 if grep -q 'prd:to-issues' "$TARGET/package.json"; then echo "automatic splitter script remains" >&2; exit 1; fi
 grep -q 'esbuild: true' "$TARGET/pnpm-workspace.yaml" || { echo "pnpm esbuild approval missing" >&2; exit 1; }
-grep -q "sandcastle:fake-$LANGUAGE-project" "$TARGET/.sandcastle/profile.ts" || { echo "profile image name not rendered" >&2; exit 1; }
+grep -q "ghcr.io/kilbertert/fake-$LANGUAGE-project-sandbox:latest" "$TARGET/.sandcastle/profile.ts" || { echo "profile image name not rendered" >&2; exit 1; }
+# The uid is stated explicitly on the asking side. A published image bakes one
+# uid, so leaving docker() to default it to process.getuid() is correct only by
+# coincidence — and the coincidence holds on the machine that writes this, not
+# necessarily on the one that runs it.
+grep -q 'containerUid: 1000' "$TARGET/.sandcastle/profile.ts" || { echo "containerUid not rendered" >&2; exit 1; }
+grep -q 'containerGid: 1000' "$TARGET/.sandcastle/profile.ts" || { echo "containerGid not rendered" >&2; exit 1; }
+# The publishing workflow carries the same registry path, rendered from the same
+# two values — a workflow publishing a different name is the drift this version
+# exists to prevent.
+grep -q 'IMAGE: ghcr.io/kilbertert/fake-node-project-sandbox\|IMAGE: ghcr.io/kilbertert/fake-python-project-sandbox' "$TARGET/.github/workflows/sandbox-image.yml" \
+  || grep -q "IMAGE: ghcr.io/kilbertert/fake-$LANGUAGE-project-sandbox" "$TARGET/.github/workflows/sandbox-image.yml" \
+  || { echo "sandbox-image.yml not rendered to the same registry path" >&2; exit 1; }
 grep -q 'claude-deepseek' "$TARGET/.sandcastle/profile.ts" || { echo "claude-deepseek profile missing" >&2; exit 1; }
 grep -q 'claude-deepseek' "$TARGET/.sandcastle/main.ts" || { echo "claude-deepseek CLI option missing" >&2; exit 1; }
 grep -q 'claude-deepseek)' "$TARGET/.sandcastle/Dockerfile" || { echo "claude-deepseek Docker dispatch missing" >&2; exit 1; }

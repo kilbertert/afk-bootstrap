@@ -141,11 +141,30 @@ export function claudeProfile(
     },
     agent: claudeCode(process.env.AFK_MODEL ?? "claude-sonnet-4-6"),
     sandbox: docker({
-      // Use the same image name that `npx sandcastle docker build-image`
-      // produces (defaultImageName = sandcastle:<repo>). A hardcoded custom
-      // name here means rebuilds target a different tag and the sandbox keeps
-      // running a stale image — the cause of repeated false BLOCKEDs.
+      // The image comes from GHCR, published by this repository's own
+      // `.github/workflows/sandbox-image.yml` on every Dockerfile change.
+      //
+      // It used to name `sandcastle:<repo>`, satisfied only by a `docker build`
+      // someone remembered to run on the development host. Nothing re-created
+      // it: the weekly cleanup never touches images, `upgrade-afk.sh` prints the
+      // rebuild command as prose rather than checking it, and Sandcastle's own
+      // `checkImageUid` runs `docker image inspect` and reports "not found
+      // locally" instead of pulling. One project lost the image and its
+      // architecture-review failed every weekday for two weeks, surfacing
+      // several steps into a job as a runner or code problem.
+      //
+      // A published image is re-pulled per job, so "the image is gone" stops
+      // being a state a project can be in. The consequence to know about: a
+      // brand-new project has no image until `sandbox-image.yml` has run on
+      // main once.
       imageName: process.env.AFK_IMAGE ?? "__AFK_IMAGE__",
+      // Explicit, because the published image bakes ONE uid while `docker()`
+      // otherwise defaults the expected uid to `process.getuid()`. They agree on
+      // the current host (both 1000) and a mismatch is rejected before the
+      // container starts, so the agreement must be stated, not inherited from
+      // whichever account happens to run the job.
+      containerUid: __AFK_AGENT_UID__,
+      containerGid: __AFK_AGENT_GID__,
       env: {
         ...safeEnv,
         // AFK_PROFILE lives in the sandbox env (not the agent env) so that
